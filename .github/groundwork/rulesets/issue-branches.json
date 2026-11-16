@@ -1,0 +1,8 @@
+{
+  "name": "issue-branches",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/issue/*"], "exclude": [] } },
+  "bypass_actors": [],
+  "rules": [ { "type": "non_fast_forward" } ]
+}

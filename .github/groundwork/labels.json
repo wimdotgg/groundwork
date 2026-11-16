@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "labels": [
+    { "name": "accepted", "color": "0e8a16", "description": "Epic authorized by the owner" },
+    { "name": "priority:p0", "color": "b60205", "description": "Highest priority; on a Bug without parent: hotfix lane" },
+    { "name": "priority:p1", "color": "d93f0b", "description": "Epic priority 1; tasks inherit" },
+    { "name": "priority:p2", "color": "fbca04", "description": "Epic priority 2; tasks inherit" },
+    { "name": "priority:p3", "color": "c2e0c6", "description": "Epic priority 3; tasks inherit" },
+    { "name": "size-exception", "color": "5319e7", "description": "PR may exceed size limits (owner only)" },
+    { "name": "no-issue", "color": "5319e7", "description": "PR needs no issue; re-apply after each new commit (owner only)" },
+    { "name": "integrity-exception", "color": "5319e7", "description": "PR may trip test-integrity (owner only)" },
+    { "name": "needs-decision", "color": "e99695", "description": "Work stopped until the owner answers; claim released" },
+    { "name": "needs-format", "color": "e99695", "description": "Issue body invalid; agents skip it" },
+    { "name": "size:S", "color": "bfdadc", "description": "Small task" },
+    { "name": "size:M", "color": "7fc8c9", "description": "Medium task" },
+    { "name": "size:L", "color": "1d76db", "description": "Too large; split before claim" },
+    { "name": "flaky", "color": "f9d0c4", "description": "Test ejected a merge-queue batch twice" },
+    { "name": "dependencies", "color": "0366d6", "description": "Dependabot update (valid only from dependabot[bot])" },
+    { "name": "automated", "color": "ededed", "description": "Release PR (valid only from the release App)" },
+    { "name": "autorelease: pending", "color": "ededed", "description": "release-please: release PR open" },
+    { "name": "autorelease: tagged", "color": "ededed", "description": "release-please: release tagged" }
+  ]
+}

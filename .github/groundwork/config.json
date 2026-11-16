@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "org": "wimdotgg",
+  "controlRepo": "groundwork",
+  "accounts": {
+    "owner": "wianvdm",
+    "agent": "wianvdm-agent"
+  },
+  "apps": {
+    "admin": "wimdotgg-admin",
+    "release": "wimdotgg-release"
+  },
+  "trustedAuthors": [
+    { "actor": "owner", "scope": "any" },
+    { "actor": "agent", "scope": "any" },
+    { "actor": "app:admin", "scope": "issues" },
+    { "actor": "app:release", "scope": "pull-requests" },
+    { "actor": "dependabot[bot]", "scope": "pull-requests" }
+  ],
+  "labelActors": {
+    "accepted": "owner",
+    "priority:*": "owner",
+    "size-exception": "owner",
+    "no-issue": "owner",
+    "integrity-exception": "owner",
+    "dependencies": "dependabot[bot]",
+    "automated": "app:release"
+  },
+  "deploy": "scripts",
+  "limits": {
+    "hierarchyDepth": 2,
+    "hierarchyDepthWithIntermediate": 3,
+    "subIssuesPerParent": 12,
+    "prChangedLines": 400,
+    "prFiles": 20,
+    "tasksPerWorker": 1,
+    "activeWorkers": 4,
+    "draftLeaseMinutes": 240,
+    "claimWithoutPrMinutes": 15,
+    "reviewRounds": 3,
+    "sameFailureAttempts": 3,
+    "ciReruns": 1,
+    "stateLines": 40,
+    "journalLines": 10,
+    "resumeLines": 300
+  },
+  "sizeExcludeGlobs": [
+    "**/package-lock.json",
+    "**/npm-shrinkwrap.json",
+    "**/yarn.lock",
+    "**/pnpm-lock.yaml",
+    "**/bun.lock",
+    "**/bun.lockb",
+    "**/Cargo.lock",
+    "**/go.sum",
+    "**/poetry.lock",
+    "**/uv.lock",
+    "**/Gemfile.lock",
+    "**/composer.lock",
+    "**/packages.lock.json",
+    "**/__snapshots__/**",
+    "**/*.snap"
+  ],
+  "generatedGlobs": [],
+  "testIntegrity": {
+    "testGlobs": [
+      "**/*.test.*",
+      "**/*.spec.*",
+      "**/test/**",
+      "**/tests/**",
+      "**/__tests__/**",
+      "**/test_*.py",
+      "**/*_test.py",
+      "**/*_test.go"
+    ],
+    "testDeclarationPatterns": [
+      "\\b(?:it|test|describe)\\s*\\(",
+      "^\\s*def\\s+test_",
+      "^\\s*func\\s+Test"
+    ],
+    "suppressionPatterns": [
+      "eslint-disable",
+      "@ts-ignore",
+      "@ts-expect-error",
+      "@ts-nocheck",
+      "#\\s*noqa",
+      "#\\s*type:\\s*ignore",
+      "\\.skip\\s*\\(",
+      "\\.only\\s*\\(",
+      "\\bxit\\s*\\(",
+      "\\bxdescribe\\s*\\(",
+      "\\{\\s*skip\\s*:\\s*true",
+      "pytest\\.mark\\.skip",
+      "\\bt\\.Skip\\("
+    ],
+    "thresholdGlobs": [
+      "**/.eslintrc*",
+      "**/eslint.config.*",
+      "**/jest.config.*",
+      "**/vitest.config.*",
+      "**/.c8rc*",
+      "**/.nycrc*",
+      "**/pyproject.toml",
+      "**/setup.cfg",
+      "**/.coveragerc"
+    ]
+  }
+}
