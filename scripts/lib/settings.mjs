@@ -22,10 +22,16 @@ import { resolveActor, sameLogin } from './trust.mjs';
  *                 the bodies of the three /actions/permissions endpoints
  *   variables:    Array<{ name: string, value: string }>, GET /actions/variables `variables`
  *   environments: Array<{ name: string, can_admins_bypass: boolean, prevent_self_review: boolean,
- *                   reviewers: string[] (logins), deployment_refs: Array<{ name: string, type: 'branch'|'tag' }>,
+ *                   reviewers: string[], deployment_refs: Array<{ name: string, type: 'branch'|'tag' }>,
  *                   secrets: string[] (names), variables: string[] (names) }>
+ *                 reviewers are user logins; a non-User reviewer is encoded `team:<slug>` so it never matches a
+ *                 login. prevent_self_review is false when the environment has no required_reviewers rule.
  *   labels:       Array<{ name: string, color: string, description: string|null }>, GET /labels
  *   rulesets:     Array<object>, one full GET /rulesets/{id} body per ruleset
+ * Array sections whose value is not an array, and a ruleset whose bypass_actors is not an array, are unreadable.
+ *
+ * Notes for `readLiveState`: list rulesets with includes_parents=false; a 404 on vulnerability-alerts means
+ * disabled; automated_security_fixes is `enabled && !paused`.
  */
 
 const SETTINGS_FILE = 'settings.json';
@@ -36,7 +42,9 @@ const APP_PLACEHOLDER = /^\{\{app-id:([^{}]*)\}\}$/;
 const SETTINGS_KEYS = [
   'schemaVersion', 'repository', 'controlRepository', 'teamAccess', 'security', 'actions', 'variables', 'environments',
 ];
-const ASSERT_WHEN_VALUES = ['kitInstalled', 'deployReady'];
+const ARRAY_SECTIONS = ['teamAccess', 'variables', 'environments', 'labels', 'rulesets'];
+const ENVIRONMENT_REPOS =['all', 'projects', 'control'];
+const ASSERT_WHEN_VALUES =['kitInstalled', 'deployReady'];
 const CODE_SCANNING_RULE = 'code_scanning';
 const CODE_SCANNING_SETUP_KEY = 'code_scanning_default_setup';
 const ORGANIZATION_ADMIN = 'OrganizationAdmin';
@@ -75,12 +83,28 @@ function checkSettings(file, settings) {
   if (!isPlainObject(settings)) throw new SettingsError(`${SETTINGS_FILE}: must be a JSON object`, file);
   const unknown = Object.keys(settings).filter((key) => !SETTINGS_KEYS.includes(key));
   if (unknown.length > 0) throw new SettingsError(`${SETTINGS_FILE}: unknown top-level key "${unknown[0]}"`, file);
+  if (settings.teamAccess !== undefined && !Array.isArray(settings.teamAccess)) {
+    throw new SettingsError(`${SETTINGS_FILE}: teamAccess must be an array`, file);
+  }
   for (const [name, variable] of Object.entries(settings.variables ?? {})) {
     if (!ASSERT_WHEN_VALUES.includes(variable?.assertWhen)) {
       throw new SettingsError(
         `${SETTINGS_FILE}: variable ${name} assertWhen must be ${ASSERT_WHEN_VALUES.join(' or ')}`,
         file,
       );
+    }
+  }
+  for (const [name, environment] of Object.entries(settings.environments ?? {})) checkEnvironment(file, name, environment);
+}
+
+function checkEnvironment(file, name, environment) {
+  if (!isPlainObject(environment)) throw new SettingsError(`${SETTINGS_FILE}: environment ${name} must be an object`, file);
+  if (!ENVIRONMENT_REPOS.includes(environment.repos)) {
+    throw new SettingsError(`${SETTINGS_FILE}: environment ${name} repos must be ${ENVIRONMENT_REPOS.join(', ')}`, file);
+  }
+  for (const flag of ['can_admins_bypass', 'prevent_self_review']) {
+    if (typeof environment[flag] !== 'boolean') {
+      throw new SettingsError(`${SETTINGS_FILE}: environment ${name} ${flag} must be a boolean`, file);
     }
   }
 }
@@ -93,6 +117,9 @@ function checkLabels(file, labelsFile) {
   for (const label of labelsFile.labels) {
     const name = label?.name;
     if (typeof name !== 'string' || name === '') throw new SettingsError(`${LABELS_FILE}: label without a name`, file);
+    if (typeof label.color !== 'string' || typeof label.description !== 'string') {
+      throw new SettingsError(`${LABELS_FILE}: label "${name}" needs string color and description`, file);
+    }
     if (seen.has(name.toLowerCase())) throw new SettingsError(`${LABELS_FILE}: duplicate label "${name}"`, file);
     seen.add(name.toLowerCase());
   }
@@ -114,6 +141,15 @@ function checkRuleset(file, ruleset, fileName) {
   if (Object.hasOwn(ruleset, 'id')) throw new SettingsError(`${fileName}: ruleset files hold no id`, file);
   if (ruleset.name !== base) throw new SettingsError(`${fileName}: ruleset name "${ruleset.name}" must equal the file name`, file);
   const { bypass_actors: bypassActors = [], ...rest } = ruleset;
+  if (!Array.isArray(bypassActors) || !bypassActors.every(isPlainObject)) {
+    throw new SettingsError(`${fileName}: bypass_actors must be an array of objects`, file);
+  }
+  if (!Array.isArray(ruleset.rules ?? [])) throw new SettingsError(`${fileName}: rules must be an array`, file);
+  for (const actor of bypassActors) {
+    if (typeof actor.actor_id === 'string' && !APP_PLACEHOLDER.test(actor.actor_id)) {
+      throw new SettingsError(`${fileName}: actor_id "${actor.actor_id}" is not a {{app-id:<key>}} placeholder`, file);
+    }
+  }
   const actorsWithoutIds = bypassActors.map(({ actor_id: _ignored, ...actor }) => actor);
   const stray = findStrayPlaceholder({ rest, actorsWithoutIds });
   if (stray !== null) throw new SettingsError(`${fileName}: placeholder "${stray}" is allowed only as bypass_actors[].actor_id`, file);
@@ -124,8 +160,8 @@ async function loadRulesets(directory) {
   try {
     names = (await readdir(directory)).filter((name) => name.endsWith('.json')).sort();
   } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw new SettingsError(`${RULESETS_DIR}: ${error.message}`, directory);
+    const reason = error.code === 'ENOENT' ? 'directory not found' : error.message;
+    throw new SettingsError(`${RULESETS_DIR}: ${reason}`, directory);
   }
   const rulesets = [];
   for (const fileName of names) {
@@ -238,7 +274,9 @@ function getPath(value, keyPath) {
 /** @returns {{ value: any }|null} null when the section is absent or unreadable */
 function readableSection(live, name) {
   const section = live?.[name];
-  return section?.readable === true ? { value: section.value } : null;
+  if (section?.readable !== true) return null;
+  const expectsArray = ARRAY_SECTIONS.includes(name);
+  return Array.isArray(section.value) === expectsArray ? { value: section.value } : null;
 }
 
 function unreadableRows(section, items) {
@@ -266,7 +304,8 @@ function compareLeaves(section, desiredObject, live, signals) {
   const read = readableSection(live, section);
   if (!read) return unreadableRows(section, items);
   return items.map((item) => {
-    const deferrable = section === 'security' && item.key.startsWith(CODE_SCANNING_SETUP_KEY);
+    const deferrable = section === 'security'
+      && (item.key === CODE_SCANNING_SETUP_KEY || item.key.startsWith(`${CODE_SCANNING_SETUP_KEY}.`));
     return leafRow(section, item, getPath(read.value, item.key), deferrable ? codeScanningMismatch(signals) : 'differ');
   });
 }
@@ -281,7 +320,7 @@ function compareTeamAccess(settings, live) {
   const read = readableSection(live, 'teamAccess');
   if (!read) return unreadableRows('teamAccess', items);
   return items.map((item) => {
-    const entry = read.value.find((candidate) => sameLogin(candidate.team, item.key));
+    const entry = read.value.find((candidate) => sameLogin(candidate?.team, item.key));
     if (!entry) return row('teamAccess', item.key, item.desired, null, 'missing');
     return row('teamAccess', item.key, item.desired, entry.permission, entry.permission === item.desired ? 'match' : 'differ');
   });
@@ -289,7 +328,10 @@ function compareTeamAccess(settings, live) {
 
 /** @returns {'hold'|'deferred'|'unreadable'} */
 function assertionState(assertWhen, { config, signals }) {
-  if (assertWhen === 'kitInstalled') return signals.kitInstalled ? 'hold' : 'deferred';
+  if (assertWhen === 'kitInstalled') {
+    if (typeof signals.kitInstalled !== 'boolean') return 'unreadable';
+    return signals.kitInstalled ? 'hold' : 'deferred';
+  }
   if (config.deploy === 'none') return 'deferred';
   if (signals.pass2Ran === true || signals.codeScanningConfigured === true) return 'hold';
   if (signals.pass2Ran === false && signals.codeScanningConfigured === false) return 'deferred';
@@ -302,8 +344,8 @@ function compareVariables(settings, live, context) {
   if (!read) return unreadableRows('variables', items);
   return items.map((item) => {
     const state = assertionState(item.spec.assertWhen, context);
-    if (state !== 'hold') return row('variables', item.key, item.desired, null, state);
-    const entry = read.value.find((candidate) => candidate.name === item.key);
+    const entry = read.value.find((candidate) => candidate?.name === item.key);
+    if (state !== 'hold') return row('variables', item.key, item.desired, entry?.value ?? null, state);
     if (!entry) return row('variables', item.key, item.desired, null, 'missing');
     return row('variables', item.key, item.desired, entry.value, entry.value === item.desired ? 'match' : 'differ');
   });
@@ -328,7 +370,7 @@ function compareEnvironment(name, spec, liveEnvironment, config) {
   const rows = [];
   const add = (key, desired, live, matches) => rows.push(row('environments', `${name}.${key}`, desired, live, matches ? 'match' : 'differ'));
   add('can_admins_bypass', spec.can_admins_bypass, liveEnvironment.can_admins_bypass, liveEnvironment.can_admins_bypass === spec.can_admins_bypass);
-  add('prevent_self_review', spec.prevent_self_review, liveEnvironment.prevent_self_review, liveEnvironment.prevent_self_review === spec.prevent_self_review);
+  add('prevent_self_review', spec.prevent_self_review, liveEnvironment.prevent_self_review, (liveEnvironment.prevent_self_review ?? false) === spec.prevent_self_review);
   const reviewers = resolveReviewers(spec.reviewers ?? [], config);
   add('reviewers', reviewers ?? spec.reviewers, liveEnvironment.reviewers,
     reviewers !== null && sameMembers(liveEnvironment.reviewers ?? [], reviewers, sameLogin));
@@ -349,7 +391,7 @@ function compareEnvironments(settings, live, { repoKind: kind, config }) {
   const read = readableSection(live, 'environments');
   if (!read) return unreadableRows('environments', selected.map(([name, spec]) => ({ key: name, desired: spec })));
   return selected.flatMap(([name, spec]) => {
-    const liveEnvironment = read.value.find((candidate) => candidate.name === name);
+    const liveEnvironment = read.value.find((candidate) => candidate?.name === name);
     if (!liveEnvironment) return [row('environments', name, spec, null, 'missing')];
     return compareEnvironment(name, spec, liveEnvironment, config);
   });
@@ -360,13 +402,13 @@ function compareLabels(labels, live) {
   if (!read) return unreadableRows('labels', labels.map((label) => ({ key: label.name, desired: label })));
   const wanted = new Set(labels.map((label) => label.name.toLowerCase()));
   const rows = labels.map((label) => {
-    const entry = read.value.find((candidate) => candidate.name.toLowerCase() === label.name.toLowerCase());
+    const entry = read.value.find((candidate) => String(candidate?.name).toLowerCase() === label.name.toLowerCase());
     if (!entry) return row('labels', label.name, label, null, 'missing');
     const normalized = { name: entry.name, color: entry.color, description: entry.description ?? '' };
-    const same = normalized.color.toLowerCase() === label.color.toLowerCase() && normalized.description === label.description;
+    const same = String(normalized.color).toLowerCase() === label.color.toLowerCase() && normalized.description === label.description;
     return row('labels', label.name, label, normalized, same ? 'match' : 'differ');
   });
-  const extras = read.value.filter((entry) => !wanted.has(entry.name.toLowerCase()));
+  const extras = read.value.filter((entry) => !wanted.has(String(entry?.name).toLowerCase()));
   return [...rows, ...extras.map((entry) => row('labels', entry.name, null, entry, 'extra'))];
 }
 
@@ -384,6 +426,10 @@ function sameBypassActors(live, desired) {
   return left.length === right.length && coversEach(left, right);
 }
 
+/**
+ * A live-only rule type is `extra`, including `code_scanning` on a template `main` that lacks it: projects commit
+ * the rule before pass 2 (spec 14.2 step 4). A live rule that exists but is weaker than desired is always `differ`.
+ */
 function compareRules(rulesetName, desiredRules, liveRules, signals) {
   const liveByType = new Map(liveRules.map((rule) => [rule.type, rule]));
   const desiredTypes = new Set(desiredRules.map((rule) => rule.type));
@@ -393,10 +439,17 @@ function compareRules(rulesetName, desiredRules, liveRules, signals) {
     const deferrable = rulesetName === MAIN_RULESET && rule.type === CODE_SCANNING_RULE;
     const mismatch = deferrable ? codeScanningMismatch(signals) : 'differ';
     if (!liveRule) return row('rulesets', key, rule, null, mismatch === 'differ' ? 'missing' : mismatch);
-    return row('rulesets', key, rule, liveRule, covers(liveRule, rule) ? 'match' : mismatch);
+    return row('rulesets', key, rule, liveRule, covers(liveRule, rule) ? 'match' : 'differ');
   });
   const extras = liveRules.filter((rule) => !desiredTypes.has(rule.type));
   return [...rows, ...extras.map((rule) => row('rulesets', `${rulesetName}.rules.${rule.type}`, null, rule, 'extra'))];
+}
+
+function bypassActorsRow(desired, liveRuleset) {
+  const key = `${desired.name}.bypass_actors`;
+  const live = liveRuleset.bypass_actors;
+  if (!Array.isArray(live) || !live.every(isPlainObject)) return row('rulesets', key, desired.bypass_actors, null, 'unreadable');
+  return row('rulesets', key, desired.bypass_actors, live, sameBypassActors(live, desired.bypass_actors) ? 'match' : 'differ');
 }
 
 function compareRuleset(desired, liveRuleset, signals) {
@@ -406,7 +459,7 @@ function compareRuleset(desired, liveRuleset, signals) {
     field('target', liveRuleset.target === desired.target),
     field('enforcement', liveRuleset.enforcement === desired.enforcement),
     field('conditions', covers(liveRuleset.conditions, desired.conditions)),
-    field('bypass_actors', sameBypassActors(liveRuleset.bypass_actors, desired.bypass_actors)),
+    bypassActorsRow(desired, liveRuleset),
     ...compareRules(name, desired.rules ?? [], liveRuleset.rules ?? [], signals),
   ];
 }
@@ -417,11 +470,11 @@ function compareRulesets(rulesets, live, signals) {
   if (!read) return unreadableRows('rulesets', rulesets.map((ruleset) => ({ key: ruleset.name, desired: ruleset })));
   const wanted = new Set(rulesets.map((ruleset) => ruleset.name));
   const rows = rulesets.flatMap((ruleset) => {
-    const liveRuleset = read.value.find((candidate) => candidate.name === ruleset.name);
+    const liveRuleset = read.value.find((candidate) => candidate?.name === ruleset.name);
     if (!liveRuleset) return [row('rulesets', ruleset.name, ruleset, null, 'missing')];
     return compareRuleset(ruleset, liveRuleset, signals);
   });
-  const extras = read.value.filter((entry) => !wanted.has(entry.name));
+  const extras = read.value.filter((entry) => !wanted.has(entry?.name));
   return [...rows, ...extras.map((entry) => row('rulesets', entry.name, null, entry, 'extra'))];
 }
 

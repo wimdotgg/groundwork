@@ -335,3 +335,98 @@ test('compareStates: an unresolved placeholder never matches a live actor id', (
   const rows = compareStates(desired, liveState(), { repoKind: 'control', config: CONFIG, signals: SIGNALS });
   assert.equal(find(rows, 'rulesets', 'release-tag-creation.bypass_actors').result, 'differ');
 });
+
+test('compareStates: a live ruleset without a bypass_actors array is unreadable, never a match', () => {
+  const live = liveState();
+  delete live.rulesets.value[0].bypass_actors;
+  const desired = desiredState();
+  desired.rulesets[0].bypass_actors = [];
+  const rows = compareStates(desired, live, { repoKind: 'control', config: CONFIG, signals: SIGNALS });
+  assert.equal(find(rows, 'rulesets', 'main.bypass_actors').result, 'unreadable');
+});
+
+test('compareStates: weaker live rule parameters, dropped checks and extra bypass actors are differ', () => {
+  const desired = desiredState();
+  desired.rulesets[0].rules = [
+    { type: 'pull_request', parameters: { require_code_owner_review: true } },
+    { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'a' }, { context: 'b' }] } },
+  ];
+  const live = liveState();
+  live.rulesets.value[0].rules = [
+    { type: 'pull_request', parameters: { require_code_owner_review: false } },
+    { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'a' }] } },
+  ];
+  live.rulesets.value[1].bypass_actors.push({ actor_type: 'Integration', actor_id: 9, bypass_mode: 'always' });
+  const rows = compareStates(desired, live, { repoKind: 'control', config: CONFIG, signals: SIGNALS });
+  assert.equal(find(rows, 'rulesets', 'main.rules.pull_request').result, 'differ');
+  assert.equal(find(rows, 'rulesets', 'main.rules.required_status_checks').result, 'differ');
+  assert.equal(find(rows, 'rulesets', 'release-tag-creation.bypass_actors').result, 'differ');
+});
+
+test('compareStates: a live rule with extra keys still matches', () => {
+  const live = liveState();
+  live.rulesets.value[0].rules[0] = { type: 'deletion', ruleset_id: 5, ruleset_source: 'x' };
+  assert.equal(find(compare(live), 'rulesets', 'main.rules.deletion').result, 'match');
+});
+
+test('compareStates: extra team reviewer and extra user reviewer are differ', () => {
+  const live = liveState();
+  live.environments.value[1].reviewers = ['wianvdm', 'team:ops'];
+  assert.equal(find(compare(live), 'environments', 'admin.reviewers').result, 'differ');
+  live.environments.value[1].reviewers = ['wianvdm', 'other'];
+  assert.equal(find(compare(live), 'environments', 'admin.reviewers').result, 'differ');
+});
+
+test('compareStates: prevent_self_review defaults to false when the live value is absent', () => {
+  const live = liveState();
+  delete live.environments.value[0].prevent_self_review;
+  assert.equal(find(compare(live), 'environments', 'release.prevent_self_review').result, 'match');
+});
+
+test('compareStates: kitInstalled that is not a boolean makes GROUNDWORK_READY unreadable', () => {
+  const rows = compare(liveState(), { signals: { ...SIGNALS, kitInstalled: undefined } });
+  assert.equal(find(rows, 'variables', 'GROUNDWORK_READY').result, 'unreadable');
+});
+
+test('compareStates: a weaker live code_scanning rule is differ even before pass 2', () => {
+  const live = liveState();
+  live.rulesets.value[0].rules[1] = { type: 'code_scanning', parameters: { code_scanning_tools: [] } };
+  const rows = compare(live, { signals: BEFORE_PASS_2 });
+  assert.equal(find(rows, 'rulesets', 'main.rules.code_scanning').result, 'differ');
+});
+
+test('compareStates: deferred variable rows carry the live value', () => {
+  const rows = compare(liveState(), { signals: { ...BEFORE_PASS_2, kitInstalled: false } });
+  const variableRow = find(rows, 'variables', 'GROUNDWORK_READY');
+  assert.equal(variableRow.result, 'deferred');
+  assert.equal(variableRow.live, 'true');
+});
+
+test('compareStates: security keys that only share the default-setup prefix are not deferred', () => {
+  const desired = desiredState();
+  desired.settings.security.code_scanning_default_setup_extra = true;
+  const rows = compareStates(desired, liveState(), { repoKind: 'control', config: CONFIG, signals: BEFORE_PASS_2 });
+  assert.equal(find(rows, 'security', 'code_scanning_default_setup_extra').result, 'missing');
+});
+
+test('compareStates: a non-array live array section is unreadable', () => {
+  const live = liveState();
+  live.labels = section({ not: 'an array' });
+  assert.ok(compare(live).filter((entry) => entry.section === 'labels').every((entry) => entry.result === 'unreadable'));
+});
+
+test('loadDesiredState rejects a missing rulesets directory', () => assertLoadFails((files) => { delete files['rulesets/main.json']; }, /rulesets: directory not found/));
+test('loadDesiredState rejects an invalid environment repos value', () => assertLoadFails((files) => {
+  files['settings.json'].environments = { e: { repos: 'some', can_admins_bypass: true, prevent_self_review: false } };
+}, /repos must be/));
+test('loadDesiredState rejects a non-boolean can_admins_bypass', () => assertLoadFails((files) => {
+  files['settings.json'].environments = { e: { repos: 'all', can_admins_bypass: 'yes', prevent_self_review: false } };
+}, /can_admins_bypass must be a boolean/));
+test('loadDesiredState rejects a label without a string color', () => assertLoadFails((files) => { files['labels.json'].labels[0].color = 5; }, /string color/));
+test('loadDesiredState rejects bypass_actors that is not an array of objects', () => assertLoadFails((files) => {
+  files['rulesets/main.json'].bypass_actors = [null];
+}, /bypass_actors must be an array/));
+test('loadDesiredState rejects a teamAccess that is not an array', () => assertLoadFails((files) => { files['settings.json'].teamAccess = {}; }, /teamAccess must be an array/));
+test('loadDesiredState rejects a string actor_id that is not a placeholder', () => assertLoadFails((files) => {
+  files['rulesets/main.json'].bypass_actors = [{ actor_type: 'Integration', actor_id: '123', bypass_mode: 'always' }];
+}, /not a \{\{app-id/));
