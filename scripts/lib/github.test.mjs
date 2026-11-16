@@ -181,3 +181,92 @@ test('fetch transport: empty GITHUB_TOKEN throws; network failure is status 0', 
 test('createClient picks the gh transport outside Actions without spawning', () => {
   assert.equal(createClient({ env: {} }).transport, 'gh');
 });
+
+test('fixture: spec-style route keys with unsorted or unencoded queries match', async () => {
+  const client = createFixtureClient({ 'GET /x?per_page=100&head=o:b': ok([1]) });
+  assert.deepEqual(await client.paginate('/x', { query: { head: 'o:b' } }), [1]);
+});
+
+test('request refuses a path that does not start with /', async () => {
+  const { impl, calls } = fakeFetch([]);
+  const client = createClient({ env: { GITHUB_ACTIONS: 'true', GITHUB_TOKEN: 't' }, fetchImpl: impl });
+  await assert.rejects(client.request('GET', '.evil.example/x'), (e) => e instanceof GitHubError && e.status === 0);
+  assert.equal(calls.length, 0);
+});
+
+test('malformed GITHUB_API_URL and Link URL throw GitHubError status 0', async () => {
+  assert.throws(
+    () => createClient({ env: { GITHUB_ACTIONS: 'true', GITHUB_TOKEN: 't', GITHUB_API_URL: 'not a url' } }),
+    (e) => e instanceof GitHubError && e.status === 0,
+  );
+  const client = createFixtureClient({ 'GET /x?per_page=100': ok([1], { link: '<http://[bad>; rel="next"' }) });
+  await assert.rejects(client.paginate('/x'), (e) => e instanceof GitHubError && e.status === 0);
+});
+
+test('rel="nextpage" is not a next link', async () => {
+  const client = createFixtureClient({ 'GET /x?per_page=100': ok([1], { link: '<https://api.github.com/x?page=2>; rel="nextpage"' }) });
+  assert.deepEqual(await client.paginate('/x'), [1]);
+});
+
+test('parseGhOutput keeps CRLF inside the body', () => {
+  const parsed = parseGhOutput('HTTP/2.0 200 OK\r\nA: b\r\n\r\n{"t":"x\\r\\ny"}\r\nline');
+  assert.equal(parsed.data, '{"t":"x\\r\\ny"}\r\nline');
+});
+
+test('parseGhOutput skips a 1xx block and joins repeated headers', () => {
+  const parsed = parseGhOutput('HTTP/1.1 100 Continue\n\nHTTP/2.0 200 OK\nSet-Cookie: a\nset-cookie: b\n\n[]');
+  assert.equal(parsed.status, 200);
+  assert.equal(parsed.headers['set-cookie'], 'a, b');
+  assert.deepEqual(parsed.data, []);
+});
+
+test('onCall reports status 0 for an unmatched fixture', async () => {
+  const calls = [];
+  const client = createFixtureClient({}, { onCall: (r) => calls.push(r) });
+  await assert.rejects(client.request('GET', '/nope'));
+  assert.deepEqual(calls, [{ method: 'GET', path: '/nope', status: 0 }]);
+});
+
+test('paginate throws when a page is not an array, with and without itemsKey', async () => {
+  const client = createFixtureClient({ 'GET /x?per_page=100': [ok({ a: 1 }), ok({ items: 'no' })] });
+  await assert.rejects(client.paginate('/x'), (e) => e instanceof GitHubError && e.status === 0 && /expected an array/.test(e.message));
+  await assert.rejects(client.paginate('/x', { itemsKey: 'items' }), (e) => e instanceof GitHubError && /at items/.test(e.message));
+});
+
+test('query values that are undefined or null are skipped', async () => {
+  const client = createFixtureClient({ 'GET /x?a=1': ok('k') });
+  assert.equal((await client.request('GET', '/x', { query: { a: 1, b: undefined, c: null } })).data, 'k');
+});
+
+test('fetch transport: default and overridden Accept, API version header', async () => {
+  const { impl, calls } = fakeFetch([{ status: 200, body: '' }, { status: 200, body: '' }]);
+  const client = createClient({ env: { GITHUB_ACTIONS: 'true', GITHUB_TOKEN: 't' }, fetchImpl: impl });
+  await client.request('GET', '/a');
+  await client.request('GET', '/b', { accept: 'application/vnd.github.diff' });
+  assert.equal(calls[0].init.headers.Accept, 'application/vnd.github+json');
+  assert.equal(calls[0].init.headers['X-GitHub-Api-Version'], '2022-11-28');
+  assert.equal(calls[1].init.headers.Accept, 'application/vnd.github.diff');
+});
+
+test('explicit empty-string token throws', () => {
+  assert.throws(() => createClient({ env: {}, token: '' }), (e) => e instanceof GitHubError && e.status === 0);
+});
+
+test('fetch failure message prefers error.cause.message', async () => {
+  const failing = async () => { throw new TypeError('fetch failed', { cause: new Error('getaddrinfo ENOTFOUND api.github.com') }); };
+  const client = createClient({ env: { GITHUB_ACTIONS: 'true', GITHUB_TOKEN: 't' }, fetchImpl: failing });
+  await assert.rejects(client.request('GET', '/x'), (e) => e.message === 'fetch failed: getaddrinfo ENOTFOUND api.github.com');
+});
+
+test('error message is exact and apiMessage is undefined when absent', async () => {
+  const client = createFixtureClient({ 'GET /a': { status: 500, data: null }, 'GET /b': { status: 403, data: { message: 'nope' } } });
+  await assert.rejects(client.request('GET', '/a'), (e) => e.message === 'GET /a: 500' && e.apiMessage === undefined);
+  await assert.rejects(client.request('GET', '/b'), (e) => e.message === 'GET /b: 403 nope');
+});
+
+test('graphql returns {} when data is absent; exhausted fixture message', async () => {
+  const client = createFixtureClient({ 'POST /graphql': [ok({}), ok({})], 'GET /a': [ok(1)] });
+  assert.deepEqual(await client.graphql('q'), {});
+  await client.request('GET', '/a');
+  await assert.rejects(client.request('GET', '/a'), (e) => e instanceof GitHubError && e.status === 0 && e.message === 'no fixture for GET /a (responses exhausted)');
+});

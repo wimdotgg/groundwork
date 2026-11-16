@@ -64,7 +64,7 @@ export function repoFromEnv(env) {
  * @returns {Promise<RepoRef>}
  */
 export async function currentRepo() {
-  const { code, stdout, stderr } = await runGh(['repo', 'view', '--json', 'owner,name'], undefined, process.env);
+  const { code, stdout, stderr } = await runGh(['repo', 'view', '--json', 'owner,name']);
   if (code !== 0) throw new GitHubError(`gh repo view failed: ${firstLine(stderr)}`);
   try {
     const parsed = JSON.parse(stdout);
@@ -89,7 +89,9 @@ function compareText(a, b) {
 function withSortedQuery(path, query = {}) {
   const [base, existing = ''] = path.split('?');
   const pairs = [...new URLSearchParams(existing).entries()];
-  for (const [name, value] of Object.entries(query)) pairs.push([name, String(value)]);
+  for (const [name, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null) pairs.push([name, String(value)]);
+  }
   if (pairs.length === 0) return base;
   pairs.sort((a, b) => compareText(a[0], b[0]) || compareText(a[1], b[1]));
   return `${base}?${pairs.map(([n, v]) => `${encodeURIComponent(n)}=${encodeURIComponent(v)}`).join('&')}`;
@@ -111,7 +113,7 @@ function nextLink(linkHeader) {
   if (!linkHeader) return null;
   for (const part of linkHeader.split(/,\s*(?=<)/)) {
     const match = /^\s*<([^>]*)>(.*)$/.exec(part);
-    if (match && /;\s*rel="?next"?/.test(match[2])) return match[1];
+    if (match && /;\s*rel="?next"?\s*(;|$)/.test(match[2])) return match[1];
   }
   return null;
 }
@@ -133,11 +135,11 @@ function parseBody(text) {
  * @returns {Response}
  */
 export function parseGhOutput(output) {
-  let rest = String(output).replace(/\r\n/g, '\n');
+  let rest = String(output);
   for (;;) {
-    const separator = rest.indexOf('\n\n');
-    const head = separator === -1 ? rest : rest.slice(0, separator);
-    const body = separator === -1 ? '' : rest.slice(separator + 2);
+    const separator = /\r?\n\r?\n/.exec(rest);
+    const head = (separator ? rest.slice(0, separator.index) : rest).replace(/\r\n/g, '\n');
+    const body = separator ? rest.slice(separator.index + separator[0].length) : '';
     const [statusLine, ...headerLines] = head.split('\n');
     const status = /^HTTP\/\S+\s+(\d{3})/.exec(statusLine ?? '');
     if (!status) throw new GitHubError(`gh api output has no HTTP status line: ${firstLine(output)}`);
@@ -167,6 +169,7 @@ function runGh(args, stdin, env) {
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => reject(new GitHubError(`cannot run gh: ${firstLine(error.message)}`)));
     child.on('close', (code) => resolve({ code, stdout, stderr }));
+    // EPIPE when gh exits before reading stdin; the failure surfaces via close and parse.
     child.stdin.on('error', () => {});
     child.stdin.end(stdin);
   });
@@ -208,14 +211,19 @@ function fetchTransport({ token, baseUrl, fetchImpl }) {
         headers: lowerCaseHeaders(Object.fromEntries(response.headers.entries())),
       };
     } catch (error) {
-      throw new GitHubError(`fetch failed: ${firstLine(error.message)}`, { method, path });
+      throw new GitHubError(`fetch failed: ${firstLine(error.cause?.message ?? error.message)}`, { method, path });
     }
   };
 }
 
 function reduceLink(url, apiBasePath) {
   if (!url) return null;
-  const parsed = new URL(url, 'https://placeholder.invalid');
+  let parsed;
+  try {
+    parsed = new URL(url, 'https://placeholder.invalid');
+  } catch {
+    throw new GitHubError(`malformed Link URL: ${firstLine(url)}`);
+  }
   const path = apiBasePath && parsed.pathname.startsWith(`${apiBasePath}/`)
     ? parsed.pathname.slice(apiBasePath.length)
     : parsed.pathname;
@@ -233,6 +241,9 @@ function reduceLink(url, apiBasePath) {
  */
 function buildClient(transport, send, onCall, apiBasePath = '') {
   async function request(method, path, options = {}) {
+    if (typeof path !== 'string' || !path.startsWith('/')) {
+      throw new GitHubError(`${method} ${firstLine(path)}: path must start with /`, { method, path });
+    }
     const fullPath = withSortedQuery(path, options.query);
     let response;
     try {
@@ -244,7 +255,7 @@ function buildClient(transport, send, onCall, apiBasePath = '') {
     onCall?.({ method, path: fullPath, status: response.status });
     const ok = (response.status >= 200 && response.status < 300) || (options.okStatuses ?? []).includes(response.status);
     if (ok) return response;
-    const apiMessage = typeof response.data?.message === 'string' ? response.data.message : '';
+    const apiMessage = typeof response.data?.message === 'string' ? response.data.message : undefined;
     throw new GitHubError(`${method} ${fullPath}: ${response.status}${apiMessage ? ` ${apiMessage}` : ''}`, {
       status: response.status,
       method,
@@ -289,6 +300,8 @@ function buildClient(transport, send, onCall, apiBasePath = '') {
 }
 
 /**
+ * Known limits: `GITHUB_API_URL` with a path prefix (GHES `/api/v3`) is not applied to `/graphql`
+ * (GHES serves it at `/api/graphql`), and the `gh` transport does not strip a prefix from Link URLs.
  * @param {{ env: Record<string, string|undefined>, token?: string, onCall?: (record: CallRecord) => void,
  *   fetchImpl?: typeof fetch }} options `fetchImpl` is a test seam; it defaults to global `fetch`.
  * @returns {GitHubClient}
@@ -301,7 +314,12 @@ export function createClient({ env, token, onCall, fetchImpl = globalThis.fetch 
   const resolvedToken = tokenGiven ? token : env.GITHUB_TOKEN;
   if (!resolvedToken) throw new GitHubError('GitHub token is empty');
   const baseUrl = (env.GITHUB_API_URL || DEFAULT_API_URL).replace(/\/+$/, '');
-  const apiBasePath = new URL(baseUrl).pathname.replace(/\/+$/, '');
+  let apiBasePath;
+  try {
+    apiBasePath = new URL(baseUrl).pathname.replace(/\/+$/, '');
+  } catch {
+    throw new GitHubError(`GITHUB_API_URL is not a valid URL: ${firstLine(baseUrl)}`);
+  }
   return buildClient('fetch', fetchTransport({ token: resolvedToken, baseUrl, fetchImpl }), onCall, apiBasePath);
 }
 
@@ -312,9 +330,13 @@ export function createClient({ env, token, onCall, fetchImpl = globalThis.fetch 
  */
 export function createFixtureClient(routes, { onCall } = {}) {
   const served = new Map();
+  const normalizedRoutes = new Map(Object.entries(routes).map(([key, route]) => {
+    const space = key.indexOf(' ');
+    return [`${key.slice(0, space)} ${withSortedQuery(key.slice(space + 1))}`, route];
+  }));
   const send = async (method, path) => {
     const key = `${method} ${path}`;
-    const route = routes[key];
+    const route = normalizedRoutes.get(key);
     if (route === undefined) throw new GitHubError(`no fixture for ${key}`, { method, path });
     let response = route;
     if (Array.isArray(route)) {
