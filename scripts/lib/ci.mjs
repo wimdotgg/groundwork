@@ -73,6 +73,7 @@ async function applyAction(action, { client, repo }) {
  * @returns {Promise<void>}
  */
 export async function applyActions(actions, ctx) {
+  if (actions.length > 0 && !ctx.client) throw new Error('actions returned but the validator exports needsClient = false');
   for (const action of actions) await applyAction(action, ctx);
 }
 
@@ -98,22 +99,43 @@ function oneLine(error) {
 async function buildContext(validator, { argv, env, scriptUrl, createClient, readFile }) {
   const payloadPath = argv[2] ?? env.GITHUB_EVENT_PATH;
   if (!payloadPath) throw new Error('no event payload: pass a path as the first argument or set GITHUB_EVENT_PATH');
+  if (!env.GITHUB_EVENT_NAME) throw new Error('GITHUB_EVENT_NAME is not set');
   const payload = JSON.parse(await readFile(payloadPath, 'utf8'));
   const root = repoRoot(scriptUrl);
   const client = validator.needsClient === false ? undefined : createClient({ env });
-  return { eventName: env.GITHUB_EVENT_NAME ?? '', payload, env, repo: repoFromEnv(env), client, config: await loadConfig({ root }), root };
+  return { eventName: env.GITHUB_EVENT_NAME, payload, env, repo: repoFromEnv(env), client, config: await loadConfig({ root }), root };
 }
 
-async function execute(validator, options) {
+const EXIT_CODES = { pass: EXIT_OK, skip: EXIT_OK, fail: EXIT_FAIL };
+
+function exitCodeFor(conclusion) {
+  if (!Object.hasOwn(EXIT_CODES, conclusion ?? '')) throw new Error(`unknown conclusion: ${conclusion}`);
+  return EXIT_CODES[conclusion];
+}
+
+/**
+ * Runs the validator and records progress in `outcome`. `outcome.result` is set once
+ * the conclusion is valid, so a later action failure still renders the result.
+ */
+async function execute(validator, options, outcome) {
   const ctx = await buildContext(validator, options);
   const facts = await validator.collect(ctx);
   const result = validator.evaluate(facts, ctx.config);
+  outcome.exitCode = exitCodeFor(result?.conclusion);
+  outcome.result = result;
   if (result.actions?.length) await applyActions(result.actions, ctx);
-  return result;
+}
+
+function errorSummary(validatorName, result, error) {
+  if (!result) return `## ${validatorName}\n\nConclusion: **error**\n\n${oneLine(error)}\n`;
+  return `${renderSummary(validatorName, result)}\n### Error\n\n${oneLine(error)}\n`;
 }
 
 /**
  * The one place allowed to set process.exitCode and write to stdout.
+ * `GITHUB_REPOSITORY` and `GITHUB_EVENT_NAME` are required even when the validator
+ * exports `needsClient = false`. An unknown conclusion, a failed action or a failed
+ * summary write all exit 2.
  * Test seams (all optional): `createClient` replaces github.createClient; `readFile`
  * and `appendFile` replace the fs/promises functions; `stdout` replaces process.stdout.write;
  * `setExitCode: false` skips process.exitCode. The exit code is also returned.
@@ -124,26 +146,31 @@ async function execute(validator, options) {
  * @returns {Promise<number>}
  */
 export async function runValidator(validator, options) {
-  const { env, appendFile = appendFileDefault, setExitCode = true } = options;
+  const { env = {}, appendFile = appendFileDefault, setExitCode = true } = options;
   const stdout = options.stdout ?? ((text) => process.stdout.write(text));
+  const outcome = { exitCode: EXIT_ERROR, result: undefined };
   let summary;
-  let exitCode;
   try {
-    const result = await execute(validator, {
+    await execute(validator, {
       argv: options.argv ?? [],
       env,
       scriptUrl: options.scriptUrl,
       createClient: options.createClient ?? createClientDefault,
       readFile: options.readFile ?? readFileDefault,
-    });
-    summary = renderSummary(validator.name, result);
-    exitCode = result.conclusion === 'fail' ? EXIT_FAIL : EXIT_OK;
+    }, outcome);
+    summary = renderSummary(validator.name, outcome.result);
   } catch (error) {
-    summary = `## ${validator.name}\n\nConclusion: **error**\n\n${oneLine(error)}\n`;
-    exitCode = EXIT_ERROR;
+    summary = errorSummary(validator.name, outcome.result, error);
+    outcome.exitCode = EXIT_ERROR;
   }
-  if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
-  else stdout(`${summary}\n`);
-  if (setExitCode) process.exitCode = exitCode;
-  return exitCode;
+  if (setExitCode) process.exitCode = outcome.exitCode;
+  try {
+    if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+    else stdout(`${summary}\n`);
+  } catch (error) {
+    stdout(`${summary}\nsummary write failed: ${oneLine(error)}\n`);
+    outcome.exitCode = EXIT_ERROR;
+  }
+  if (setExitCode) process.exitCode = outcome.exitCode;
+  return outcome.exitCode;
 }

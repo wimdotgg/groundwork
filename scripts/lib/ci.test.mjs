@@ -195,6 +195,7 @@ test('add-label and remove-label; remove-label tolerates 404 but not other error
     { kind: 'remove-label', number: 3, label: 'gone' },
   ], { client, repo: REPO });
   assert.deepEqual(bodies, [{ labels: ['bug'] }]);
+  assert.equal(calls[1], 'DELETE /repos/acme/widgets/issues/3/labels/needs%20format');
   assert.equal(calls.length, 3);
   await assert.rejects(applyActions([{ kind: 'remove-label', number: 3, label: 'denied' }], { client, repo: REPO }), GitHubError);
 });
@@ -268,4 +269,85 @@ test('renderSummary omits empty lists', () => {
   const bare = renderSummary('pr-size', result('pass'));
   assert.doesNotMatch(bare, /Errors|Warnings/);
   assert.match(bare, /\*\*pass\*\*/);
+});
+
+test('an unrecognised or missing conclusion exits 2 and applies no actions', async () => {
+  await withFixture(async (fixture) => {
+    const calls = [];
+    const createClient = () => createFixtureClient({}, { onCall: (record) => calls.push(record.path) });
+    const actions = [{ kind: 'comment', number: 1, body: 'x' }];
+    assert.equal(await run(validatorReturning({ ...result('failure'), actions }), fixture, { createClient }), 2);
+    assert.equal(await run(validatorReturning({ errors: [], warnings: [], details: '', actions }), fixture, { createClient }), 2);
+    assert.equal(await run(validatorReturning(null), fixture, { createClient }), 2);
+    assert.deepEqual(calls, []);
+    assert.match(await readFile(fixture.summaryPath, 'utf8'), /unknown conclusion: failure/);
+  });
+});
+
+test('error summary has Conclusion error; an action failure keeps the validator result', async () => {
+  await withFixture(async (fixture) => {
+    const throwing = validatorReturning(null, { collect: async () => { throw new Error('nope'); } });
+    await run(throwing, fixture);
+    assert.match(await readFile(fixture.summaryPath, 'utf8'), /Conclusion: \*\*error\*\*/);
+
+    await rm(fixture.summaryPath, { force: true });
+    const failing = validatorReturning(result('fail', {
+      errors: ['bad title'], warnings: ['w1'], details: 'the details',
+      actions: [{ kind: 'comment', number: 1, body: 'x' }],
+    }));
+    assert.equal(await run(failing, fixture), 2);
+    const summary = await readFile(fixture.summaryPath, 'utf8');
+    for (const text of ['bad title', 'w1', 'the details', 'no fixture for POST']) assert.ok(summary.includes(text), text);
+  });
+});
+
+test('a failing summary write falls back to stdout and exits 2', async () => {
+  await withFixture(async (fixture) => {
+    let printed = '';
+    const code = await run(validatorReturning(result('pass')), fixture, {
+      appendFile: async () => { throw new Error('disk full'); },
+      stdout: (value) => { printed += value; },
+    });
+    assert.equal(code, 2);
+    assert.match(printed, /## demo/);
+    assert.match(printed, /disk full/);
+  });
+});
+
+test('a missing GITHUB_EVENT_NAME or env is exit 2, not a crash', async () => {
+  await withFixture(async (fixture) => {
+    let printed = '';
+    const stdout = (value) => { printed += value; };
+    const env = baseEnv(fixture, { GITHUB_EVENT_NAME: undefined, GITHUB_STEP_SUMMARY: undefined });
+    assert.equal(await run(validatorReturning(result('pass')), fixture, { env, stdout }), 2);
+    assert.match(printed, /GITHUB_EVENT_NAME is not set/);
+    const code = await runValidator(validatorReturning(result('pass')), { argv: [], scriptUrl: fixture.scriptUrl, setExitCode: false, stdout });
+    assert.equal(code, 2);
+  });
+});
+
+test('actions from a needsClient = false validator exit 2 with a clear message', async () => {
+  await withFixture(async (fixture) => {
+    const validator = validatorReturning(result('pass', { actions: [{ kind: 'comment', number: 1, body: 'x' }] }), { needsClient: false });
+    assert.equal(await run(validator, fixture), 2);
+    assert.match(await readFile(fixture.summaryPath, 'utf8'), /needsClient = false/);
+  });
+});
+
+test('upsert-comment finds the marker on the second comment page', async () => {
+  const { client, calls } = recorder({
+    'GET /repos/acme/widgets/issues/5/comments?per_page=100': {
+      status: 200,
+      headers: { link: '<https://api.github.com/repos/acme/widgets/issues/5/comments?page=2&per_page=100>; rel="next"' },
+      data: [{ id: 1, user: { login: 'someone' }, body: 'plain' }],
+    },
+    'GET /repos/acme/widgets/issues/5/comments?page=2&per_page=100': {
+      status: 200,
+      data: [{ id: 8, user: BOT, body: 'old\n\n<!-- groundwork:fmt -->\n' }],
+    },
+    'PATCH /repos/acme/widgets/issues/comments/8': { status: 200, data: {} },
+  });
+  await applyActions([{ kind: 'upsert-comment', number: 5, marker: 'fmt', body: 'new' }], { client, repo: REPO });
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2], 'PATCH /repos/acme/widgets/issues/comments/8');
 });
