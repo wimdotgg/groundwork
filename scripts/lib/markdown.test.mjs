@@ -17,7 +17,7 @@ test('stripCommentsAndFences: a shorter or different fence does not close', () =
 });
 
 test('stripCommentsAndFences: unclosed fence runs to the end', () => {
-  assert.equal(stripCommentsAndFences('a\n```\nb\nc'), 'a');
+  assert.equal(stripCommentsAndFences('a\n```\nb\nc'), 'a\n');
 });
 
 test('parseSections strips the trailing group, reports duplicates, ignores fenced headings', () => {
@@ -119,7 +119,7 @@ test('replaceSection replaces content and keeps the heading and neighbours', () 
 test('replaceSection appends a missing section and replaces the heading when content has one', () => {
   assert.equal(replaceSection('## A\nx\n', 'State', 'Open: none'), '## A\nx\n\n## State\nOpen: none\n');
   assert.equal(replaceSection('', 'State', 'Open: none'), '## State\nOpen: none\n');
-  assert.equal(replaceSection('## State  (checkpoint 1)\nold\n\n## Z\nz', 'State', '## State  (checkpoint 2)\nnew'), '## State  (checkpoint 2)\nnew\n\n## Z\nz');
+  assert.equal(replaceSection('## State  (checkpoint 1)\nold\n\n## Z\nz', 'State', '## State  (checkpoint 2)\nnew'), '## State  (checkpoint 2)\nnew\n\n## Z\nz\n');
 });
 
 test('replaceSection ignores headings in fences and comments', () => {
@@ -147,4 +147,89 @@ test('formFieldLabels reads label values by regex', () => {
     '      label: "Acceptance criteria"', '  - type: dropdown', '    attributes:', "      label: 'Risk'",
   ].join('\n');
   assert.deepEqual(formFieldLabels(yaml), ['Outcome', 'Acceptance criteria', 'Risk']);
+});
+
+const crlf = (text) => text.replace(/\n/g, '\r\n');
+
+test('CRLF input: sections, fences, State fields, labels, tables, ids, markers', () => {
+  const body = crlf('## Goal\none\n```\n## Hidden\n```\n## State  (checkpoint 1 · 2026-11-16 09:00 · m/h · session s1)\nDone: AC1\nOpen: none\n');
+  const parsed = parseSections(body);
+  assert.deepEqual(parsed.sections.map((s) => s.name), ['Goal', 'State']);
+  assert.equal(parsed.byName.Goal, 'one');
+  const state = parseStateSection(parsed.sections[1]);
+  assert.deepEqual(state.fields, { Done: 'AC1', Open: 'none' });
+  assert.equal(state.header.session, 's1');
+  assert.equal(stripCommentsAndFences(crlf('a\n```\nx\n```\nb')), 'a\nb');
+  assert.deepEqual(formFieldLabels(crlf('label: One\nlabel: "Two"')), ['One', 'Two']);
+  assert.deepEqual(parseTable(crlf('| A |\n|---|\n| 1 |')), [{ A: '1' }]);
+  assert.deepEqual(criterionIds(crlf('- [ ] E1 x\n- [x] E2 y'), 'E'), ['E1', 'E2']);
+  assert.deepEqual(findClosingRefs(crlf('<!--\nCloses #1\n-->\nCloses #2')).map((r) => r.number), [2]);
+  assert.equal(addMarker(crlf('x\n'), 'claim'), 'x\n\n<!-- groundwork:claim -->\n');
+  assert.equal(replaceSection(crlf('## A\nold\n'), 'A', 'new'), '## A\nnew\n');
+});
+
+test('findClosingRefs matches full URLs after a keyword', () => {
+  const refs = findClosingRefs('Closes #5\nFixes https://github.com/wimdotgg/groundwork/issues/6\nResolves https://github.com/o/r/pull/7');
+  assert.deepEqual(refs, [
+    { keyword: 'closes', owner: null, repo: null, number: 5 },
+    { keyword: 'fixes', owner: 'wimdotgg', repo: 'groundwork', number: 6 },
+    { keyword: 'resolves', owner: 'o', repo: 'r', number: 7 },
+  ]);
+});
+
+test('parseStateSection accepts a parseSections entry', () => {
+  const { sections } = parseSections(STATE);
+  const fromEntry = parseStateSection(sections[0]);
+  assert.deepEqual(fromEntry, parseStateSection(STATE));
+  assert.equal(fromEntry.header.checkpoint, '3');
+});
+
+test('a fence marker inside a comment does not hide a later closing ref', () => {
+  const body = '<!--\n```\n-->\nCloses #6\n';
+  assert.deepEqual(findClosingRefs(body).map((r) => r.number), [6]);
+  assert.equal(stripCommentsAndFences('```\n<!--\n```\nlive\n-->'), 'live\n-->');
+});
+
+test('parseStateSection header without the agent part', () => {
+  const { header } = parseStateSection('## State  (checkpoint 4 · 2026-11-16 10:00 · session zz9)\nOpen: none');
+  assert.deepEqual(header, { checkpoint: '4', at: '2026-11-16 10:00', agent: null, session: 'zz9' });
+});
+
+test('formFieldLabels skips checkbox option labels', () => {
+  const yaml = '      label: Confirm\n      options:\n        - label: I agree\n        - label: "Me too"\n';
+  assert.deepEqual(formFieldLabels(yaml), ['Confirm']);
+});
+
+test('parseSections handles a "constructor" heading', () => {
+  const result = parseSections('## constructor\nx\n## Other\ny');
+  assert.equal(result.byName.constructor, 'x');
+  assert.deepEqual(result.duplicates, []);
+});
+
+test('replaceSection treats an unclosed comment as live text, like the strip scan', () => {
+  const body = '<!-- never closed\n## A\nold\n';
+  assert.equal(stripCommentsAndFences(body), body);
+  assert.equal(replaceSection(body, 'A', 'new'), '<!-- never closed\n## A\nnew\n');
+});
+
+test('parseStateSection appends continuation lines to the previous field', () => {
+  const { fields } = parseStateSection('## State\nNext: first step\n  then the second\nOpen: none');
+  assert.equal(fields.Next, 'first step\nthen the second');
+  assert.equal(fields.Open, 'none');
+});
+
+test('replaceSection ends with exactly one newline', () => {
+  assert.equal(replaceSection('## A\nx\n\n\n', 'A', 'y\n\n'), '## A\ny\n');
+  assert.equal(replaceSection('## A\nx', 'B', 'y'), '## A\nx\n\n## B\ny\n');
+});
+
+test('findClosingRefs ignores inline code spans', () => {
+  const body = 'Use `Closes #1` here, also ``Fixes #2``\nCloses #3';
+  assert.deepEqual(findClosingRefs(body).map((r) => r.number), [3]);
+});
+
+test('replaceSection stops at a --- footer line', () => {
+  const body = '## State\nold\n---\nfooter text\n';
+  assert.equal(replaceSection(body, 'State', 'new'), '## State\nnew\n\n---\nfooter text\n');
+  assert.equal(replaceSection('```\n---\n```\n## S\nold', 'S', 'n'), '```\n---\n```\n## S\nn\n');
 });

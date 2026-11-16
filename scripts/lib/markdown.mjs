@@ -3,45 +3,94 @@
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 const SECTION_HEADING = /^##[ \t]+(\S.*?)[ \t]*$/;
 const TRAILING_GROUP = /[ \t]*\([^()]*\)$/;
-const COMMENT = /<!--[\s\S]*?-->/g;
-const CLOSING_REF = /(?<![\w-])(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b:?[ \t]+(?:([\w.-]+)\/([\w.-]+))?#(\d+)\b/gi;
-const STATE_HEADER_GROUP = /\(\s*checkpoint\s+([^·)]*?)\s*(?:·\s*([^·)]*?)\s*)?(?:·\s*([^·)]*?)\s*)?(?:·\s*session\s+([^·)]*?)\s*)?\)/i;
+const SECTION_BREAK = '---';
 const STATE_FIELD = /^([A-Za-z][A-Za-z ]*):[ \t]*(.*)$/;
+const STATE_GROUP = /\(([^()]*)\)\s*$/;
+const HEADER_SEPARATOR = '·';
+const INLINE_CODE = /(`+)(?:[^`]|(?!\1)`+)*?\1(?!`)/g;
+const CLOSING_REF = new RegExp(
+  '(?<![\\w-])(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\\b:?[ \\t]+(?:'
+  + 'https?://github\\.com/([\\w.-]+)/([\\w.-]+)/(?:issues|pull)/(\\d+)'
+  + '|(?:([\\w.-]+)/([\\w.-]+))?#(\\d+))\\b',
+  'gi',
+);
 
 /**
- * Line-wise fence scan. Returns, per line, whether it belongs to a fenced block
- * (fence delimiters included). An unclosed fence runs to the end of the text.
- * @param {string[]} lines
- * @returns {boolean[]}
+ * Every export accepts CRLF or CR input; text is normalised to LF first, so
+ * strings returned by the editing functions use LF.
+ * @param {string} text
+ * @returns {string}
  */
-function fencedLines(lines) {
-  const fenced = [];
-  let open = null;
-  for (const line of lines) {
-    if (open === null) {
-      const match = FENCE_OPEN.exec(line);
-      fenced.push(match !== null);
-      if (match) open = match[1];
-      continue;
-    }
-    fenced.push(true);
-    const closer = new RegExp(`^ {0,3}${open[0]}{${open.length},}[ \\t]*$`);
-    if (closer.test(line)) open = null;
-  }
-  return fenced;
+function normalizeNewlines(text) {
+  return text.replace(/\r\n?/g, '\n');
+}
+
+function lineEndAt(text, index) {
+  const newline = text.indexOf('\n', index);
+  return newline === -1 ? text.length : newline;
 }
 
 /**
- * Removes `<!-- ... -->` comments and fenced blocks (backtick and tilde).
- * Fences are removed first, then comments. An unclosed comment is left as is.
+ * Index just past the fence opened by the line at `start`, or the text length when unclosed.
+ * @param {string} text
+ * @param {number} start line start of the opening fence
+ * @param {string} opener the run of fence characters
+ * @returns {number}
+ */
+function fenceEnd(text, start, opener) {
+  const closer = new RegExp(`^ {0,3}${opener[0]}{${opener.length},}[ \\t]*$`);
+  let lineStart = lineEndAt(text, start) + 1;
+  while (lineStart < text.length) {
+    const lineEnd = lineEndAt(text, lineStart);
+    if (closer.test(text.slice(lineStart, lineEnd))) return Math.min(lineEnd + 1, text.length);
+    lineStart = lineEnd + 1;
+  }
+  return text.length;
+}
+
+/**
+ * One in-order scan: whichever of a fence (at a line start) or a comment opens first wins,
+ * and the other construct inside it is inert. An unclosed comment is live text; an unclosed
+ * fence runs to the end. Input must already be LF.
+ * @param {string} text
+ * @returns {Uint8Array} 1 for characters inside a comment or fence
+ */
+function deadMask(text) {
+  const dead = new Uint8Array(text.length);
+  let index = 0;
+  while (index < text.length) {
+    const atLineStart = index === 0 || text[index - 1] === '\n';
+    const fence = atLineStart ? FENCE_OPEN.exec(text.slice(index, lineEndAt(text, index))) : null;
+    if (fence) {
+      const end = fenceEnd(text, index, fence[1]);
+      dead.fill(1, index, end);
+      index = end;
+      continue;
+    }
+    const commentEnd = text.startsWith('<!--', index) ? text.indexOf('-->', index + 4) : -1;
+    if (commentEnd === -1) {
+      index += 1;
+      continue;
+    }
+    dead.fill(1, index, commentEnd + 3);
+    index = commentEnd + 3;
+  }
+  return dead;
+}
+
+/**
+ * Removes `<!-- ... -->` comments and fenced blocks (backtick and tilde) in one in-order scan.
  * @param {string} text
  * @returns {string}
  */
 export function stripCommentsAndFences(text) {
-  const lines = text.split('\n');
-  const fenced = fencedLines(lines);
-  const kept = lines.filter((_, index) => !fenced[index]);
-  return kept.join('\n').replace(COMMENT, '');
+  const normalized = normalizeNewlines(text);
+  const dead = deadMask(normalized);
+  let result = '';
+  for (let index = 0; index < normalized.length; index += 1) {
+    if (!dead[index]) result += normalized[index];
+  }
+  return result;
 }
 
 /**
@@ -62,32 +111,33 @@ export function parseSections(body) {
     }
     if (sections.length > 0) sections[sections.length - 1].content.push(line);
   }
-  const byName = {};
-  const duplicates = [];
   const result = sections.map((section) => ({ ...section, content: section.content.join('\n').trim() }));
+  const firstByName = new Map();
+  const duplicates = [];
   for (const section of result) {
-    if (!(section.name in byName)) {
-      byName[section.name] = section.content;
+    if (!firstByName.has(section.name)) {
+      firstByName.set(section.name, section.content);
       continue;
     }
     if (!duplicates.includes(section.name)) duplicates.push(section.name);
   }
-  return { sections: result, byName, duplicates };
+  return { sections: result, byName: Object.fromEntries(firstByName), duplicates };
 }
 
 /**
- * GitHub closing keywords outside comments and fences. `keyword` is lower-case;
- * `owner` and `repo` are null for same-repo refs. A trailing colon after the keyword is accepted.
+ * GitHub closing keywords outside comments, fences and inline code spans. `keyword` is
+ * lower-case; `owner` and `repo` are null for same-repo refs. A colon after the keyword is
+ * accepted. Both `#N`, `owner/repo#N` and `https://github.com/owner/repo/(issues|pull)/N` match.
  * @param {string} body
  * @returns {Array<{ keyword: string, owner: string|null, repo: string|null, number: number }>}
  */
 export function findClosingRefs(body) {
-  const text = stripCommentsAndFences(body);
+  const text = stripCommentsAndFences(body).replace(INLINE_CODE, '');
   return [...text.matchAll(CLOSING_REF)].map((match) => ({
     keyword: match[1].toLowerCase(),
-    owner: match[2] ?? null,
-    repo: match[3] ?? null,
-    number: Number(match[4]),
+    owner: match[2] ?? match[5] ?? null,
+    repo: match[3] ?? match[6] ?? null,
+    number: Number(match[4] ?? match[7]),
   }));
 }
 
@@ -101,7 +151,7 @@ export function findClosingRefs(body) {
 export function criterionIds(content, prefix) {
   const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const line = new RegExp(`^[ \\t]*[-*][ \\t]+\\[[ xX]\\][ \\t]+(${escaped}\\d+)(?![\\w])`);
-  return content.split('\n').flatMap((text) => {
+  return normalizeNewlines(content).split('\n').flatMap((text) => {
     const match = line.exec(text);
     return match ? [match[1]] : [];
   });
@@ -122,7 +172,7 @@ const isSeparatorRow = (line) => isTableRow(line) && splitRow(line).every((cell)
  * @returns {Array<Record<string, string>>}
  */
 export function parseTable(content) {
-  const lines = content.split('\n');
+  const lines = normalizeNewlines(content).split('\n');
   const start = lines.findIndex((line, index) => isTableRow(line) && index + 1 < lines.length && isSeparatorRow(lines[index + 1]));
   if (start === -1) return [];
   const headers = splitRow(lines[start]);
@@ -134,25 +184,47 @@ export function parseTable(content) {
   return rows;
 }
 
+function parseStateHeader(headingLine) {
+  const header = { checkpoint: null, at: null, agent: null, session: null };
+  const group = STATE_GROUP.exec(headingLine);
+  if (!group) return header;
+  const positional = [];
+  for (const part of group[1].split(HEADER_SEPARATOR).map((value) => value.trim())) {
+    if (/^checkpoint\s/i.test(part)) header.checkpoint = part.replace(/^checkpoint\s+/i, '');
+    else if (/^session\s/i.test(part)) header.session = part.replace(/^session\s+/i, '');
+    else if (part !== '') positional.push(part);
+  }
+  [header.at = null, header.agent = null] = positional;
+  return header;
+}
+
 /**
- * Parses a 6.5 `## State` section. Pass the section text including its heading line;
- * the header comes from the parenthesised group on the first `## State` line. Every
- * header part is a string or null (`checkpoint` stays a string; `agent` is `<model>/<harness>`).
- * `fields` maps `Key:` lines (Done, Next, ...) to their trimmed values.
- * @param {string} section
+ * Parses a 6.5 `## State` section. Pass a `parseSections` entry (`{ line, content }`) or a
+ * string starting with the `## State (...)` heading. The header comes from the parenthesised
+ * group on the heading line, split on `·`: `checkpoint` and `session` by prefix, the rest
+ * positionally as `at` then `agent`; absent parts are null (`checkpoint` stays a string).
+ * `fields` maps `Key:` lines to their trimmed values; a non-key line continues the previous
+ * field, joined with a newline.
+ * @param {string | { line: string, content: string }} section
  * @returns {{ header: { checkpoint: string|null, at: string|null, agent: string|null, session: string|null }, fields: Record<string, string> }}
  */
 export function parseStateSection(section) {
-  const lines = section.split('\n');
+  const text = typeof section === 'string' ? section : `${section.line}\n${section.content}`;
+  const lines = normalizeNewlines(text).split('\n');
   const headingLine = lines.find((line) => /^##[ \t]+State\b/.test(line)) ?? '';
-  const group = STATE_HEADER_GROUP.exec(headingLine);
-  const part = (index) => (group && group[index] ? group[index] : null);
-  const fields = {};
+  const fields = new Map();
+  let current = null;
   for (const line of lines) {
-    const match = STATE_FIELD.exec(line);
-    if (match && !line.startsWith('#')) fields[match[1].trim()] = match[2].trim();
+    if (line === headingLine || line.trim() === '') continue;
+    const match = line.startsWith('#') ? null : STATE_FIELD.exec(line);
+    if (match) {
+      current = match[1].trim();
+      fields.set(current, match[2].trim());
+      continue;
+    }
+    if (current !== null) fields.set(current, `${fields.get(current)}\n${line.trim()}`.trim());
   }
-  return { header: { checkpoint: part(1), at: part(2), agent: part(3), session: part(4) }, fields };
+  return { header: parseStateHeader(headingLine), fields: Object.fromEntries(fields) };
 }
 
 /**
@@ -166,55 +238,50 @@ export function templatePlaceholders(templateText) {
   return [...new Set(text.match(/<[^<>\s!/][^<>\n]*>/g) ?? [])];
 }
 
-function trackComment(line, startedInside) {
-  let inside = startedInside;
-  for (const token of line.match(/<!--|-->/g) ?? []) inside = token === '<!--';
-  return inside;
-}
-
-function findHeadings(lines) {
-  const fenced = fencedLines(lines);
-  const headings = [];
-  let inComment = false;
-  lines.forEach((line, index) => {
-    const wasInComment = inComment;
-    if (!fenced[index]) inComment = trackComment(line, inComment);
-    if (fenced[index] || wasInComment) return;
-    const match = SECTION_HEADING.exec(line);
-    if (match) headings.push({ index, name: match[1].replace(TRAILING_GROUP, '').trim() });
-  });
-  return headings;
+function liveLines(text) {
+  const dead = deadMask(text);
+  const lines = [];
+  let start = 0;
+  for (const value of text.split('\n')) {
+    lines.push({ text: value, live: !dead[start] });
+    start += value.length + 1;
+  }
+  return lines;
 }
 
 /**
  * Replaces the content of the first level-2 section `name`, keeping its heading line,
  * or appends `## name` plus the content when the section is absent. When `content`
  * itself starts with a `## ` heading, that heading replaces the old one (used to rewrite
- * the `## State  (checkpoint ...)` line). Result ends with a single newline.
+ * the `## State  (checkpoint ...)` line). A section ends at the next level-2 heading or at
+ * a line that is exactly `---` (a PR footer survives). Headings are found by the same
+ * scan as `stripCommentsAndFences`. The result uses LF and ends with exactly one newline.
  * @param {string} body
  * @param {string} name
  * @param {string} content
  * @returns {string}
  */
 export function replaceSection(body, name, content) {
-  const lines = body.split('\n');
-  const headings = findHeadings(lines);
-  const position = headings.findIndex((heading) => heading.name === name);
-  const newContent = content.replace(/\s+$/, '');
+  const lines = liveLines(normalizeNewlines(body));
+  const newContent = normalizeNewlines(content).replace(/\s+$/, '');
   const replacesHeading = /^##[ \t]/.test(newContent);
-  if (position === -1) {
-    const head = body.trimEnd();
-    const section = replacesHeading ? newContent : `## ${name}\n${newContent}`;
+  const start = lines.findIndex((line) => {
+    const heading = line.live ? SECTION_HEADING.exec(line.text) : null;
+    return heading !== null && heading[1].replace(TRAILING_GROUP, '').trim() === name;
+  });
+  const section = replacesHeading ? newContent : `## ${name}\n${newContent}`;
+  if (start === -1) {
+    const head = lines.map((line) => line.text).join('\n').trimEnd();
     return `${head === '' ? '' : `${head}\n\n`}${section}\n`;
   }
-  const start = headings[position].index;
-  const end = position + 1 < headings.length ? headings[position + 1].index : lines.length;
-  const before = lines.slice(0, start);
-  const after = lines.slice(end);
-  const section = replacesHeading ? newContent : `${lines[start]}\n${newContent}`;
-  const prefix = before.length === 0 ? '' : `${before.join('\n')}\n`;
-  const suffix = after.length === 0 ? '\n' : `\n\n${after.join('\n')}`;
-  return `${prefix}${section}${suffix}`;
+  const next = lines.findIndex((line, index) => index > start && line.live
+    && (SECTION_HEADING.test(line.text) || line.text === SECTION_BREAK));
+  const end = next === -1 ? lines.length : next;
+  const before = lines.slice(0, start).map((line) => line.text);
+  const after = lines.slice(end).map((line) => line.text);
+  const kept = replacesHeading ? newContent : `${lines[start].text}\n${newContent}`;
+  const result = [...before, kept, ...(after.length === 0 ? [] : ['', ...after])].join('\n');
+  return `${result.replace(/\n+$/, '')}\n`;
 }
 
 const markerText = (name) => `<!-- groundwork:${name} -->`;
@@ -225,7 +292,7 @@ const markerText = (name) => `<!-- groundwork:${name} -->`;
  * @returns {boolean}
  */
 export function hasMarker(body, name) {
-  return body.includes(markerText(name));
+  return normalizeNewlines(body).includes(markerText(name));
 }
 
 /**
@@ -235,8 +302,9 @@ export function hasMarker(body, name) {
  * @returns {string}
  */
 export function addMarker(body, name) {
-  if (hasMarker(body, name)) return body;
-  const head = body.trimEnd();
+  const text = normalizeNewlines(body);
+  if (hasMarker(text, name)) return text;
+  const head = text.trimEnd();
   return `${head === '' ? '' : `${head}\n\n`}${markerText(name)}\n`;
 }
 
@@ -248,27 +316,29 @@ export function addMarker(body, name) {
  * @returns {string}
  */
 export function removeMarker(body, name) {
-  if (!hasMarker(body, name)) return body;
+  const text = normalizeNewlines(body);
+  if (!hasMarker(text, name)) return text;
   const marker = markerText(name);
-  const kept = body.split('\n').flatMap((line) => {
+  const kept = text.split('\n').flatMap((line) => {
     if (line.trim() === marker) return [];
     return [line.split(marker).join('')];
   });
   const result = kept.join('\n');
-  if (!body.endsWith('\n')) return result.trimEnd();
+  if (!text.endsWith('\n')) return result.trimEnd();
   return `${result.trimEnd()}\n`;
 }
 
 /**
- * `label:` values of an issue-form YAML by regex (no YAML parser), in file order.
+ * `label:` values of an issue-form YAML by regex (no YAML parser), in file order. Only
+ * non-list-item lines match, so checkbox option labels (`- label: ...`) are skipped.
  * Surrounding single or double quotes are removed.
  * @param {string} yamlText
  * @returns {string[]}
  */
 export function formFieldLabels(yamlText) {
   const labels = [];
-  for (const line of yamlText.split('\n')) {
-    const match = /^\s*(?:-\s+)?label:[ \t]*(.*?)[ \t]*$/.exec(line);
+  for (const line of normalizeNewlines(yamlText).split('\n')) {
+    const match = /^\s*label:[ \t]*(.*?)[ \t]*$/.exec(line);
     if (!match) continue;
     labels.push(match[1].replace(/^(["'])(.*)\1$/, '$2'));
   }
