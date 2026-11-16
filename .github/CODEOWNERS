@@ -11,3 +11,7 @@
 /release-please-config.json     @wianvdm
 /.release-please-manifest.json  @wianvdm
 /version.txt                    @wianvdm
+/.gitleaks.toml                 @wianvdm
+/.gitleaksignore                @wianvdm
+/osv-scanner.toml               @wianvdm
+/zizmor.yml                     @wianvdm
