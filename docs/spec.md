@@ -144,14 +144,15 @@ scripts/
   lib/    github.mjs config.mjs trust.mjs markdown.mjs issue-model.mjs settings.mjs ci.mjs   (13.1)
   kit-update.mjs
   groundwork/                     [control] bootstrap.mjs check.mjs selftest.mjs app-token.mjs
-    stubs/ verify verify.cmd      [control] the project stub bootstrap writes to scripts/verify*
-  **/*.test.mjs                   unit tests beside each script (`node --test scripts/`)
+    stubs/ verify verify.cmd      [control] the project stub bootstrap writes to scripts/verify*; scripts/verify.cmd and the stub's verify.cmd are the same shim and need Git for Windows sh
+  **/*.test.mjs                   unit tests beside each script (`node --test "scripts/**/*.test.mjs"`; a bare directory fails on Node 24)
 .claude/
   settings.json                   hooks and permission rules
   skills/ groundwork-planner/ groundwork-worker/ groundwork-reviewer/
 AGENTS.md                         canonical agent rules
 CLAUDE.md                         contains `@AGENTS.md`
-.gitignore                        re-includes `.claude/skills/groundwork-*/` (below)
+.gitattributes                    LF everywhere, CRLF for .cmd and .bat
+.gitignore                        ignores `.claude/worktrees/`; re-includes `.claude/skills/groundwork-*/` (below)
 docs/
   setup.md                        one-time org setup, per-project path
   workflow.md                     the flow for humans, Mermaid diagram, touchpoints
@@ -227,7 +228,9 @@ Issue forms (`.github/ISSUE_TEMPLATE/*.yml`) serve the web UI and set the issue 
 ## Context             files, links, prior decisions
 ```
 
-**Bug** adds `## Reproduction` and `## Expected vs actual` to the Feature format.
+**Bug** adds `## Reproduction` and `## Expected vs actual` to the Feature format. In the web form `Serves` is optional (hotfix lane, 4.6).
+
+Issues created from the web forms render answers as `### <label>` headings and empty optional fields as `_No response_`. `issue-format` and `validateIssueBody` accept level-3 headings for form-generated bodies and treat `_No response_` as empty.
 **Spike** uses `## Question`, `## Serves`, `## Timebox`, `## Output` (what the decision record at `docs/decisions/<N>-<slug>.md` must answer).
 
 ### 4.4 Derived status
@@ -465,9 +468,9 @@ Concurrency: `ci-${{ github.event.pull_request.number || github.ref }}`, `cancel
 | Job | Calls | Does |
 |---|---|---|
 | `verify` | `reusable-verify.yml@<tag>` | Runs `scripts/verify` (format, lint, typecheck, test, build as the project defines). While `scripts/verify` still contains the stub marker `GROUNDWORK_STUB`, emits a warning and passes; `bootstrap-pass2` refuses to run while the marker is present. |
-| `security` | `reusable-security.yml@<tag>` | actionlint and zizmor on workflows; gitleaks over the diff (PR, merge group) or history increment (push); osv-scanner on lockfiles; `actions/dependency-review-action` on `pull_request` only (fail on high, runtime and development scopes). |
+| `security` | `reusable-security.yml@<tag>` | actionlint and zizmor on workflows; gitleaks (`--ignore-gitleaks-allow`) over the diff (PR, merge group) or history increment (push), failing on an unreachable or empty range or a partial scan; osv-scanner on lockfiles, failing on any severity with exceptions only through `osv-scanner.toml` (exit 128 passes only when no lockfile failed to parse); `actions/dependency-review-action` on `pull_request` only (fail on high, runtime and development scopes). |
 | `test-integrity` | local script | PR only (pass-through on `merge_group` and `push`). Fails when the diff deletes or skips tests, lowers a coverage or lint threshold, or adds a suppression (`eslint-disable`, `@ts-ignore`, `# noqa`, `.skip`, `xit`, and patterns from `config.json`), unless a valid `integrity-exception` is present (section 5). Labels are read live from the API; after you apply the label the agent re-runs the job. |
-| `scripts` | local steps | `node --test scripts/`. Runs the kit's unit tests in every repo; control-only tests live under `scripts/groundwork/` and leave with that directory at bootstrap. |
+| `scripts` | local steps | `node --test "scripts/**/*.test.mjs"` (a bare directory fails on Node 24). Runs the kit's unit tests in every repo; control-only tests live under `scripts/groundwork/` and leave with that directory at bootstrap. |
 | `settings-plan` | `scripts/ci/settings-plan.mjs` | PRs touching `.github/groundwork/**` only (step-level path check; otherwise exits 0). Writes desired vs. live settings to the job summary (tier 1, section 12); the PR's settings files are read as data from a second checkout of the PR head (`env.PR_ROOT`), never executed. The PR `GITHUB_TOKEN` reads rulesets, environments and labels; Actions settings return 403, so they are shown as a file diff against the base (V4). Fails only when a settings file is invalid. |
 | `Check` | `scripts/ci/check-results.mjs` | `needs: [verify, security, test-integrity, scripts, settings-plan]`, `if: always()`. Reads `toJSON(needs)` from `env`. Fails if any needed job has a result other than `success`. Stays in the caller so the required name is stable. |
 
@@ -617,11 +620,15 @@ Consequence: a bad release tag cannot be moved or deleted by anyone, including y
 /AGENTS.md                      @wianvdm
 /CLAUDE.md                      @wianvdm
 /.claude/                       @wianvdm
+/.gitleaks.toml                 @wianvdm
+/.gitleaksignore                @wianvdm
+/osv-scanner.toml               @wianvdm
+/zizmor.yml                     @wianvdm
 /release-please-config.json     @wianvdm
 /.release-please-manifest.json  @wianvdm
 /version.txt                    @wianvdm
 ```
-Projects append their test, lint and coverage config paths.
+Projects append their test, lint and coverage config paths. The four scanner configs are protected because the scanners read them from the PR checkout, so an unprotected edit could silence a finding.
 Release PRs touch the manifest and `version.txt`, so they need your approval; you merge them anyway (section 11). `scripts/groundwork/` is protected because `admin-run` executes it (bootstrap, check, app-token) with the admin App token; unprotected, a merged agent PR would run with admin rights at your next approval. `scripts/agent/`, `scripts/admin/` and `kit-update.mjs` are deliberately unprotected: they run with the agent's own credentials and gate nothing. `scripts/deploy`, `scripts/smoke` and `scripts/rollback` run with `production` secrets, but only after your approval of each deploy.
 
 ### 9.5 `issue-branches`
@@ -800,13 +807,13 @@ Conventions for every module under `scripts/lib/` and `scripts/ci/`:
 | Export | Contract |
 |---|---|
 | `createClient({ env, token?, onCall? }) → GitHubClient` | `token` given: `fetch` with that token (`admin-run` minted tokens). Else `env.GITHUB_ACTIONS === 'true'`: `fetch` with `env.GITHUB_TOKEN` (empty token throws). Else `gh`: spawns `gh api -i --method <m> <path>` with an argument array (no shell), body on stdin (`--input -`), status and headers parsed from the `-i` output. Base URL `env.GITHUB_API_URL` or `https://api.github.com`. `onCall(CallRecord)` runs after every call (the `admin-run` summary). |
-| `createFixtureClient(routes, { onCall? }) → GitHubClient` | `routes`: `Record<string, Response \| Response[]>` keyed `"<METHOD> <path>"` with query parameters sorted by name (`"GET /repos/o/r/pulls/7/files?per_page=100"` for the first page, `"GET /repos/o/r/pulls/7/files?page=2&per_page=100"` for the next); an array yields successive responses. GraphQL calls are keyed `"POST /graphql"` with an ordered array of responses, one per call. An unmatched call throws `GitHubError` (status 0, `no fixture for <key>`). Every test uses this; no test touches the network. |
+| `createFixtureClient(routes, { onCall? }) → GitHubClient` | `routes`: `Record<string, Response \| Response[]>` keyed `"<METHOD> <path>"` with query parameters sorted by name and encoded; route keys are normalised to the same form as lookups (`"GET /repos/o/r/pulls/7/files?per_page=100"` for the first page, `"GET /repos/o/r/pulls/7/files?page=2&per_page=100"` for the next); an array yields successive responses. GraphQL calls are keyed `"POST /graphql"` with an ordered array of responses, one per call. An unmatched call throws `GitHubError` (status 0, `no fixture for <key>`). Every test uses this; no test touches the network. |
 | `apiPath(template, params) → string` | Fills `{name}` segments with `encodeURIComponent(params.name)`; a missing param throws `GitHubError` (status 0). |
 | `repoFromEnv(env) → RepoRef` | From `GITHUB_REPOSITORY`; throws `GitHubError` (status 0) when absent or malformed. |
 | `currentRepo() → Promise<RepoRef>` | Agent machine only: `gh repo view --json owner,name`. |
 | `class GitHubError extends Error` | Fields `status` (0 for transport failures), `method`, `path`, `apiMessage`. |
 
-Behaviour shared by all transports: `request` resolves on 2xx and on any status in `okStatuses` (`claim` passes `[422]`, existence probes pass `[404]`), and throws `GitHubError` otherwise. `paginate`'s first request is `path` with the caller's `query` plus `per_page=100` and no `page` parameter; each later request is the `Link: rel="next"` URL reduced to path plus query (base URL dropped), and the fixture key is that path with its query sorted; `itemsKey` unwraps responses such as `{ total_count, workflow_runs }`. `graphql` posts to `/graphql` and throws `GitHubError` with the first `errors[].message` when the response carries errors. No retries: callers re-run. Bodies never reach `onCall`.
+Behaviour shared by all transports: `request` rejects a path that does not start with `/` (`GitHubError`, status 0). It resolves on 2xx and on any status in `okStatuses` (`claim` passes `[422]`, existence probes pass `[404]`), and throws `GitHubError` otherwise. `paginate`'s first request is `path` with the caller's `query` plus `per_page=100` and no `page` parameter; each later request is the `Link: rel="next"` URL reduced to path plus query (base URL dropped), and the fixture key is that path with its query sorted; `itemsKey` unwraps responses such as `{ total_count, workflow_runs }`. `graphql` posts to `/graphql` and throws `GitHubError` with the first `errors[].message` when the response carries errors. No retries: callers re-run. Bodies never reach `onCall`.
 
 #### `lib/config.mjs`
 
@@ -854,14 +861,14 @@ Behaviour shared by all transports: `request` resolves on 2xx and on any status 
 
 | Export | Contract |
 |---|---|
-| `stripCommentsAndFences(text) → string` | Removes `<!-- ... -->` and fenced blocks (backtick and tilde). |
+| `stripCommentsAndFences(text) → string` | Removes `<!-- ... -->` and fenced blocks (backtick and tilde). Every `markdown.mjs` export normalises CRLF to LF. |
 | `parseSections(body) → { sections: Array<{ name, line, content }>, byName: Record<string, string>, duplicates: string[] }` | Level-2 headings after `stripCommentsAndFences`. `name` is the heading text with a trailing parenthesised group removed (`## State  (checkpoint 3 ...)` → `State`); `line` is the full heading line. |
-| `findClosingRefs(body) → Array<{ keyword, owner: string \| null, repo: string \| null, number }>` | Every GitHub closing keyword (close/closes/closed, fix/fixes/fixed, resolve/resolves/resolved; any case) outside comments and fences. |
+| `findClosingRefs(body) → Array<{ keyword, owner: string \| null, repo: string \| null, number }>` | Every GitHub closing keyword (close/closes/closed, fix/fixes/fixed, resolve/resolves/resolved; any case) outside comments, fences and inline code spans. Also matches full issue and PR URLs after the keyword. |
 | `criterionIds(content, prefix) → string[]` | IDs (`E1`, `AC3`) from checklist lines `- [ ] <id> ...` or `- [x] <id> ...`, in order, duplicates kept. |
 | `parseTable(content) → Array<Record<string, string>>` | First GFM table in the content; header cells are the keys, cells trimmed. |
-| `parseStateSection(section) → { header: { checkpoint, at, agent, session }, fields: Record<string, string> }` | 6.5 format; missing header parts are `null`. |
+| `parseStateSection(section) → { header: { checkpoint, at, agent, session }, fields: Record<string, string> }` | 6.5 format; missing header parts are `null`. `section` is the `{ line, content }` entry from `parseSections` or a full string that starts with the `## State` heading. |
 | `templatePlaceholders(templateText) → string[]` | The `<...>` tokens of a template (`state-section.md`); a body still containing one is unfilled. |
-| `replaceSection(body, name, content) → string` | Replaces the named section's content, or appends the section. |
+| `replaceSection(body, name, content) → string` | Replaces the named section's content, or appends the section. A section ends at the next heading or at a line that is exactly `---` (the PR footer survives); the body always ends with one newline. |
 | `hasMarker(body, name)`, `addMarker(body, name)`, `removeMarker(body, name)` | Marker `<!-- groundwork:<name> -->` (`released`, `claim`, `issue-format`, `alert:<workflow path>`). |
 | `formFieldLabels(yamlText) → string[]` | `label:` values of an issue form by regex (4.3); the form/twin unit test compares these with `parseSections` of the twin. |
 
@@ -1011,7 +1018,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 - `AGENTS.md` is canonical; `CLAUDE.md` is `@AGENTS.md`.
 - `.claude/settings.json`:
-  - Hooks: `Stop` and `PreCompact` run `node scripts/agent/checkpoint.mjs --auto`.
+  - Hooks: `Stop` and `PreCompact` run `node scripts/agent/checkpoint.mjs --auto`. They are added to `.claude/settings.json` in Phase 3, when `scripts/agent/checkpoint.mjs` exists.
   - Deny rules: `git push` with `-f`, any `--force` flag (including its lease variant) or a `+` refspec; `git rebase`; `git push` to `main`; `--no-verify`; `gh pr merge --admin`; `gh api` calls with `-X DELETE` or `-X PUT` against `rulesets`, `environments`, `secrets`.
   - Allow rules for `node scripts/agent/*`, `node scripts/human/*`, read-only `gh`.
 - Codex and other harnesses: the same rules in `AGENTS.md`; no hook enforcement.
@@ -1161,3 +1168,4 @@ Folded in after Phase 0 (section 19 has the evidence) and the implementation-pla
 18. 9.2, 9.3, 10, 12.1: committed config files under `.github/groundwork/` match this text; V11 settled the `update` rule without `parameters`; op token permissions widened by the reads `check` needs.
 19. 4.4, 6.3, 6.5, 8.2, 8.3, 9.1, 9.4, 10, 12.1, 13, 13.1, 14.2, 17: review findings R1 to R16 applied (R3 in part: environment secrets and variables stay under Environments write, per the GitHub App permissions reference). `scripts/groundwork/` protected; `needsClient`; Variables and Members reads for `check`; variable `op` replaced by `assertWhen` signals; Facts typedefs per validator; claim pointer comment on the issue (`claimCommentAt`) and claim comment on the PR; pagination and GraphQL fixture keys; non-admin bypass actors compared by `actor_id`; base-commit validators in `ci.yml`; `settings` → `trust`; `deferred` rows for pre-pass-2 code scanning; `matchesGlob` test; `repoRoot` and thrown error types; `pr-size` exemptions by label; durable lessons in `AGENTS.md`.
 20. 4.4, 6.3, 6.4, 9.1, 10, 13, 13.1, 14.2: a ref with neither PR nor pointer comment expires 15 minutes after the claim commit's server-stamped committer date (`claimCommitAt`; `claim.mjs` never sends dates; the only trusted commit date), not at once. Pass-2 items fail closed once the live `main` ruleset has the `code_scanning` rule (`pass2Ran`): default setup not `configured`, or `DEPLOY_ENABLED` unset while `deploy` is not `none`, is a mismatch; before that they stay `deferred`.
+21. 3, 4.3, 8.2, 9.4, 13.1, 15: Phase 1 corrections from the implemented code. Test command is `node --test "scripts/**/*.test.mjs"` (Node 24); markdown and github module behaviour (`parseStateSection` input, `---` section end, closing-ref URLs and code spans, CRLF, `request` path rule, fixture key normalisation); web-form issue bodies (`###` headings, `_No response_`, optional Bug `Serves`); scanner strictness in `security`; scanner configs in CODEOWNERS; `.gitattributes`, ignored `.claude/worktrees/` and the shared verify shim; Stop and PreCompact hooks deferred to Phase 3.
