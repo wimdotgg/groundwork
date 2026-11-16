@@ -8,5 +8,6 @@ exit /b 1
 sh "%~dp0verify" %*
 exit /b %ERRORLEVEL%
 :run_git
+set "PATH=%ProgramFiles%\Git\usr\bin;%PATH%"
 "%ProgramFiles%\Git\usr\bin\sh.exe" "%~dp0verify" %*
 exit /b %ERRORLEVEL%
