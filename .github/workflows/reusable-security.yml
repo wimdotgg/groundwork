@@ -1,0 +1,142 @@
+name: reusable-security
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  OSV_SCANNER_VERSION: 2.7.0
+  OSV_SCANNER_SHA256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint
+        run: |
+          curl --fail --silent --show-error --location --output actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum --check --strict
+          mkdir "${RUNNER_TEMP}/actionlint"
+          tar --extract --gzip --file actionlint.tar.gz --directory "${RUNNER_TEMP}/actionlint" actionlint
+      - name: Run actionlint
+        run: |
+          shopt -s nullglob
+          files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No workflow files."
+            exit 0
+          fi
+          "${RUNNER_TEMP}/actionlint/actionlint" -color "${files[@]}"
+
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          version: 1.31.1
+          persona: regular
+          advanced-security: false
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        run: |
+          curl --fail --silent --show-error --location --output gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check --strict
+          mkdir "${RUNNER_TEMP}/gitleaks"
+          tar --extract --gzip --file gitleaks.tar.gz --directory "${RUNNER_TEMP}/gitleaks" gitleaks
+      - name: Scan commits
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.event.after }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          zero_sha=0000000000000000000000000000000000000000
+          case "${EVENT_NAME}" in
+            pull_request)
+              range="${PR_BASE_SHA}..${PR_HEAD_SHA}"
+              ;;
+            merge_group)
+              range="${MERGE_BASE_SHA}..${MERGE_HEAD_SHA}"
+              ;;
+            push)
+              if [ "${PUSH_BEFORE_SHA}" = "${zero_sha}" ]; then
+                range="-1 ${PUSH_AFTER_SHA}"
+              else
+                range="${PUSH_BEFORE_SHA}..${PUSH_AFTER_SHA}"
+              fi
+              ;;
+            *)
+              echo "Unexpected event ${EVENT_NAME}; scanning the current commit only."
+              range="-1 ${CURRENT_SHA}"
+              ;;
+          esac
+          echo "Scanning: ${range}"
+          "${RUNNER_TEMP}/gitleaks/gitleaks" git --no-banner --redact --verbose --log-opts="${range}" .
+
+  osv-scanner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install osv-scanner
+        run: |
+          curl --fail --silent --show-error --location --output osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  osv-scanner" | sha256sum --check --strict
+          install -D --mode=755 osv-scanner "${RUNNER_TEMP}/osv-scanner/osv-scanner"
+      - name: Scan lockfiles
+        run: |
+          set +e
+          "${RUNNER_TEMP}/osv-scanner/osv-scanner" scan source --recursive ./
+          status=$?
+          set -e
+          # Exit code 128 means no packages were found: a repo without lockfiles passes.
+          if [ "${status}" -eq 128 ]; then
+            echo "No lockfiles found."
+            exit 0
+          fi
+          exit "${status}"
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          fail-on-scopes: runtime, development
+          comment-summary-in-pr: never
