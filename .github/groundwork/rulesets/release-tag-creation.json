@@ -1,0 +1,10 @@
+{
+  "name": "release-tag-creation",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/tags/v*"], "exclude": [] } },
+  "bypass_actors": [
+    { "actor_type": "Integration", "actor_id": "{{app-id:release}}", "bypass_mode": "always" }
+  ],
+  "rules": [ { "type": "creation" } ]
+}
