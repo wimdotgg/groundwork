@@ -2,12 +2,15 @@
 
 Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/spec.md); section numbers below point into it. The spec wins over this file.
 
-`scripts/agent/*` commands (`next`, `claim`, `checkpoint`, `resume`, `release`, `plan-lint`) arrive in Phase 3. Until then follow the worker loop (6.3) by hand with `gh api`.
+`scripts/agent/*` commands (`next`, `claim`, `checkpoint`, `resume`, `release`, `plan-lint`, `review-queue`) arrive in Phase 3. Until then follow the worker loop (6.3) by hand with `gh api`. Until `.github/groundwork/templates/` and the PR template land, use the heading lists in this file and spec 4.3 and 7.
 
 ## Never
 
-- Merge release PRs, tag, deploy. The owner does.
-- Edit secrets, rulesets, environments or repo settings outside a reviewed PR.
+- Merge release PRs or push tags. Tags come from the release App; deploys run from `deploy.yml` on owner approval.
+- Close epics. The owner does, after the acceptance comment maps every E criterion to evidence (4.1, 4.5).
+- Change secrets, rulesets, environments or repo settings through the API. Settings as code: PR to `.github/groundwork/`, then `scripts/admin/request.mjs apply-settings` (12). Secret values are owner-only.
+- Stack PRs. Every PR targets `main` (D7).
+- Delete or skip tests, lower thresholds or add suppressions without the owner's `integrity-exception` label (8.2).
 - Push to `main`. Push forced: no `--force`, no lease variant, no `+` refspec, no `force: true` (6.4).
 - Rebase. Update from main by merge: `git merge origin/main` (D17).
 - Use `--no-verify` or `gh pr merge --admin`.
@@ -17,7 +20,7 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 
 ## Commands
 
-- Test: `node --test "scripts/**/*.test.mjs"` on Node 24+. `node --test scripts/` fails on Node 24.
+- Test: `node --test "scripts/**/*.test.mjs"` on Node 24+. `node --test scripts/` fails on Node 24 (overrides spec 3 and 8.2, which still say `node --test scripts/`; a docs PR corrects them).
 - Enqueue: `gh pr merge <n> --auto --squash`. The merge queue refuses `--auto` without `--squash`.
 - Commits and PR titles: Conventional Commits (7).
 
@@ -28,6 +31,7 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 - Reviewer: reviews PRs from another session with comment reviews. Never approves or requests changes.
 - All roles use the agent account; the session id separates them. Skills live in `.claude/skills/groundwork-*`.
 - Worker resolves each review thread after fixing or answering and logs it in `## Review log`.
+- Reviewer also enqueues Dependabot PRs with green checks (minor and patch only; majors need a Chore issue). `review-queue` lists them (10.2).
 
 ## Planning for width (6.2)
 
@@ -47,7 +51,9 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
   - Feature and Chore: `## Outcome`, `## Serves`, `## Scope`, `## Touches`, `## Acceptance criteria`, `## Verification plan`, `## Risk`, `## Context`.
   - Bug: Feature headings plus `## Reproduction` and `## Expected vs actual`.
   - Spike: `## Question`, `## Serves`, `## Timebox`, `## Output`.
-- Status is derived from facts, not labels (4.4). Definition of Ready and Done: 4.5.
+- Status is derived from facts, not labels (4.4).
+- Definition of Ready (checked before claim): accepted ancestor epic (or hotfix lane); required sections present, `needs-format` absent, parent present, depth within limits; every AC observable; no open blockers; `size:S` or `size:M`; trusted author.
+- Definition of Done: every AC mapped to evidence in the PR; `Check` green, tests added, failing test first for bugs; docs updated where behavior changed; no changes outside scope; every review finding fixed or answered; `## State` complete and handover comment posted (4.5).
 - Bugs start with a failing test. A `priority:p0` bug applied by the owner is the hotfix lane (4.6).
 - Spike output is `docs/decisions/<N>-<slug>.md`, title `docs(spike): ...`; after merge append a dated line to the epic's `## Decisions`.
 
@@ -77,7 +83,9 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 ## Leases and takeover (6.4)
 
 - A claim is a lease only while the PR is draft. Ready, queued and awaiting-owner PRs never expire.
-- Lease expires after 4 hours without an agent-account PR comment (claim, checkpoint, takeover each post one). A ref with no PR expires 15 minutes after the pointer comment, or the claim commit when there is none.
+- Lease expires after 4 hours without an agent-account PR comment (claim, checkpoint, takeover each post one), falling back to the PR `created_at`. PR `updated_at` and commit dates are not used.
+- A ref with no PR expires 15 minutes after the pointer comment, or when there is none, after the claim commit's committer date (GitHub stamps it, since `claim` creates it through the API).
+- Takeover candidates: draft PRs with an expired lease or the `<!-- groundwork:released -->` body marker, and no `needs-decision` label. Release adds the marker; takeover removes it.
 - Takeover is compare-and-swap: read head SHA, create `chore(claim): #N takeover [session <id>]` with that parent, then `PATCH /git/refs/heads/issue/N` with `force: false`. If the head moved, the update fails; move on. Winner posts a takeover comment.
 - A revived worker runs `resume` first and stops if the PR footer names another session.
 - Takeover continues from `resume` output; never restart the task.
@@ -93,7 +101,7 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 | Code | The branch, pushed at every checkpoint even if red |
 | Durable lessons | An `AGENTS.md` PR (protected path, owner approves) |
 
-- `## State` fields: Done, In progress, Next, Proven, Unproven, Rejected, Gotchas, Open. Header carries checkpoint number, time, model/harness, session.
+- `## State` fields: Done, In progress, Next, Proven, Unproven, Rejected, Gotchas, Open. Header carries checkpoint number, time, model/harness, session. Exact format in 6.5; no `<...>` placeholders left (`PR metadata` fails on them).
 - Checkpoint before: ending a session, raising `needs-decision`, marking ready, completing a takeover. `checkpoint` pushes, rewrites `## State` and posts the journal comment in one command.
 - `resume N` gives the bounded briefing (~300 lines).
 
