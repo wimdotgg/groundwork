@@ -4,9 +4,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    cooldown-days: 7
+    cooldown:
+      default-days: 7
     groups:
-      all:
+      minor-and-patch:
         update-types:
           - "minor"
           - "patch"

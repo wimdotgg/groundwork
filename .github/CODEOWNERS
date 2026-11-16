@@ -1,4 +1,4 @@
-// This file gates protected paths behind @wianvdm review
+# Gates protected paths behind owner review; admin-run executes scripts/groundwork/ with the admin token.
 /.github/                       @wianvdm
 /scripts/verify*                @wianvdm
 /scripts/ci/                    @wianvdm
