@@ -1,4 +1,4 @@
-import { criterionIds, parseSections, stripCommentsAndFences } from './markdown.mjs';
+import { criterionIds, parseSections } from './markdown.mjs';
 import { normalizeLabel } from './trust.mjs';
 
 /** @typedef {'Epic'|'Feature'|'Bug'|'Chore'|'Spike'} IssueType */
@@ -39,7 +39,7 @@ export const TITLE_TYPES = {
 };
 
 const COMMIT_TYPES = ['build', 'chore', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'revert', 'style', 'test'];
-const TITLE_PATTERN = new RegExp(`^(${COMMIT_TYPES.join('|')})(?:\\(([^()\\s][^()]*)\\))?(!)?:[ \\t]+(\\S.*)$`);
+const TITLE_PATTERN = new RegExp(`^(${COMMIT_TYPES.join('|')})(?:\\(([^()\\s]+)\\))?(!)?:[ \\t]+(\\S.*)$`);
 const NO_RESPONSE = '_No response_';
 const CRITERION_PREFIX = { Epic: 'E', Feature: 'AC', Bug: 'AC', Chore: 'AC' };
 const CRITERIA_HEADING = {
@@ -58,12 +58,14 @@ export function parseConventionalTitle(title) {
   return { type: match[1], scope: match[2] ?? null, breaking: match[3] === '!', summary: match[4].trim() };
 }
 
-// Web forms render answers as `### <label>`; treat them as level-2 when the body has no level-2 heading.
-function normalizeHeadingLevel(body) {
-  const text = stripCommentsAndFences(body);
-  const hasLevelTwo = text.split('\n').some((line) => /^##[ \t]+\S/.test(line));
-  if (hasLevelTwo) return body;
-  return text.replace(/^###[ \t]+/gm, '## ');
+// Web forms render answers as `### <label>`. A body with no `## <required heading>` is form output:
+// promote only the required `###` headings, so answer text keeps its own headings.
+function normalizeHeadingLevel(type, body) {
+  const required = REQUIRED_HEADINGS[type];
+  const text = String(body ?? '');
+  const hasLevelTwo = required.some((heading) => new RegExp(`^##[ \\t]+${heading}[ \\t]*$`, 'm').test(text));
+  if (hasLevelTwo) return text;
+  return text.replace(/^###([ \t]+)(.+?)[ \t]*$/gm, (line, space, name) => (required.includes(name) ? `##${space}${name}` : line));
 }
 
 function sectionContent(byName, name) {
@@ -95,7 +97,7 @@ function checkServes(type, byName) {
 export function validateIssueBody({ type, body }) {
   if (!type) return { ok: false, errors: ['Issue type is missing'] };
   if (!ISSUE_TYPES.includes(type)) return { ok: false, errors: [`Unknown issue type ${type}`] };
-  const { sections, byName, duplicates } = parseSections(normalizeHeadingLevel(String(body ?? '')));
+  const { sections, byName, duplicates } = parseSections(normalizeHeadingLevel(type, body));
   const present = new Set(sections.map((section) => section.name));
   const errors = [];
   for (const heading of REQUIRED_HEADINGS[type]) {
@@ -120,8 +122,10 @@ export function isHotfixLane(facts, _config) {
   return facts.type === 'Bug' && facts.ancestors.length === 0 && hasLabel(facts.validLabels, 'priority:p0');
 }
 
-function minutesSince(since, now) {
-  return (new Date(now).getTime() - new Date(since).getTime()) / MS_PER_MINUTE;
+// An unparseable timestamp gives NaN; treat it as expired so a bad value never holds a claim.
+function isExpired(since, now, limitMinutes) {
+  const minutes = (new Date(now).getTime() - new Date(since).getTime()) / MS_PER_MINUTE;
+  return !Number.isFinite(minutes) || minutes > limitMinutes;
 }
 
 /**
@@ -134,17 +138,18 @@ export function leaseState(pr, { config, now, claimCommentAt, claimCommitAt }) {
   if (!pr) {
     const claimedAt = claimCommentAt ?? claimCommitAt ?? null;
     if (claimedAt === null) return { expired: true, released: false, since: null };
-    return { expired: minutesSince(claimedAt, now) > config.limits.claimWithoutPrMinutes, released: false, since: claimedAt };
+    return { expired: isExpired(claimedAt, now, config.limits.claimWithoutPrMinutes), released: false, since: claimedAt };
   }
   if (!pr.draft) return { expired: false, released: pr.released, since: null };
   const since = pr.lastAgentCommentAt ?? pr.createdAt;
-  return { expired: minutesSince(since, now) > config.limits.draftLeaseMinutes, released: pr.released, since };
+  return { expired: isExpired(since, now, config.limits.draftLeaseMinutes), released: pr.released, since };
 }
 
 function claimStatus(facts, { config, now }) {
   const { pr } = facts;
-  if (pr && pr.state === 'closed' && !pr.merged) {
-    return { status: 'orphaned', reason: `PR #${pr.number} was closed unmerged; delete issue/${facts.number}` };
+  if (pr && pr.state !== 'open') {
+    const outcome = pr.merged ? 'merged' : 'closed unmerged';
+    return { status: 'orphaned', reason: `PR #${pr.number} was ${outcome}; delete issue/${facts.number}` };
   }
   if (pr) return { status: 'claimed', reason: `issue/${facts.number} has PR #${pr.number}` };
   const lease = leaseState(null, { config, now, claimCommentAt: facts.claimCommentAt, claimCommitAt: facts.claimCommitAt });
@@ -153,9 +158,13 @@ function claimStatus(facts, { config, now }) {
 }
 
 function acceptance(facts, config) {
-  if (facts.ancestors.some((ancestor) => hasLabel(ancestor.validLabels, 'accepted'))) {
-    return { accepted: true, reason: 'accepted ancestor' };
+  if (facts.type === 'Epic') {
+    return hasLabel(facts.validLabels, 'accepted')
+      ? { accepted: true, reason: 'accepted epic' }
+      : { accepted: false, reason: 'epic without accepted' };
   }
+  const acceptedEpic = facts.ancestors.some((ancestor) => ancestor.type === 'Epic' && hasLabel(ancestor.validLabels, 'accepted'));
+  if (acceptedEpic) return { accepted: true, reason: 'accepted ancestor' };
   if (isHotfixLane(facts, config)) return { accepted: true, reason: 'hotfix lane' };
   return { accepted: false, reason: 'no accepted ancestor' };
 }

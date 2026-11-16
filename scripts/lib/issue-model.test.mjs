@@ -230,6 +230,60 @@ test('deriveStatus: proposed covers epics and unaccepted ancestors', () => {
   assert.equal(status({ type: 'Epic', ancestors: [] }), 'proposed');
   const nested = [{ number: 2, type: 'Feature', validLabels: [] }, { number: 1, type: 'Epic', validLabels: ['accepted'] }];
   assert.equal(status({ ancestors: nested }), 'ready');
+  const nearestAccepted = [{ number: 2, type: 'Epic', validLabels: ['accepted'] }, { number: 1, type: 'Epic', validLabels: [] }];
+  assert.equal(status({ ancestors: nearestAccepted }), 'ready');
+});
+
+test('deriveStatus: an accepted epic is not proposed', () => {
+  const accepted = { type: 'Epic', ancestors: [], validLabels: ['accepted'] };
+  assert.equal(status(accepted), 'ready');
+  assert.equal(status({ ...accepted, blockedBy: [{ number: 2, state: 'open' }] }), 'blocked');
+  assert.equal(status({ ...accepted, validLabels: [], labels: ['accepted'] }), 'proposed');
+});
+
+test('deriveStatus: only an Epic ancestor can supply accepted', () => {
+  const ancestors = [{ number: 2, type: 'Feature', validLabels: ['accepted'] }, { number: 1, type: 'Epic', validLabels: [] }];
+  assert.equal(status({ ancestors }), 'proposed');
+});
+
+test('deriveStatus: expired draft lease stays claimed', () => {
+  const stale = pr({ createdAt: minutesAgo(999) });
+  assert.equal(status({ pr: stale, branch: { exists: true, sha: 'a' } }), 'claimed');
+});
+
+test('deriveStatus: merged or closed PR with the ref present is orphaned', () => {
+  const branch = { exists: true, sha: 'a' };
+  const merged = deriveStatus(facts({ pr: pr({ state: 'closed', merged: true }), branch }), { config, now: NOW });
+  assert.equal(merged.status, 'orphaned');
+  assert.match(merged.reason, /#7.*merged.*issue\/5/);
+  assert.equal(status({ pr: pr({ state: 'closed', draft: false }), branch }), 'orphaned');
+});
+
+test('leaseState: unparseable timestamps count as expired', () => {
+  const context = { config, now: NOW, claimCommentAt: null, claimCommitAt: null };
+  assert.equal(leaseState(pr({ createdAt: 'garbage' }), context).expired, true);
+  assert.equal(leaseState(pr(), { ...context, now: 'garbage' }).expired, true);
+  assert.equal(leaseState(null, { ...context, claimCommentAt: 'garbage' }).expired, true);
+});
+
+test('leaseState: a ready PR has since null', () => {
+  const context = { config, now: NOW, claimCommentAt: null, claimCommitAt: null };
+  assert.deepEqual(leaseState(pr({ draft: false }), context), { expired: false, released: false, since: null });
+});
+
+test('validateIssueBody: form answers keep their own headings', () => {
+  const withNotes = bodyFor('Feature', { level: '###', overrides: { Context: 'see below\n## Notes\nmore' } });
+  assert.equal(validateIssueBody({ type: 'Feature', body: withNotes }).ok, true);
+  const withBackend = bodyFor('Feature', {
+    level: '###',
+    overrides: { 'Acceptance criteria': '### Backend\n- [ ] AC1 a\n- [ ] AC2 b' },
+  });
+  assert.equal(validateIssueBody({ type: 'Feature', body: withBackend }).ok, true);
+});
+
+test('parseConventionalTitle accepts a scope with punctuation', () => {
+  assert.equal(parseConventionalTitle('feat(api/v2): x').scope, 'api/v2');
+  assert.equal(parseConventionalTitle('feat(a b): x'), null);
 });
 
 test('deriveStatus: closed blockers do not block', () => {
