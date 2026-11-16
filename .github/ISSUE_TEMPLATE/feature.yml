@@ -34,7 +34,8 @@ body:
     id: acceptance-criteria
     attributes:
       label: Acceptance criteria
-      description: "AC1 ... (observable), one per line."
+      description: "- [ ] AC1 ... (observable), one per line."
+      value: "- [ ] AC1 "
     validations:
       required: true
   - type: textarea
@@ -44,11 +45,15 @@ body:
       description: "Commands, tests, visual evidence expected."
     validations:
       required: true
-  - type: input
+  - type: dropdown
     id: risk
     attributes:
       label: Risk
-      description: "low | medium | high (rollback plan required if high)."
+      description: "Rollback plan required if high."
+      options:
+        - low
+        - medium
+        - high
     validations:
       required: true
   - type: textarea
