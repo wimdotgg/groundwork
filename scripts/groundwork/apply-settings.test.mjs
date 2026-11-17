@@ -379,13 +379,14 @@ test('the first failed call stops the run and the error names the step', async (
   assert.equal(outcome.logs.at(-1), 'step 2/9 teamAccess');
 });
 
-test('a missing release value throws before any write of the release step', async () => {
+test('a missing release value throws before any step runs', async () => {
   const settings = { schemaVersion: 1 };
   const root = await makeRoot({ settings });
   const withoutKey = await runOp({ root, reads: readRoutes(CONTROL), env: { RELEASE_APP_CLIENT_ID: CLIENT_ID_VALUE } });
   assert.ok(withoutKey.error instanceof SettingsError);
-  assert.match(withoutKey.error.message, /^step 7\/9 release environment: RELEASE_APP_KEY is not set/);
+  assert.match(withoutKey.error.message, /^RELEASE_APP_KEY is not set/);
   assert.equal(withoutKey.events.length, 0);
+  assert.equal(withoutKey.logs.length, 0);
 
   const withoutClientId = await runOp({ root, reads: readRoutes(CONTROL), env: { RELEASE_APP_KEY: KEY_VALUE } });
   assert.match(withoutClientId.error.message, /RELEASE_APP_CLIENT_ID is not set/);
@@ -394,7 +395,7 @@ test('a missing release value throws before any write of the release step', asyn
 
 test('gh gets argument arrays, the value on stdin and the installation token only', async () => {
   const root = await makeRoot();
-  const env = { ...RELEASE_ENV, GH_TOKEN: 'ambient-token' };
+  const env = { ...RELEASE_ENV, GH_TOKEN: 'ambient-token', ADMIN_APP_KEY: 'admin-key', GITHUB_TOKEN: 'other-token' };
   const outcome = succeeded(await runOp({ root, repo: PROJECT, reads: readRoutes(PROJECT), env }));
   const invocations = outcome.events.filter((event) => event.gh).map((event) => event.gh);
   assert.deepEqual(invocations.map((invocation) => invocation.args), [
@@ -407,6 +408,10 @@ test('gh gets argument arrays, the value on stdin and the installation token onl
     assert.equal(invocation.env.PATH, '/bin');
     assert.equal(Object.hasOwn(invocation.env, 'RELEASE_APP_KEY'), false);
     assert.equal(Object.hasOwn(invocation.env, 'RELEASE_APP_CLIENT_ID'), false);
+    assert.equal(Object.hasOwn(invocation.env, 'ADMIN_APP_KEY'), false);
+    assert.equal(Object.hasOwn(invocation.env, 'GITHUB_TOKEN'), false);
+    assert.equal(invocation.env.GH_PROMPT_DISABLED, '1');
+    assert.deepEqual(Object.keys(invocation.env).sort(), ['GH_PROMPT_DISABLED', 'GH_TOKEN', 'PATH']);
   }
 });
 
@@ -457,4 +462,57 @@ test('a missing target repository is rejected before any call', async () => {
   const outcome = await runOp({ root, repo: null, reads: {} });
   assert.ok(outcome.error instanceof SettingsError);
   assert.equal(outcome.events.length, 0);
+});
+
+test('security: a false switch sends DELETE and a true switch sends PUT', async () => {
+  const settings = { schemaVersion: 1, security: { vulnerability_alerts: false, private_vulnerability_reporting: true } };
+  const root = await makeRoot({ settings });
+  const base = repoPath(CONTROL);
+  const expected = [`PUT ${base}/private-vulnerability-reporting`, `DELETE ${base}/vulnerability-alerts`];
+  const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL), writes: okWrites(expected) }));
+  assert.deepEqual(writeLines(outcome.events), expected);
+});
+
+test('rulesets: undeclared repository rulesets are deleted, organization rulesets and a second run are left alone', async () => {
+  const root = await makeRoot({ rulesets: [mainRuleset([{ type: 'deletion' }])] });
+  const base = repoPath(CONTROL);
+  const mainSummary = { id: 5, name: 'main', target: 'branch', source_type: 'Repository' };
+  const stale = { id: 9, name: 'stale', target: 'branch', source_type: 'Repository' };
+  const organization = { id: 12, name: 'org-wide', target: 'branch', source_type: 'Organization' };
+
+  const first = succeeded(await runOp({
+    root, reads: readRoutes(CONTROL, { liveRulesets: [mainSummary, stale, organization] }),
+    writes: okWrites([`PUT ${base}/rulesets/5`, `DELETE ${base}/rulesets/9`]),
+  }));
+  assert.deepEqual(writeLines(first.events), [`PUT ${base}/rulesets/5`, `DELETE ${base}/rulesets/9`]);
+  assert.match(first.result.summary, /rulesets: 1 updated, 1 deleted/);
+
+  const second = succeeded(await runOp({
+    root, reads: readRoutes(CONTROL, { liveRulesets: [mainSummary, organization] }), writes: okWrites([`PUT ${base}/rulesets/5`]),
+  }));
+  assert.deepEqual(writeLines(second.events), [`PUT ${base}/rulesets/5`]);
+});
+
+test('rulesets: an unreadable pass-2 signal with code_scanning desired throws before any ruleset write', async () => {
+  const root = await makeRoot({ rulesets: [mainRuleset([{ type: 'deletion' }, CODE_SCANNING_RULE]), tagRuleset] });
+  const base = repoPath(CONTROL);
+  const reads = {
+    ...readRoutes(CONTROL),
+    [`GET ${base}/rulesets?includes_parents=false&per_page=100`]: { status: 403, data: { message: 'Forbidden' } },
+  };
+  const outcome = await runOp({ root, reads });
+  assert.ok(outcome.error instanceof SettingsError);
+  assert.match(outcome.error.message, /^step 9\/9 rulesets: code_scanning signals are unreadable/);
+  assert.deepEqual(writeLines(outcome.events), []);
+});
+
+test('rulesets: after pass 2 a desired main without code_scanning throws before any ruleset write', async () => {
+  const root = await makeRoot({ rulesets: [mainRuleset([{ type: 'deletion' }]), tagRuleset] });
+  const reads = readRoutes(CONTROL, {
+    setupState: 'not_configured', liveRulesets: [{ id: 5, name: 'main', target: 'branch', source_type: 'Repository' }], mainRules: [CODE_SCANNING_RULE],
+  });
+  const outcome = await runOp({ root, reads });
+  assert.ok(outcome.error instanceof SettingsError);
+  assert.match(outcome.error.message, /^step 9\/9 rulesets: pass 2 has run but the desired main ruleset has no code_scanning rule/);
+  assert.deepEqual(writeLines(outcome.events), []);
 });

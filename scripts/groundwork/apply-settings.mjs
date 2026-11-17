@@ -47,6 +47,8 @@ const RELEASE_WRITES = [
   { command: 'variable', name: 'RELEASE_APP_CLIENT_ID' },
 ];
 const DEPLOYMENT_BRANCH_POLICY = { protected_branches: false, custom_branch_policies: true };
+const REPOSITORY_RULESET_SOURCE = 'Repository';
+const GH_ENVIRONMENT_ALLOWLIST = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR'];
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 const firstLine = (text) => String(text ?? '').trim().split(/\r?\n/)[0] || 'no output';
@@ -143,8 +145,11 @@ async function applyActions(context) {
 /** Mirrors the assertWhen rules of settings.mjs; an unreadable signal never holds. */
 function assertionHolds(assertWhen, { signals, config }) {
   if (assertWhen === 'kitInstalled') return signals.kitInstalled === true;
-  if (config.deploy === 'none') return false;
-  return signals.codeScanningConfigured === true || signals.pass2Ran === true;
+  if (assertWhen === 'deployReady') {
+    if (config.deploy === 'none') return false;
+    return signals.codeScanningConfigured === true || signals.pass2Ran === true;
+  }
+  throw new SettingsError(`settings.json: unknown assertWhen "${assertWhen}"`);
 }
 
 async function applyVariables(context) {
@@ -221,16 +226,22 @@ async function applyEnvironments(context) {
   return describeCounts(counts);
 }
 
-/** The child gets the caller's environment minus the release values, so only stdin carries them. */
+/** The child gets an allowlisted environment, so admin keys and the release values never reach it; only stdin carries the latter. */
 function ghEnvironment({ env, token }) {
-  const childEnv = { ...env, GH_TOKEN: token };
-  for (const { name } of RELEASE_WRITES) delete childEnv[name];
+  const childEnv = { GH_PROMPT_DISABLED: '1', GH_TOKEN: token };
+  for (const name of GH_ENVIRONMENT_ALLOWLIST) {
+    if (env[name] !== undefined) childEnv[name] = env[name];
+  }
   return childEnv;
 }
 
-async function applyReleaseEnvironment(context) {
-  const missing = RELEASE_WRITES.find(({ name }) => !context.env[name]);
+function requireReleaseValues(env) {
+  const missing = RELEASE_WRITES.find(({ name }) => !env[name]);
   if (missing) throw new SettingsError(`${missing.name} is not set in the environment`);
+}
+
+async function applyReleaseEnvironment(context) {
+  requireReleaseValues(context.env);
   const target = `${context.org}/${context.repoRef.repo}`;
   for (const { command, name } of RELEASE_WRITES) {
     const args = [command, 'set', name, '--env', RELEASE_ENVIRONMENT, '--repo', target];
@@ -273,14 +284,28 @@ function withoutDeferredRules(ruleset, signals) {
   return { ...ruleset, rules: ruleset.rules.filter((rule) => rule.type !== CODE_SCANNING_RULE) };
 }
 
+const hasCodeScanning = (ruleset) => ruleset?.rules.some((rule) => rule.type === CODE_SCANNING_RULE) === true;
+
+/** Fails closed on the pass-2 gate before any ruleset write, so a stale ref or the template never moves code_scanning. */
+function assertPass2Gate(desiredRulesets, signals) {
+  const desiredMain = desiredRulesets.find((ruleset) => ruleset.name === MAIN_RULESET);
+  if (hasCodeScanning(desiredMain) && (signals.pass2Ran === null || signals.codeScanningConfigured === null)) {
+    throw new SettingsError('code_scanning signals are unreadable; not sending the main ruleset');
+  }
+  if (signals.pass2Ran === true && !hasCodeScanning(desiredMain)) {
+    throw new SettingsError('pass 2 has run but the desired main ruleset has no code_scanning rule; refusing to remove it');
+  }
+}
+
 async function applyRulesets(context) {
+  assertPass2Gate(context.desired.rulesets, context.signals);
   const bodies = [];
   for (const ruleset of context.desired.rulesets) {
     const resolved = await resolvePlaceholders(ruleset, context);
     bodies.push(withoutDeferredRules(resolved, context.signals));
   }
   const live = await repoList(context, { suffix: '/rulesets', query: { includes_parents: false } });
-  const counts = { created: 0, updated: 0 };
+  const counts = { created: 0, updated: 0, deleted: 0 };
   for (const body of bodies) {
     const existing = live.find((candidate) => candidate.name === body.name);
     if (existing) {
@@ -290,6 +315,12 @@ async function applyRulesets(context) {
       await repoRequest(context, { method: 'POST', suffix: '/rulesets', body });
       counts.created += 1;
     }
+  }
+  const desiredNames = new Set(bodies.map((body) => body.name));
+  const undeclared = live.filter((candidate) => candidate.source_type === REPOSITORY_RULESET_SOURCE && !desiredNames.has(candidate.name));
+  for (const entry of undeclared) {
+    await repoRequest(context, { method: 'DELETE', suffix: '/rulesets/{id}', params: { id: entry.id } });
+    counts.deleted += 1;
   }
   return describeCounts(counts);
 }
@@ -330,6 +361,7 @@ async function runStep(log, label, action) {
  */
 export async function run(ctx, dependencies = DEFAULT_DEPENDENCIES) {
   if (typeof ctx.repo !== 'string' || ctx.repo === '') throw new SettingsError(`${OP} needs a target repository`);
+  requireReleaseValues(ctx.env);
   const repoRef = { owner: ctx.org, repo: ctx.repo };
   const kind = repoKind(ctx.repo, ctx.config);
   const desired = await loadDesiredState({ root: ctx.settingsRoot });
