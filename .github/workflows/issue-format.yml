@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 
-# Out-of-order runs must not strip needs-format, so runs queue instead of cancelling.
+# Out-of-order runs must not strip needs-format: the newest event runs last and an in-progress run is never cancelled.
 concurrency:
   group: issue-format-${{ github.event.issue.number }}
   cancel-in-progress: false
