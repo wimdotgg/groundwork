@@ -1,0 +1,236 @@
+[
+  {
+    "description": "untouched PR -> skip without live reads",
+    "eventName": "pull_request",
+    "payload": { "pull_request": { "number": 7, "changed_files": 1, "base": { "sha": "basesha" } } },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [{ "filename": "src/a.js", "status": "modified", "additions": 1, "deletions": 0 }]
+      }
+    },
+    "expected": { "conclusion": "skip", "errorsInclude": [], "actions": [] }
+  },
+  {
+    "description": "merge_group -> skip without any call",
+    "eventName": "merge_group",
+    "payload": {},
+    "env": {},
+    "expected": { "conclusion": "skip", "errorsInclude": [], "actions": [] }
+  },
+  {
+    "description": "untouched facts -> skip",
+    "facts": {
+      "eventName": "pull_request",
+      "touched": false,
+      "repoKind": "control",
+      "desired": null,
+      "loadError": null,
+      "live": {},
+      "signals": null,
+      "baseSettings": null
+    },
+    "expected": { "conclusion": "skip", "errorsInclude": [], "actions": [] }
+  },
+  {
+    "description": "touched PR with valid files -> pass with differ and match rows",
+    "facts": {
+      "eventName": "pull_request",
+      "touched": true,
+      "repoKind": "project",
+      "desired": {
+        "settings": { "schemaVersion": 1, "repository": { "has_issues": true, "has_wiki": false } },
+        "labels": [],
+        "rulesets": []
+      },
+      "loadError": null,
+      "live": {
+        "repository": { "readable": true, "value": { "has_issues": true, "has_wiki": true } },
+        "labels": { "readable": true, "value": [] },
+        "rulesets": { "readable": true, "value": [] }
+      },
+      "signals": { "kitInstalled": true, "codeScanningConfigured": false, "pass2Ran": false },
+      "baseSettings": { "schemaVersion": 1 }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [],
+      "detailsInclude": ["| repository | has_issues | true | true | match |", "| repository | has_wiki | false | true | differ |"]
+    }
+  },
+  {
+    "description": "actions section is a file diff against the base",
+    "facts": {
+      "eventName": "pull_request",
+      "touched": true,
+      "repoKind": "project",
+      "desired": {
+        "settings": { "schemaVersion": 1, "actions": { "workflow": { "default_workflow_permissions": "read" } } },
+        "labels": [],
+        "rulesets": []
+      },
+      "loadError": null,
+      "live": { "actions": { "readable": false, "status": 403 } },
+      "signals": { "kitInstalled": true, "codeScanningConfigured": false, "pass2Ran": false },
+      "baseSettings": { "schemaVersion": 1, "actions": { "workflow": { "default_workflow_permissions": "write" } } }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [],
+      "detailsInclude": ["| actions | workflow.default_workflow_permissions | \"read\" |  | unreadable |", "`actions.workflow.default_workflow_permissions`: \"write\" -> \"read\""]
+    }
+  },
+  {
+    "description": "ruleset bypass row with a placeholder is marked plan-only",
+    "facts": {
+      "eventName": "pull_request",
+      "touched": true,
+      "repoKind": "project",
+      "desired": {
+        "settings": { "schemaVersion": 1 },
+        "labels": [],
+        "rulesets": [
+          {
+            "name": "main",
+            "target": "branch",
+            "enforcement": "active",
+            "conditions": {},
+            "bypass_actors": [{ "actor_type": "Integration", "actor_id": "{{app-id:release}}", "bypass_mode": "always" }],
+            "rules": []
+          }
+        ]
+      },
+      "loadError": null,
+      "live": {
+        "labels": { "readable": true, "value": [] },
+        "rulesets": {
+          "readable": true,
+          "value": [
+            {
+              "name": "main",
+              "target": "branch",
+              "enforcement": "active",
+              "conditions": {},
+              "bypass_actors": [{ "actor_type": "Integration", "actor_id": 4242, "bypass_mode": "always" }],
+              "rules": []
+            }
+          ]
+        }
+      },
+      "signals": { "kitInstalled": true, "codeScanningConfigured": false, "pass2Ran": false },
+      "baseSettings": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [],
+      "detailsInclude": ["differ (plan-only: App ID placeholder unresolved)", "No base settings.json to compare"]
+    }
+  },
+  {
+    "description": "load error facts -> fail with the message",
+    "facts": {
+      "eventName": "pull_request",
+      "touched": true,
+      "repoKind": "control",
+      "desired": null,
+      "loadError": "settings.json: unknown top-level key \"bogus\"",
+      "live": {},
+      "signals": null,
+      "baseSettings": null
+    },
+    "expected": { "conclusion": "fail", "errorsInclude": ["unknown top-level key \"bogus\""], "actions": [] }
+  },
+  {
+    "description": "invalid settings file in the PR head -> fail with the SettingsError message",
+    "eventName": "pull_request",
+    "payload": { "pull_request": { "number": 7, "changed_files": 1, "base": { "sha": "basesha" } } },
+    "env": { "PR_ROOT": "$TEMP_ROOT" },
+    "prFiles": {
+      "settings.json": { "schemaVersion": 1, "bogus": true },
+      "labels.json": { "labels": [] }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [{ "filename": ".github/groundwork/settings.json", "status": "modified", "additions": 1, "deletions": 0 }]
+      }
+    },
+    "expected": { "conclusion": "fail", "errorsInclude": ["settings.json: unknown top-level key \"bogus\""], "actions": [] }
+  },
+  {
+    "description": "settings file touched but PR_ROOT missing -> throws",
+    "eventName": "pull_request",
+    "payload": { "pull_request": { "number": 7, "changed_files": 1, "base": { "sha": "basesha" } } },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [{ "filename": ".github/groundwork/labels.json", "status": "modified", "additions": 1, "deletions": 0 }]
+      }
+    },
+    "expected": { "throws": "PR_ROOT is not set" }
+  },
+  {
+    "description": "end to end: files, live sections, signals and base settings -> pass with plan",
+    "eventName": "pull_request",
+    "payload": { "pull_request": { "number": 7, "changed_files": 2, "base": { "sha": "basesha" } } },
+    "env": { "PR_ROOT": "$TEMP_ROOT" },
+    "prFiles": {
+      "settings.json": {
+        "schemaVersion": 1,
+        "repository": { "has_issues": true, "has_wiki": false },
+        "security": { "private_vulnerability_reporting": true },
+        "actions": { "workflow": { "default_workflow_permissions": "read" } }
+      },
+      "labels.json": { "labels": [{ "name": "bug", "color": "d73a4a", "description": "Something broke" }] },
+      "rulesets/main.json": {
+        "name": "main",
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {},
+        "bypass_actors": [{ "actor_type": "Integration", "actor_id": "{{app-id:release}}", "bypass_mode": "always" }],
+        "rules": []
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          { "filename": ".github/groundwork/settings.json", "status": "modified", "additions": 1, "deletions": 1 },
+          { "filename": "README.md", "status": "modified", "additions": 1, "deletions": 0 }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork": { "status": 200, "data": { "has_issues": true, "has_wiki": true } },
+      "GET /repos/wimdotgg/groundwork/teams?per_page=100": { "status": 200, "data": [] },
+      "GET /repos/wimdotgg/groundwork/private-vulnerability-reporting": { "status": 200, "data": { "enabled": true } },
+      "GET /repos/wimdotgg/groundwork/vulnerability-alerts": { "status": 204 },
+      "GET /repos/wimdotgg/groundwork/automated-security-fixes": { "status": 200, "data": { "enabled": true, "paused": false } },
+      "GET /repos/wimdotgg/groundwork/code-scanning/default-setup": { "status": 200, "data": { "state": "not-configured" } },
+      "GET /repos/wimdotgg/groundwork/actions/permissions": { "status": 403, "data": { "message": "Resource not accessible by integration" } },
+      "GET /repos/wimdotgg/groundwork/actions/variables?per_page=100": { "status": 200, "data": { "variables": [] } },
+      "GET /repos/wimdotgg/groundwork/environments?per_page=100": { "status": 200, "data": { "environments": [] } },
+      "GET /repos/wimdotgg/groundwork/labels?per_page=100": { "status": 200, "data": [{ "name": "bug", "color": "d73a4a", "description": "Something broke" }] },
+      "GET /repos/wimdotgg/groundwork/rulesets?includes_parents=false&per_page=100": { "status": 200, "data": [] },
+      "GET /repos/wimdotgg/groundwork/contents/.github/groundwork/settings.json?ref=basesha": {
+        "status": 200,
+        "data": { "content": "eyJzY2hlbWFWZXJzaW9uIjoxLCJhY3Rpb25zIjp7IndvcmtmbG93Ijp7ImRlZmF1bHRfd29ya2Zsb3dfcGVybWlzc2lvbnMiOiJ3cml0ZSJ9fX0=", "encoding": "base64" }
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [],
+      "detailsInclude": [
+        "| repository | has_issues | true | true | match |",
+        "| repository | has_wiki | false | true | differ |",
+        "| labels | bug |",
+        "| rulesets | main |",
+        "`actions.workflow.default_workflow_permissions`: \"write\" -> \"read\""
+      ]
+    }
+  }
+]
