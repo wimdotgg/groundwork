@@ -100,6 +100,5 @@ jobs:
           node-version: 24
       - name: Evaluate results
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: node scripts/ci/check-results.mjs
