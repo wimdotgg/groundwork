@@ -1,0 +1,815 @@
+[
+  {
+    "description": "failure, no open alert -> create-issue",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "failure",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: release-please",
+          "body": "Workflow `release-please` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "failure, open alert -> comment on it",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "failure",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "comment",
+          "number": 7,
+          "body": "Workflow `release-please` ended with `failure` again: https://github.com/wimdotgg/groundwork/actions/runs/101"
+        }
+      ]
+    }
+  },
+  {
+    "description": "timed_out, no open alert -> create-issue",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "timed_out",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: release-please",
+          "body": "Workflow `release-please` ended with `timed_out`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "timed_out, open alert -> comment on it",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "timed_out",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "comment",
+          "number": 7,
+          "body": "Workflow `release-please` ended with `timed_out` again: https://github.com/wimdotgg/groundwork/actions/runs/101"
+        }
+      ]
+    }
+  },
+  {
+    "description": "startup_failure, no open alert -> create-issue",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "startup_failure",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: release-please",
+          "body": "Workflow `release-please` ended with `startup_failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "startup_failure, open alert -> comment on it",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "startup_failure",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "comment",
+          "number": 7,
+          "body": "Workflow `release-please` ended with `startup_failure` again: https://github.com/wimdotgg/groundwork/actions/runs/101"
+        }
+      ]
+    }
+  },
+  {
+    "description": "success, open alert -> close-issue with comment",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "success",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "close-issue",
+          "number": 7,
+          "comment": "Workflow `release-please` succeeded: https://github.com/wimdotgg/groundwork/actions/runs/101. Closing."
+        }
+      ]
+    }
+  },
+  {
+    "description": "success, no open alert -> nothing",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "success",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "cancelled never alerts, even with an open alert",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "cancelled",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "cancelled never alerts, no open alert",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "cancelled",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "skipped never alerts, even with an open alert",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "skipped",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "skipped never alerts, no open alert",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "skipped",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "neutral never alerts, even with an open alert",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "neutral",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "neutral never alerts, no open alert",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "neutral",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "action_required never alerts, even with an open alert",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "action_required",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "action_required never alerts, no open alert",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "action_required",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "backticks and newlines in the workflow name are neutralised",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "a`b\n@owner",
+      "conclusion": "failure",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: ab @owner",
+          "body": "Workflow `ab @owner` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "other event -> skip",
+    "facts": {
+      "eventName": "push",
+      "workflowPath": "",
+      "workflowName": "",
+      "conclusion": "",
+      "runUrl": "",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "end to end: failure with no alert -> create",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: release-please",
+          "body": "Workflow `release-please` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: failure with open alert -> comment",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 7,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n",
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "comment",
+          "number": 7,
+          "body": "Workflow `release-please` ended with `failure` again: https://github.com/wimdotgg/groundwork/actions/runs/101"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: success with open alert -> close",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "success",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 7,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n",
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "close-issue",
+          "number": 7,
+          "comment": "Workflow `release-please` succeeded: https://github.com/wimdotgg/groundwork/actions/runs/101. Closing."
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: alert for another workflow path is ignored",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 9,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/deploy.yml -->\n",
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: release-please",
+          "body": "Workflow `release-please` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: pull requests carrying the marker are ignored",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 9,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n",
+            "pull_request": {},
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: release-please",
+          "body": "Workflow `release-please` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: cancelled with open alert -> no actions",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "cancelled",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 7,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n",
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "end to end: alert on a later page is found",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "success",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "headers": {
+          "link": "<https://api.github.com/repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&page=2&per_page=100&state=open>; rel=\"next\""
+        },
+        "data": [
+          {
+            "number": 3,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/deploy.yml -->\n",
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open&page=2": {
+        "status": 200,
+        "data": [
+          {
+            "number": 7,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n",
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "close-issue",
+          "number": 7,
+          "comment": "Workflow `release-please` succeeded: https://github.com/wimdotgg/groundwork/actions/runs/101. Closing."
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: push event -> skip without API calls",
+    "eventName": "push",
+    "payload": {},
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "workflow_run payload without path throws",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "name": "release-please",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {},
+    "expected": {
+      "throws": "workflow_run.path"
+    }
+  },
+  {
+    "description": "workflow_run payload without name throws",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {},
+    "expected": {
+      "throws": "workflow_run.name"
+    }
+  },
+  {
+    "description": "workflow_run payload without conclusion throws",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {},
+    "expected": {
+      "throws": "workflow_run.conclusion"
+    }
+  },
+  {
+    "description": "workflow_run payload without html_url throws",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "failure"
+      }
+    },
+    "routes": {},
+    "expected": {
+      "throws": "workflow_run.html_url"
+    }
+  },
+  {
+    "description": "end to end: two open alerts for one path -> comment on the lowest number",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 12,
+            "user": {
+              "login": "github-actions[bot]"
+            },
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+          },
+          {
+            "number": 7,
+            "user": {
+              "login": "github-actions[bot]"
+            },
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "comment",
+          "number": 7,
+          "body": "Workflow `release-please` ended with `failure` again: https://github.com/wimdotgg/groundwork/actions/runs/101"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: marker on an issue by another author is ignored",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 9,
+            "user": {
+              "login": "someone"
+            },
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+          },
+          {
+            "number": 10,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: release-please",
+          "body": "Workflow `release-please` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: workflow_run action requested -> skip without API calls",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "requested",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "failure",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {},
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "workflow name that cleans to nothing falls back to the workflow path",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "``  \n",
+      "conclusion": "failure",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: .github/workflows/release-please.yml",
+          "body": "Workflow `.github/workflows/release-please.yml` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "workflow name with edge whitespace is trimmed in code span and title",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "  release-please \n",
+      "conclusion": "failure",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "openAlert": null
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "create-issue",
+          "title": "Workflow failure: release-please",
+          "body": "Workflow `release-please` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  }
+]
