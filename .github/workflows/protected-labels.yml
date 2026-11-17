@@ -1,0 +1,33 @@
+name: protected-labels
+
+on:
+  issues:
+    types: [labeled]
+  # No PR code is checked out or executed; the script reads only the event payload and calls the API.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  protected-labels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      # Explicit default-branch ref: on pull_request_target the head is never checked out.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Remove protected labels
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/protected-labels.mjs
