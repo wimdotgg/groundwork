@@ -1,0 +1,86 @@
+name: admin-run
+
+# Tier 2 admin operations (spec 12.1). Dispatched on main only: the `admin`
+# environment admits no other ref, so a modified copy of this file on another
+# branch never reaches a secret.
+on:
+  workflow_dispatch:
+    inputs:
+      op:
+        description: Operation to run
+        type: choice
+        required: true
+        options:
+          - apply-settings
+          - check
+          - create-issue-types
+      target_repo:
+        description: Repository name without owner; empty for create-issue-types
+        type: string
+        required: false
+        default: ''
+      ref:
+        description: 40-character commit SHA in target_repo (apply-settings only)
+        type: string
+        required: false
+        default: ''
+      args:
+        description: JSON object of op arguments
+        type: string
+        required: false
+        default: '{}'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: admin-${{ inputs.target_repo || 'org' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Validate and plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_OP: ${{ inputs.op }}
+          INPUT_TARGET_REPO: ${{ inputs.target_repo }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_ARGS: ${{ inputs.args }}
+        run: node scripts/groundwork/admin-run.mjs plan
+
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: admin
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Apply
+        env:
+          ADMIN_APP_CLIENT_ID: ${{ vars.ADMIN_APP_CLIENT_ID }}
+          ADMIN_APP_KEY: ${{ secrets.ADMIN_APP_KEY }}
+          RELEASE_APP_CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
+          INPUT_OP: ${{ inputs.op }}
+          INPUT_TARGET_REPO: ${{ inputs.target_repo }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_ARGS: ${{ inputs.args }}
+        run: node scripts/groundwork/admin-run.mjs apply
