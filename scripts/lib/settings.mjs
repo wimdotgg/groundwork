@@ -499,3 +499,186 @@ export function compareStates(desired, live, context) {
     ...compareRulesets(desired.rulesets, live, context.signals),
   ];
 }
+
+const REPO_PATH = '/repos/{owner}/{repo}';
+const UNREADABLE_STATUSES = [403, 404];
+const KIT_VERSION_PATH = '/repos/{owner}/{repo}/contents/.github/groundwork/kit-version.txt';
+const TEAM_REVIEWER_PREFIX = 'team:';
+const REQUIRED_REVIEWERS_RULE = 'required_reviewers';
+
+const get = (client, template, repo, params = {}) => client.request('GET', apiPath(template, { ...repo, ...params }));
+const list = (client, template, repo, options, params = {}) => client.paginate(apiPath(template, { ...repo, ...params }), options);
+
+async function readRepository(client, repo) {
+  return (await get(client, REPO_PATH, repo)).data;
+}
+
+async function readTeamAccess(client, repo) {
+  const teams = await list(client, `${REPO_PATH}/teams`, repo);
+  return teams.map((team) => ({ team: team.slug, permission: team.permission }));
+}
+
+async function readVulnerabilityAlerts(client, repo) {
+  const response = await client.request('GET', apiPath(`${REPO_PATH}/vulnerability-alerts`, repo), { okStatuses: [404] });
+  return response.status !== 404;
+}
+
+async function readSecurity(client, repo) {
+  const reporting = await get(client, `${REPO_PATH}/private-vulnerability-reporting`, repo);
+  const alerts = await readVulnerabilityAlerts(client, repo);
+  const fixes = await client.request('GET', apiPath(`${REPO_PATH}/automated-security-fixes`, repo), { okStatuses: [404] });
+  const setup = await client.request('GET', apiPath(`${REPO_PATH}/code-scanning/default-setup`, repo), { okStatuses: UNREADABLE_STATUSES });
+  const setupReadable = !UNREADABLE_STATUSES.includes(setup.status);
+  return {
+    private_vulnerability_reporting: reporting.data?.enabled === true,
+    vulnerability_alerts: alerts,
+    automated_security_fixes: fixes.status !== 404 && fixes.data?.enabled === true && fixes.data?.paused !== true,
+    code_scanning_default_setup: setupReadable ? { state: setup.data?.state } : {},
+  };
+}
+
+async function readActions(client, repo) {
+  const permissions = await get(client, `${REPO_PATH}/actions/permissions`, repo);
+  const workflow = await get(client, `${REPO_PATH}/actions/permissions/workflow`, repo);
+  const approval = await get(client, `${REPO_PATH}/actions/permissions/fork-pr-contributor-approval`, repo);
+  return { permissions: permissions.data, workflow: workflow.data, fork_pr_contributor_approval: approval.data };
+}
+
+async function readVariables(client, repo) {
+  const variables = await list(client, `${REPO_PATH}/actions/variables`, repo, { itemsKey: 'variables' });
+  return variables.map((variable) => ({ name: variable.name, value: variable.value }));
+}
+
+function reviewerName({ type, reviewer }) {
+  return type === 'User' ? reviewer?.login : `${TEAM_REVIEWER_PREFIX}${reviewer?.slug}`;
+}
+
+async function readDeploymentRefs(client, repo, environment) {
+  if (environment.deployment_branch_policy?.custom_branch_policies !== true) return [];
+  const path = `${REPO_PATH}/environments/{name}/deployment-branch-policies`;
+  const refs = await list(client, path, repo, { itemsKey: 'branch_policies' }, { name: environment.name });
+  return refs.map((ref) => ({ name: ref.name, type: ref.type }));
+}
+
+async function readEnvironment(client, repo, environment) {
+  const params = { name: environment.name };
+  const environmentPath = `${REPO_PATH}/environments/{name}`;
+  const rule = (environment.protection_rules ?? []).find((candidate) => candidate.type === REQUIRED_REVIEWERS_RULE);
+  const refs = await readDeploymentRefs(client, repo, environment);
+  const secrets = await list(client, `${environmentPath}/secrets`, repo, { itemsKey: 'secrets' }, params);
+  const variables = await list(client, `${environmentPath}/variables`, repo, { itemsKey: 'variables' }, params);
+  return {
+    name: environment.name,
+    can_admins_bypass: environment.can_admins_bypass,
+    prevent_self_review: rule?.prevent_self_review === true,
+    reviewers: (rule?.reviewers ?? []).map(reviewerName),
+    deployment_refs: refs,
+    secrets: secrets.map((secret) => secret.name),
+    variables: variables.map((variable) => variable.name),
+  };
+}
+
+/** With `environmentNames`, only those environments are read in full; the rest are listed by name only. */
+async function readEnvironments(client, repo, { environmentNames } = {}) {
+  const environments = await list(client, `${REPO_PATH}/environments`, repo, { itemsKey: 'environments' });
+  const detailed = environmentNames === undefined ? null : new Set(environmentNames);
+  const result = [];
+  for (const environment of environments) {
+    const wanted = detailed === null || detailed.has(environment.name);
+    result.push(wanted ? await readEnvironment(client, repo, environment) : { name: environment.name });
+  }
+  return result;
+}
+
+async function readLabels(client, repo) {
+  const labels = await list(client, `${REPO_PATH}/labels`, repo);
+  return labels.map((label) => ({ name: label.name, color: label.color, description: label.description ?? null }));
+}
+
+const listRulesetSummaries = (client, repo) => list(client, `${REPO_PATH}/rulesets`, repo, { query: { includes_parents: false } });
+const getRuleset = async (client, repo, id) => (await get(client, `${REPO_PATH}/rulesets/{id}`, repo, { id })).data;
+
+async function readRulesets(client, repo) {
+  const summaries = await listRulesetSummaries(client, repo);
+  const rulesets = [];
+  for (const summary of summaries) rulesets.push(await getRuleset(client, repo, summary.id));
+  return rulesets;
+}
+
+const SECTION_READERS = {
+  repository: readRepository,
+  teamAccess: readTeamAccess,
+  security: readSecurity,
+  actions: readActions,
+  variables: readVariables,
+  environments: readEnvironments,
+  labels: readLabels,
+  rulesets: readRulesets,
+};
+
+/** @returns {Promise<LiveSection>} */
+async function readSection(reader, client, repo, options) {
+  try {
+    return { readable: true, value: await reader(client, repo, options) };
+  } catch (error) {
+    if (error instanceof GitHubError && UNREADABLE_STATUSES.includes(error.status)) return { readable: false, status: error.status };
+    throw error;
+  }
+}
+
+/**
+ * Reads the named live sections (default: all) into the shapes in the typedef block at the top of this file.
+ * 403 and 404 on any request of a section make that section unreadable; other errors throw.
+ * @param {import('./github.mjs').GitHubClient} client
+ * @param {import('./github.mjs').RepoRef} repo
+ * @param {{ sections?: string[], environmentNames?: string[] }} [options] `environmentNames` limits the per-environment
+ *   sub-requests (branch policies, secrets, variables) to those environments; others come back as `{ name }` only.
+ * @returns {Promise<Record<string, LiveSection>>}
+ */
+export async function readLiveState(client, repo, { sections = Object.keys(SECTION_READERS), environmentNames } = {}) {
+  const unknown = sections.find((name) => !Object.hasOwn(SECTION_READERS, name));
+  if (unknown !== undefined) throw new SettingsError(`readLiveState: unknown section "${unknown}"`);
+  const live = {};
+  for (const name of sections) live[name] = await readSection(SECTION_READERS[name], client, repo, { environmentNames });
+  return live;
+}
+
+async function readKitInstalled(client, repo, kind) {
+  if (kind === 'control') return true;
+  const response = await client.request('GET', apiPath(KIT_VERSION_PATH, repo), { okStatuses: [404] });
+  return response.status !== 404;
+}
+
+/** @returns {Promise<any>} the callback's result, or null when the request is forbidden or missing */
+async function nullWhenUnreadable(read) {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof GitHubError && UNREADABLE_STATUSES.includes(error.status)) return null;
+    throw error;
+  }
+}
+
+async function readPass2Ran(client, repo) {
+  const summaries = await listRulesetSummaries(client, repo);
+  const main = summaries.find((summary) => summary.name === MAIN_RULESET && summary.target === 'branch');
+  if (!main) return false;
+  const ruleset = await getRuleset(client, repo, main.id);
+  return (ruleset.rules ?? []).some((rule) => rule.type === CODE_SCANNING_RULE);
+}
+
+/**
+ * @param {import('./github.mjs').GitHubClient} client
+ * @param {import('./github.mjs').RepoRef} repo
+ * @param {{ repoKind: 'control'|'project' }} options
+ * @returns {Promise<Signals>}
+ */
+export async function readSignals(client, repo, { repoKind: kind }) {
+  const kitInstalled = await readKitInstalled(client, repo, kind);
+  const codeScanningConfigured = await nullWhenUnreadable(async () => {
+    const setup = await get(client, `${REPO_PATH}/code-scanning/default-setup`, repo);
+    return setup.data?.state === 'configured';
+  });
+  const pass2Ran = await nullWhenUnreadable(() => readPass2Ran(client, repo));
+  return { kitInstalled, codeScanningConfigured, pass2Ran };
+}
