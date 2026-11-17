@@ -6,7 +6,7 @@ import { normalizeLabel, validLabels } from '../lib/trust.mjs';
 
 /** @typedef {import('../lib/ci.mjs').ValidatorContext} ValidatorContext */
 /** @typedef {import('../lib/ci.mjs').ValidatorResult} ValidatorResult */
-/** @typedef {{ filename: string, previousFilename: string|null, status: string, additions: number, deletions: number, patch: string|null }} PrFile   patch null when GitHub omits it */
+/** @typedef {{ filename: string, previousFilename: string|null, status: string, additions: number, deletions: number, patch: string|null, patchSource: 'github'|'content' }} PrFile   patch null when GitHub omits it and the content could not be fetched; 'content' means synthesised from an added file's content at the head SHA */
 /** @typedef {{ eventName: string, validLabels: string[], files: PrFile[] }} TestIntegrityFacts */
 
 export const name = 'test-integrity';
@@ -17,6 +17,9 @@ const REPO_PATH = '/repos/{owner}/{repo}';
 const COMMENT_LINE_PATTERN = /^\s*(?:\/\/|#|\*|\/\*)/;
 const REMOVED_STATUS = 'removed';
 const RENAMED_STATUS = 'renamed';
+const ADDED_STATUS = 'added';
+const HTTP_OK = 200;
+const CONTENT_UNAVAILABLE_STATUSES = [403, 404];
 const GUARDED_KINDS = [{ label: 'test', matches: 'isTestPath' }, { label: 'threshold', matches: 'isThresholdPath' }];
 
 function emptyFacts(eventName) {
@@ -31,7 +34,25 @@ function toPrFile(file) {
     additions: file.additions ?? 0,
     deletions: file.deletions ?? 0,
     patch: typeof file.patch === 'string' ? file.patch : null,
+    patchSource: 'github',
   };
+}
+
+function addedFilePatch(text) {
+  const lines = text.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join('\n')}`;
+}
+
+/** Added files over GitHub's patch limit have no patch; read them at the head SHA instead. Fails closed (patch stays null) when the content is unavailable. */
+async function withContentPatch(file, ctx, headSha) {
+  if (file.status !== ADDED_STATUS || file.patch !== null) return file;
+  const encodedPath = file.filename.split('/').map(encodeURIComponent).join('/');
+  const path = `${apiPath(`${REPO_PATH}/contents`, ctx.repo)}/${encodedPath}`;
+  const response = await ctx.client.request('GET', path, { query: { ref: headSha }, okStatuses: CONTENT_UNAVAILABLE_STATUSES });
+  const { content, encoding } = response.data ?? {};
+  if (response.status !== HTTP_OK || encoding !== 'base64' || typeof content !== 'string') return file;
+  return { ...file, patch: addedFilePatch(Buffer.from(content, 'base64').toString('utf8')), patchSource: 'content' };
 }
 
 const labelName = (label) => (typeof label === 'string' ? label : label?.name);
@@ -52,7 +73,7 @@ export async function collect(ctx) {
   return {
     eventName: ctx.eventName,
     validLabels: validLabels({ labels, timeline }, ctx.config),
-    files: files.map(toPrFile),
+    files: await Promise.all(files.map((file) => withContentPatch(toPrFile(file), ctx, ctx.payload.pull_request.head.sha))),
   };
 }
 
@@ -140,7 +161,9 @@ export function evaluate(facts, config) {
   if (facts.eventName !== PULL_REQUEST_EVENT) return result('skip', { details: `Not a pull request event (${facts.eventName}).` });
   const rules = compileRules(config);
   const problems = facts.files.flatMap((file) => fileProblems(file, rules));
-  if (problems.length === 0) return result('pass', { details: `${facts.files.length} files checked.` });
+  const fromContent = facts.files.filter((file) => file.patchSource === 'content').map((file) => file.filename);
+  const contentNote = fromContent.length > 0 ? ` Checked from content (GitHub omitted the patch): ${fromContent.join(', ')}.` : '';
+  if (problems.length === 0) return result('pass', { details: `${facts.files.length} files checked.${contentNote}` });
   if (facts.validLabels.some((label) => normalizeLabel(label) === EXCEPTION_LABEL)) {
     return result('pass', { warnings: problems, details: `${EXCEPTION_LABEL} label applied: failures reported as warnings.` });
   }
