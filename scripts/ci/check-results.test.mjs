@@ -24,6 +24,7 @@ for (const testCase of cases) {
     for (const text of testCase.expected.errorsInclude) {
       assert.ok(result.errors.some((error) => error.includes(text)), `no error includes ${text}: ${result.errors.join(' | ')}`);
     }
+    if (testCase.expected.conclusion === 'pass') assert.deepEqual(result.errors, []);
     assert.deepEqual(result.actions, testCase.expected.actions);
   });
 }

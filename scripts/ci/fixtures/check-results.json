@@ -7,22 +7,22 @@
   {
     "description": "one failure -> fail naming the job",
     "facts": { "eventName": "pull_request", "needs": { "verify": { "result": "success" }, "security": { "result": "failure" } } },
-    "expected": { "conclusion": "fail", "errorsInclude": ["security", "failure"], "actions": [] }
+    "expected": { "conclusion": "fail", "errorsInclude": ["job security result: failure"], "actions": [] }
   },
   {
     "description": "cancelled -> fail",
     "facts": { "eventName": "pull_request", "needs": { "verify": { "result": "cancelled" } } },
-    "expected": { "conclusion": "fail", "errorsInclude": ["verify", "cancelled"], "actions": [] }
+    "expected": { "conclusion": "fail", "errorsInclude": ["job verify result: cancelled"], "actions": [] }
   },
   {
     "description": "skipped -> fail",
     "facts": { "eventName": "push", "needs": { "scripts": { "result": "skipped" } } },
-    "expected": { "conclusion": "fail", "errorsInclude": ["scripts", "skipped"], "actions": [] }
+    "expected": { "conclusion": "fail", "errorsInclude": ["job scripts result: skipped"], "actions": [] }
   },
   {
     "description": "several failing jobs are all listed",
     "facts": { "eventName": "pull_request", "needs": { "a": { "result": "failure" }, "b": { "result": "success" }, "c": { "result": "cancelled" } } },
-    "expected": { "conclusion": "fail", "errorsInclude": ["a", "failure", "c", "cancelled"], "actions": [] }
+    "expected": { "conclusion": "fail", "errorsInclude": ["job a result: failure", "job c result: cancelled"], "actions": [] }
   },
   {
     "description": "empty needs -> fail",
@@ -67,6 +67,54 @@
     "eventName": "pull_request",
     "payload": {},
     "env": { "NEEDS_JSON": "{\"verify\":{\"result\":\"success\"},\"settings-plan\":{\"result\":\"failure\"}}" },
-    "expected": { "conclusion": "fail", "errorsInclude": ["settings-plan", "failure"], "actions": [] }
+    "expected": { "conclusion": "fail", "errorsInclude": ["job settings-plan result: failure"], "actions": [] }
+  },
+  {
+    "description": "job entry without result -> fail",
+    "facts": { "eventName": "pull_request", "needs": { "verify": {} } },
+    "expected": { "conclusion": "fail", "errorsInclude": ["job verify result: missing"], "actions": [] }
+  },
+  {
+    "description": "null job entry -> fail",
+    "facts": { "eventName": "pull_request", "needs": { "verify": null } },
+    "expected": { "conclusion": "fail", "errorsInclude": ["job verify result: missing"], "actions": [] }
+  },
+  {
+    "description": "non-string result is rendered as JSON",
+    "facts": { "eventName": "pull_request", "needs": { "verify": { "result": 1 } } },
+    "expected": { "conclusion": "fail", "errorsInclude": ["job verify result: 1"], "actions": [] }
+  },
+  {
+    "description": "needs undefined -> fail",
+    "facts": { "eventName": "pull_request" },
+    "expected": { "conclusion": "fail", "errorsInclude": ["NEEDS_JSON"], "actions": [] }
+  },
+  {
+    "description": "collect: empty NEEDS_JSON -> fail",
+    "eventName": "pull_request",
+    "payload": {},
+    "env": { "NEEDS_JSON": "" },
+    "expected": { "conclusion": "fail", "errorsInclude": ["NEEDS_JSON"], "actions": [] }
+  },
+  {
+    "description": "collect: NEEDS_JSON null -> fail",
+    "eventName": "pull_request",
+    "payload": {},
+    "env": { "NEEDS_JSON": "null" },
+    "expected": { "conclusion": "fail", "errorsInclude": ["NEEDS_JSON"], "actions": [] }
+  },
+  {
+    "description": "collect: NEEDS_JSON string -> fail",
+    "eventName": "pull_request",
+    "payload": {},
+    "env": { "NEEDS_JSON": "\"success\"" },
+    "expected": { "conclusion": "fail", "errorsInclude": ["NEEDS_JSON"], "actions": [] }
+  },
+  {
+    "description": "collect: merge_group with a skipped job -> fail",
+    "eventName": "merge_group",
+    "payload": {},
+    "env": { "NEEDS_JSON": "{\"verify\":{\"result\":\"success\"},\"scripts\":{\"result\":\"skipped\"}}" },
+    "expected": { "conclusion": "fail", "errorsInclude": ["job scripts result: skipped"], "actions": [] }
   }
 ]

@@ -32,17 +32,22 @@ function fail(errors) {
   return { conclusion: 'fail', errors, warnings: [], details: '', actions: [] };
 }
 
+function describeResult(result) {
+  if (result === undefined) return 'missing';
+  return typeof result === 'string' ? result : JSON.stringify(result);
+}
+
 /**
  * @param {CheckResultsFacts} facts
  * @returns {ValidatorResult}
  */
 export function evaluate(facts) {
-  if (facts.needs === null) return fail(['NEEDS_JSON is missing or not a JSON object']);
+  if (facts.needs == null) return fail(['NEEDS_JSON is missing or not a JSON object']);
   const jobs = Object.entries(facts.needs);
   if (jobs.length === 0) return fail(['no needed jobs reported']);
   const errors = jobs
     .filter(([, job]) => job?.result !== SUCCESS)
-    .map(([jobName, job]) => `job ${jobName} result: ${job?.result ?? 'missing'}`);
+    .map(([jobName, job]) => `job ${jobName} result: ${describeResult(job?.result)}`);
   if (errors.length > 0) return fail(errors);
   return { conclusion: 'pass', errors: [], warnings: [], details: `${jobs.length} needed jobs succeeded.`, actions: [] };
 }
