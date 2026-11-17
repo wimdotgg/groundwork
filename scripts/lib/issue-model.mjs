@@ -61,7 +61,7 @@ export function parseConventionalTitle(title) {
 
 // Web forms render answers as `### <label>`. A body with no `## <required heading>` is form output:
 // promote only the required `###` headings, so answer text keeps its own headings.
-function normalizeHeadingLevel(type, body) {
+export function normalizeIssueBody(type, body) {
   const required = REQUIRED_HEADINGS[type];
   const text = String(body ?? '');
   const hasLevelTwo = required.some((heading) => new RegExp(`^##[ \\t]+${heading}[ \\t]*$`, 'm').test(text));
@@ -98,7 +98,7 @@ function checkServes(type, byName) {
 export function validateIssueBody({ type, body }) {
   if (!type) return { ok: false, errors: ['Issue type is missing'] };
   if (!ISSUE_TYPES.includes(type)) return { ok: false, errors: [`Unknown issue type ${type}`] };
-  const { sections, byName, duplicates } = parseSections(normalizeHeadingLevel(type, body));
+  const { sections, byName, duplicates } = parseSections(normalizeIssueBody(type, body));
   const present = new Set(sections.map((section) => section.name));
   const errors = [];
   for (const heading of REQUIRED_HEADINGS[type]) {
