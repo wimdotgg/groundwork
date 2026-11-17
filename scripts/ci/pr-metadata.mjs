@@ -24,7 +24,8 @@ import {
  *   issue: IssueFacts|null, noIssueLabeledAt: string|null, headArrivedAt: string|null, files: PrFile[], stateTemplate: string|null,
  *   commitAuthors: string[], renamedBy: string[] }} PrMetadataFacts
  *   repo is owner/name. issue: the single same-repository closing reference's issue, else null; files: only for Spike issues, else [];
- *   headArrivedAt: the later of the earliest pull_request run created_at for the head SHA in this PR and the newest head_ref_force_pushed event,
+ *   headArrivedAt: the newest push of the head SHA to the PR branch (repository activity timestamp), or a later head_ref_force_pushed,
+ *   reopened or base_ref_changed event,
  *   read only when no-issue is present on the PR; commitAuthors: one login per PR commit, read only for Dependabot PRs;
  *   renamedBy: actor of every `renamed` timeline event; action: the payload action, absent in older facts */
 
@@ -33,8 +34,10 @@ export const name = 'pr-metadata';
 const PULL_REQUEST_EVENT = 'pull_request';
 const MERGE_GROUP_EVENT = 'merge_group';
 const NO_ISSUE_LABEL = 'no-issue';
+const SYNCHRONIZE_ACTION = 'synchronize';
+const REOPENED_ACTION = 'reopened';
 // Actions that void no-issue: protected-labels removes the label on them, and the gate refuses it on their runs.
-const NO_ISSUE_VOIDING_ACTIONS = new Set(['synchronize', 'reopened']);
+const NO_ISSUE_VOIDING_ACTIONS = new Set([SYNCHRONIZE_ACTION, REOPENED_ACTION]);
 const DEPENDENCIES_LABEL = 'dependencies';
 const AUTOMATED_LABEL = 'automated';
 const NEEDS_FORMAT_LABEL = 'needs-format';
@@ -55,8 +58,13 @@ const PULL_PATH = '/repos/{owner}/{repo}/pulls/{number}';
 const TIMELINE_PATH = '/repos/{owner}/{repo}/issues/{number}/timeline';
 const FILES_PATH = '/repos/{owner}/{repo}/pulls/{number}/files';
 const COMMITS_PATH = '/repos/{owner}/{repo}/pulls/{number}/commits';
-const RUNS_PATH = '/repos/{owner}/{repo}/actions/runs';
+const ACTIVITY_PATH = '/repos/{owner}/{repo}/activity';
+// Repository activity types that put a commit on a branch; branch_deletion is the only other type.
+const ARRIVAL_ACTIVITY_TYPES = new Set(['push', 'force_push', 'branch_creation', 'pr_merge', 'merge_queue_merge']);
+// Timeline events that void an earlier label even when the head SHA is unchanged.
 const FORCE_PUSH_EVENT = 'head_ref_force_pushed';
+const REOPENED_EVENT = 'reopened';
+const BASE_CHANGED_EVENT = 'base_ref_changed';
 const RENAMED_EVENT = 'renamed';
 const NOREPLY_EMAIL = /^(?:\d+\+)?(.+)@users\.noreply\.github\.com$/i;
 const BRANCH_PATTERN = /^issue\/\d+$/;
@@ -129,18 +137,19 @@ function eventTimes(timeline, eventName) {
   return timeline.filter((item) => item.event === eventName).map((item) => new Date(item.created_at).getTime()).filter(Number.isFinite);
 }
 
-// Server-side arrival of the head in this PR: the earliest pull_request run for the head SHA that lists this PR (a run
-// seeded from another PR or branch does not), pushed later by the newest force push. Stateless, so it holds on every
-// event type. The current run is itself such a run, so none found means the data is wrong: throw rather than guess.
-// The head branch name is not filtered: the PR number already identifies the PR, and a branch name can be reused.
-async function loadHeadArrival(ctx, { number, headSha }, timeline) {
-  const runs = await ctx.client.paginate(apiPath(RUNS_PATH, ctx.repo), { query: { head_sha: headSha }, itemsKey: 'workflow_runs' });
-  const runTimes = runs
-    .filter((run) => run.event === PULL_REQUEST_EVENT && (run.pull_requests ?? []).some((pull) => pull.number === number))
-    .map((run) => new Date(run.created_at).getTime())
+// Server-side arrival of the head in this PR: the newest push of the head SHA to the PR branch (repository activity,
+// server time), pushed later by a force push, a reopen or a base change. Stateless, so it holds on every event type.
+// Activity is per branch, not per PR, so the timeline events cover what a repeated SHA would hide. The run's own push
+// is an activity entry, so none found means the data is wrong: throw rather than guess.
+async function loadHeadArrival(ctx, { number, headRef, headSha }, timeline) {
+  const activities = await ctx.client.paginate(apiPath(ACTIVITY_PATH, ctx.repo), { query: { ref: `refs/heads/${headRef}` } });
+  const pushTimes = activities
+    .filter((activity) => ARRIVAL_ACTIVITY_TYPES.has(activity.activity_type) && activity.after === headSha)
+    .map((activity) => new Date(activity.timestamp).getTime())
     .filter(Number.isFinite);
-  if (runTimes.length === 0) throw new Error(`no pull_request workflow run found for head ${headSha} in PR #${number}`);
-  return new Date(Math.max(Math.min(...runTimes), ...eventTimes(timeline, FORCE_PUSH_EVENT))).toISOString();
+  if (pushTimes.length === 0) throw new Error(`no push of head ${headSha} to ${headRef} found in the repository activity for PR #${number}`);
+  const voidingTimes = [FORCE_PUSH_EVENT, REOPENED_EVENT, BASE_CHANGED_EVENT].flatMap((eventName) => eventTimes(timeline, eventName));
+  return new Date(Math.max(...pushTimes, ...voidingTimes)).toISOString();
 }
 
 function commitAuthorLogin(commit) {
