@@ -1,0 +1,35 @@
+name: failure-alert
+
+on:
+  # Runs from the default branch with a write token, but no artifacts or head code are used;
+  # the script reads only the event payload and calls the API.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [release-please, deploy]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  failure-alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The path reaches only this expression, never a run: step.
+    concurrency:
+      group: failure-alert-${{ github.event.workflow_run.path }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Update alert issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/failure-alert.mjs

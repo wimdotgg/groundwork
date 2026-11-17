@@ -554,5 +554,217 @@
     "expected": {
       "throws": "pull_request.number"
     }
+  },
+  {
+    "description": "synchronize with no-issue -> remove and comment",
+    "facts": {
+      "eventName": "pull_request_target",
+      "action": "synchronize",
+      "number": 12,
+      "label": null,
+      "sender": null,
+      "labels": [
+        "bug",
+        "No-Issue"
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 12,
+          "label": "no-issue"
+        },
+        {
+          "kind": "comment",
+          "number": 12,
+          "body": "`no-issue` was removed because new commits arrived or the PR was reopened; the owner re-applies it after reviewing."
+        }
+      ]
+    }
+  },
+  {
+    "description": "synchronize without no-issue -> pass, no actions",
+    "facts": {
+      "eventName": "pull_request_target",
+      "action": "synchronize",
+      "number": 12,
+      "label": null,
+      "sender": null,
+      "labels": [
+        "bug"
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "collect: pull_request_target synchronize with no-issue -> remove and comment",
+    "eventName": "pull_request_target",
+    "payload": {
+      "action": "synchronize",
+      "pull_request": {
+        "number": 12,
+        "labels": [
+          {
+            "name": "no-issue"
+          }
+        ]
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 12,
+          "label": "no-issue"
+        },
+        {
+          "kind": "comment",
+          "number": 12,
+          "body": "`no-issue` was removed because new commits arrived or the PR was reopened; the owner re-applies it after reviewing."
+        }
+      ]
+    },
+    "routes": {}
+  },
+  {
+    "description": "collect: pull_request_target reopened with no-issue -> remove and comment",
+    "eventName": "pull_request_target",
+    "payload": {
+      "action": "reopened",
+      "pull_request": {
+        "number": 12,
+        "labels": [
+          {
+            "name": "no-issue"
+          }
+        ]
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 12,
+          "label": "no-issue"
+        },
+        {
+          "kind": "comment",
+          "number": 12,
+          "body": "`no-issue` was removed because new commits arrived or the PR was reopened; the owner re-applies it after reviewing."
+        }
+      ]
+    },
+    "routes": {}
+  },
+  {
+    "description": "collect: non-string label names are ignored",
+    "eventName": "pull_request_target",
+    "payload": {
+      "action": "synchronize",
+      "pull_request": {
+        "number": 12,
+        "labels": [
+          {
+            "name": "no-issue"
+          },
+          {
+            "name": null
+          },
+          {},
+          null,
+          {
+            "name": 7
+          }
+        ]
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 12,
+          "label": "no-issue"
+        },
+        {
+          "kind": "comment",
+          "number": 12,
+          "body": "`no-issue` was removed because new commits arrived or the PR was reopened; the owner re-applies it after reviewing."
+        }
+      ]
+    },
+    "routes": {}
+  },
+  {
+    "description": "collect: synchronize without pull_request.number throws",
+    "eventName": "pull_request_target",
+    "payload": {
+      "action": "synchronize",
+      "pull_request": {
+        "labels": []
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "pull_request.number"
+    }
+  },
+  {
+    "description": "reopened with no-issue -> remove and comment",
+    "facts": {
+      "eventName": "pull_request_target",
+      "action": "reopened",
+      "number": 12,
+      "label": null,
+      "sender": null,
+      "labels": [
+        "bug",
+        "No-Issue"
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 12,
+          "label": "no-issue"
+        },
+        {
+          "kind": "comment",
+          "number": 12,
+          "body": "`no-issue` was removed because new commits arrived or the PR was reopened; the owner re-applies it after reviewing."
+        }
+      ]
+    }
   }
 ]
