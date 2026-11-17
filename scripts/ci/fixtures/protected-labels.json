@@ -1,0 +1,558 @@
+[
+  {
+    "description": "owner applies accepted -> pass, no actions",
+    "facts": {
+      "eventName": "issues",
+      "number": 7,
+      "label": "accepted",
+      "sender": "wianvdm"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "owner login compares case-insensitively",
+    "facts": {
+      "eventName": "issues",
+      "number": 7,
+      "label": "accepted",
+      "sender": "WianVDM"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "agent applies accepted -> remove and comment",
+    "facts": {
+      "eventName": "issues",
+      "number": 7,
+      "label": "accepted",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 7,
+          "label": "accepted"
+        },
+        {
+          "kind": "comment",
+          "number": 7,
+          "body": "Label `accepted` was removed: only wianvdm may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "agent applies priority:p1 -> prefix entry removes it",
+    "facts": {
+      "eventName": "issues",
+      "number": 9,
+      "label": "priority:p1",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 9,
+          "label": "priority:p1"
+        },
+        {
+          "kind": "comment",
+          "number": 9,
+          "body": "Label `priority:p1` was removed: only wianvdm may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "owner applies priority:p1 -> pass, no actions",
+    "facts": {
+      "eventName": "issues",
+      "number": 9,
+      "label": "priority:p1",
+      "sender": "wianvdm"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "dependabot[bot] applies dependencies -> pass, no actions",
+    "facts": {
+      "eventName": "pull_request_target",
+      "number": 12,
+      "label": "dependencies",
+      "sender": "dependabot[bot]"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "agent applies dependencies -> remove and comment",
+    "facts": {
+      "eventName": "pull_request_target",
+      "number": 12,
+      "label": "dependencies",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 12,
+          "label": "dependencies"
+        },
+        {
+          "kind": "comment",
+          "number": 12,
+          "body": "Label `dependencies` was removed: only dependabot[bot] may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "release bot applies automated -> pass, no actions",
+    "facts": {
+      "eventName": "pull_request_target",
+      "number": 13,
+      "label": "automated",
+      "sender": "wimdotgg-release[bot]"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "agent applies automated -> remove and comment naming the release bot",
+    "facts": {
+      "eventName": "pull_request_target",
+      "number": 13,
+      "label": "automated",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 13,
+          "label": "automated"
+        },
+        {
+          "kind": "comment",
+          "number": 13,
+          "body": "Label `automated` was removed: only wimdotgg-release[bot] may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "agent applies size-exception -> remove and comment",
+    "facts": {
+      "eventName": "pull_request_target",
+      "number": 14,
+      "label": "size-exception",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 14,
+          "label": "size-exception"
+        },
+        {
+          "kind": "comment",
+          "number": 14,
+          "body": "Label `size-exception` was removed: only wianvdm may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "unprotected label -> pass, no actions",
+    "facts": {
+      "eventName": "issues",
+      "number": 7,
+      "label": "bug",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "facts with null fields -> skip",
+    "facts": {
+      "eventName": "issues",
+      "number": null,
+      "label": null,
+      "sender": null
+    },
+    "expected": {
+      "conclusion": "skip",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "collect: unlabeled action -> skip",
+    "eventName": "issues",
+    "payload": {
+      "action": "unlabeled",
+      "issue": {
+        "number": 7
+      },
+      "label": {
+        "name": "accepted"
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "expected": {
+      "conclusion": "skip",
+      "errorsInclude": [],
+      "actions": []
+    },
+    "routes": {}
+  },
+  {
+    "description": "collect: other event -> skip",
+    "eventName": "pull_request",
+    "payload": {
+      "action": "labeled",
+      "pull_request": {
+        "number": 7
+      },
+      "label": {
+        "name": "accepted"
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "expected": {
+      "conclusion": "skip",
+      "errorsInclude": [],
+      "actions": []
+    },
+    "routes": {}
+  },
+  {
+    "description": "collect: issues labeled by agent -> remove and comment",
+    "eventName": "issues",
+    "payload": {
+      "action": "labeled",
+      "issue": {
+        "number": 21
+      },
+      "label": {
+        "name": "accepted"
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 21,
+          "label": "accepted"
+        },
+        {
+          "kind": "comment",
+          "number": 21,
+          "body": "Label `accepted` was removed: only wianvdm may apply it."
+        }
+      ]
+    },
+    "routes": {}
+  },
+  {
+    "description": "collect: pull_request_target labeled by dependabot[bot] -> pass",
+    "eventName": "pull_request_target",
+    "payload": {
+      "action": "labeled",
+      "number": 30,
+      "pull_request": {
+        "number": 30
+      },
+      "label": {
+        "name": "dependencies"
+      },
+      "sender": {
+        "login": "dependabot[bot]"
+      }
+    },
+    "env": {},
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    },
+    "routes": {}
+  },
+  {
+    "description": "owner applies size-exception -> no actions",
+    "facts": {
+      "eventName": "issues",
+      "number": 14,
+      "label": "size-exception",
+      "sender": "wianvdm"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "agent applies no-issue -> remove and comment",
+    "facts": {
+      "eventName": "issues",
+      "number": 15,
+      "label": "no-issue",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 15,
+          "label": "no-issue"
+        },
+        {
+          "kind": "comment",
+          "number": 15,
+          "body": "Label `no-issue` was removed: only wianvdm may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "owner applies no-issue -> no actions",
+    "facts": {
+      "eventName": "issues",
+      "number": 15,
+      "label": "no-issue",
+      "sender": "wianvdm"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "agent applies integrity-exception -> remove and comment",
+    "facts": {
+      "eventName": "issues",
+      "number": 16,
+      "label": "integrity-exception",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 16,
+          "label": "integrity-exception"
+        },
+        {
+          "kind": "comment",
+          "number": 16,
+          "body": "Label `integrity-exception` was removed: only wianvdm may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "owner applies integrity-exception -> no actions",
+    "facts": {
+      "eventName": "issues",
+      "number": 16,
+      "label": "integrity-exception",
+      "sender": "wianvdm"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "Accepted (mixed case) applied by agent -> removed",
+    "facts": {
+      "eventName": "issues",
+      "number": 7,
+      "label": "Accepted",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 7,
+          "label": "Accepted"
+        },
+        {
+          "kind": "comment",
+          "number": 7,
+          "body": "Label `Accepted` was removed: only wianvdm may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "priority without colon is unprotected",
+    "facts": {
+      "eventName": "issues",
+      "number": 7,
+      "label": "priority",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "backticks in a protected label are stripped from the comment",
+    "facts": {
+      "eventName": "issues",
+      "number": 7,
+      "label": "priority:`p1",
+      "sender": "wianvdm-agent"
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 7,
+          "label": "priority:`p1"
+        },
+        {
+          "kind": "comment",
+          "number": 7,
+          "body": "Label `priority:p1` was removed: only wianvdm may apply it."
+        }
+      ]
+    }
+  },
+  {
+    "description": "collect: labeled without sender throws",
+    "eventName": "issues",
+    "payload": {
+      "action": "labeled",
+      "issue": {
+        "number": 7
+      },
+      "label": {
+        "name": "accepted"
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "sender.login"
+    }
+  },
+  {
+    "description": "collect: labeled without label throws",
+    "eventName": "issues",
+    "payload": {
+      "action": "labeled",
+      "issue": {
+        "number": 7
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "label.name"
+    }
+  },
+  {
+    "description": "collect: labeled without number throws",
+    "eventName": "issues",
+    "payload": {
+      "action": "labeled",
+      "issue": {},
+      "label": {
+        "name": "accepted"
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "issue.number"
+    }
+  },
+  {
+    "description": "collect: pull_request_target labeled without pull_request throws",
+    "eventName": "pull_request_target",
+    "payload": {
+      "action": "labeled",
+      "label": {
+        "name": "accepted"
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "pull_request.number"
+    }
+  }
+]
