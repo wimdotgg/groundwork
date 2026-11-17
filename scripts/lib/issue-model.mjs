@@ -6,9 +6,9 @@ import { normalizeLabel, sameLogin, validLabels } from './trust.mjs';
 /** @typedef {'done'|'needs-decision'|'queued'|'in-review'|'claimed'|'orphaned'|'proposed'|'blocked'|'ready'} Status */
 /** @typedef {{ number: number, state: 'open'|'closed', merged: boolean, draft: boolean, inMergeQueue: boolean,
  *   released: boolean, headRepo: string, createdAt: string, lastAgentCommentAt: string|null }} PullFacts */
-/** @typedef {{ number: number, title: string, type: IssueType|null, state: 'open'|'closed', stateReason: string|null,
+/** @typedef {{ number: number, title: string, type: string|null, state: 'open'|'closed', stateReason: string|null,
  *   author: string, body: string, labels: string[], validLabels: string[],
- *   ancestors: Array<{ number: number, type: IssueType|null, validLabels: string[] }>,
+ *   ancestors: Array<{ number: number, type: string|null, validLabels: string[] }>,
  *   blockedBy: Array<{ number: number, state: 'open'|'closed' }>,
  *   branch: { exists: boolean, sha: string|null }, claimCommentAt: string|null, claimCommitAt: string|null, pr: PullFacts|null }} IssueFacts
  *   ancestors are nearest first.
@@ -196,7 +196,7 @@ export function deriveStatus(facts, { config, now }) {
 const NOT_FOUND = 404;
 const REPO_PATH = '/repos/{owner}/{repo}';
 const MERGE_QUEUE_QUERY = 'query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) '
-  + '{ pullRequest(number: $number) { mergeQueueEntry { id } } } }';
+  + '{ pullRequest(number: $number) { isInMergeQueue } } }';
 
 const newestFirst = (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
 const labelName = (label) => (typeof label === 'string' ? label : label?.name);
@@ -214,20 +214,31 @@ async function loadLabels(client, repoRef, issue, config) {
   return { labels, valid: validLabels({ labels, timeline }, config) };
 }
 
-async function loadAncestors(client, repoRef, issueNumber, config) {
+function assertSameRepository(parent, { owner, repo }) {
+  const expectedSuffix = `/repos/${owner}/${repo}`.toLowerCase();
+  if (!String(parent.repository_url ?? '').toLowerCase().endsWith(expectedSuffix)) {
+    throw new GitHubError(`parent #${parent.number} is not in ${owner}/${repo}`);
+  }
+}
+
+async function loadAncestors(client, repoRef, issue, config) {
   const ancestors = [];
-  const seen = new Set([issueNumber]);
-  let current = issueNumber;
+  const seen = new Set([issue.number]);
+  let child = issue;
   for (;;) {
-    const parentPath = apiPath(`${REPO_PATH}/issues/{number}/parent`, { ...repoRef, number: current });
+    const parentPath = apiPath(`${REPO_PATH}/issues/{number}/parent`, { ...repoRef, number: child.number });
     const response = await client.request('GET', parentPath, { okStatuses: [NOT_FOUND] });
-    if (response.status === NOT_FOUND) return ancestors;
+    if (response.status === NOT_FOUND) {
+      if (child.parent_issue_url != null) throw new GitHubError(`parent of #${child.number} exists but cannot be read`);
+      return ancestors;
+    }
     const parent = response.data;
-    if (seen.has(parent.number)) throw new GitHubError(`issue #${issueNumber} has a parent cycle at #${parent.number}`);
+    assertSameRepository(parent, repoRef);
+    if (seen.has(parent.number)) throw new GitHubError(`issue #${issue.number} has a parent cycle at #${parent.number}`);
     seen.add(parent.number);
     const { valid } = await loadLabels(client, repoRef, parent, config);
     ancestors.push({ number: parent.number, type: parent.type?.name ?? null, validLabels: valid });
-    current = parent.number;
+    child = parent;
   }
 }
 
@@ -247,14 +258,17 @@ async function loadClaimCommitAt(client, repoRef, number, sha) {
 
 async function isInMergeQueue(client, { owner, repo }, number) {
   const data = await client.graphql(MERGE_QUEUE_QUERY, { owner, repo, number });
-  return Boolean(data.repository?.pullRequest?.mergeQueueEntry);
+  const pullRequest = data.repository?.pullRequest;
+  if (!pullRequest) throw new GitHubError(`pull request #${number} not found for the merge queue read`);
+  return pullRequest.isInMergeQueue === true;
 }
 
 async function loadPullFacts(client, repoRef, number, config) {
   const pulls = await client.paginate(apiPath(`${REPO_PATH}/pulls`, repoRef), {
     query: { head: `${repoRef.owner}:issue/${number}`, state: 'all' },
   });
-  const newest = [...pulls].sort(newestFirst)[0];
+  const candidates = pulls.filter((pull) => pull.head?.ref === `issue/${number}`).sort(newestFirst);
+  const newest = candidates.find((pull) => pull.state === 'open') ?? candidates[0];
   if (!newest) return null;
   const commentsPath = apiPath(`${REPO_PATH}/issues/{number}/comments`, { ...repoRef, number: newest.number });
   const comments = await client.paginate(commentsPath);
@@ -283,7 +297,7 @@ export async function loadIssueFacts(client, { owner, repo, number }, { config }
   const repoRef = { owner, repo };
   const issue = (await client.request('GET', apiPath(`${REPO_PATH}/issues/{number}`, { ...repoRef, number }))).data;
   const { labels, valid } = await loadLabels(client, repoRef, issue, config);
-  const ancestors = await loadAncestors(client, repoRef, number, config);
+  const ancestors = await loadAncestors(client, repoRef, issue, config);
   const blockers = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/dependencies/blocked_by`, { ...repoRef, number }));
   const branch = await loadBranch(client, repoRef, number);
   const issueComments = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/comments`, { ...repoRef, number }));

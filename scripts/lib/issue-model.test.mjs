@@ -322,9 +322,9 @@ const labeledBy = (name, login, createdAt = '2026-01-01T00:00:00Z') => (
 );
 const issueData = (overrides = {}) => ({
   number: 5, title: 'feat: thing', type: { name: 'Feature' }, state: 'open', state_reason: null,
-  user: { login: 'owner1' }, body: 'body', labels: [], ...overrides,
+  user: { login: 'owner1' }, body: 'body', labels: [], repository_url: 'https://api.github.com/repos/Acme/App', ...overrides,
 });
-const mergeQueueReply = (entry) => found({ data: { repository: { pullRequest: { mergeQueueEntry: entry } } } });
+const mergeQueueReply = (isInMergeQueue) => found({ data: { repository: { pullRequest: { isInMergeQueue } } } });
 
 function issueRoutes(overrides = {}) {
   return {
@@ -437,10 +437,10 @@ test('loadIssueFacts: draft PR with agent comments and the released marker', asy
     [`GET ${REPO}/git/ref/heads/issue/5`]: found({ object: { sha: 'abc123' } }),
     [`GET ${REPO}/git/commits/abc123`]: found({ message: 'feat: work', committer: { date: '2026-01-01T10:00:00Z' } }),
     [`GET ${REPO}/pulls?head=acme:issue/5&per_page=100&state=all`]: found([
-      { number: 6, state: 'closed', draft: false, merged_at: null, created_at: '2026-01-01T01:00:00Z', head: { repo: { full_name: 'acme/app' } }, body: '' },
+      { number: 6, state: 'closed', draft: false, merged_at: null, created_at: '2026-01-01T01:00:00Z', head: { ref: 'issue/5', repo: { full_name: 'acme/app' } }, body: '' },
       {
         number: 7, state: 'open', draft: true, merged_at: null, created_at: '2026-01-01T02:00:00Z',
-        head: { repo: { full_name: 'fork/app' } }, body: 'state\n<!-- groundwork:released -->',
+        head: { ref: 'issue/5', repo: { full_name: 'fork/app' } }, body: 'state\n<!-- groundwork:released -->',
       },
     ]),
     [`GET ${REPO}/issues/7/comments?per_page=100`]: found([
@@ -448,7 +448,7 @@ test('loadIssueFacts: draft PR with agent comments and the released marker', asy
       { user: { login: 'Agent-Bot' }, body: 'two', created_at: '2026-01-01T05:00:00Z' },
       { user: { login: 'intruder' }, body: 'noise', created_at: '2026-01-01T06:00:00Z' },
     ]),
-    'POST /graphql': mergeQueueReply(null),
+    'POST /graphql': mergeQueueReply(false),
   });
   assert.deepEqual(facts.pr, {
     number: 7, state: 'open', merged: false, draft: true, inMergeQueue: false, released: true,
@@ -463,7 +463,7 @@ test('loadIssueFacts: merged PR is closed and merged, and skips the merge-queue 
     [`GET ${REPO}/git/ref/heads/issue/5`]: found({ object: { sha: 'abc123' } }),
     [`GET ${REPO}/git/commits/abc123`]: found({ message: 'feat: work', committer: { date: '2026-01-01T10:00:00Z' } }),
     [`GET ${REPO}/pulls?head=acme:issue/5&per_page=100&state=all`]: found([
-      { number: 7, state: 'closed', draft: false, merged_at: '2026-01-02T00:00:00Z', created_at: '2026-01-01T02:00:00Z', head: { repo: null }, body: null },
+      { number: 7, state: 'closed', draft: false, merged_at: '2026-01-02T00:00:00Z', created_at: '2026-01-01T02:00:00Z', head: { ref: 'issue/5', repo: null }, body: null },
     ]),
     [`GET ${REPO}/issues/7/comments?per_page=100`]: found([]),
   }), { onCall: (record) => calls.push(record.path) });
@@ -478,14 +478,102 @@ test('loadIssueFacts: merged PR is closed and merged, and skips the merge-queue 
 test('loadIssueFacts: PR with a merge-queue entry is inMergeQueue', async () => {
   const facts = await load({
     [`GET ${REPO}/pulls?head=acme:issue/5&per_page=100&state=all`]: found([
-      { number: 7, state: 'open', draft: false, merged_at: null, created_at: '2026-01-01T02:00:00Z', head: { repo: { full_name: 'acme/app' } }, body: '' },
+      { number: 7, state: 'open', draft: false, merged_at: null, created_at: '2026-01-01T02:00:00Z', head: { ref: 'issue/5', repo: { full_name: 'acme/app' } }, body: '' },
     ]),
     [`GET ${REPO}/issues/7/comments?per_page=100`]: found([]),
-    'POST /graphql': mergeQueueReply({ id: 'MQE_1' }),
+    'POST /graphql': mergeQueueReply(true),
     [`GET ${REPO}/git/ref/heads/issue/5`]: found({ object: { sha: 'abc123' } }),
     [`GET ${REPO}/git/commits/abc123`]: found({ message: 'feat: work', committer: { date: '2026-01-01T10:00:00Z' } }),
   });
   assert.equal(facts.pr.inMergeQueue, true);
+});
+
+const pullData = (overrides = {}) => ({
+  number: 7, state: 'open', draft: false, merged_at: null, created_at: '2026-01-01T02:00:00Z',
+  head: { ref: 'issue/5', repo: { full_name: 'acme/app' } }, body: '', ...overrides,
+});
+const PULLS_KEY = `GET ${REPO}/pulls?head=acme:issue/5&per_page=100&state=all`;
+
+test('loadIssueFacts: a parent in another repository throws GitHubError', async () => {
+  await assert.rejects(
+    load({
+      [`GET ${REPO}/issues/5/parent`]: found(issueData({ number: 3, repository_url: 'https://api.github.com/repos/acme/other' })),
+    }),
+    (error) => error instanceof GitHubError && /not in acme\/app/.test(error.message),
+  );
+});
+
+test('loadIssueFacts: a 404 parent read with a parent_issue_url throws GitHubError', async () => {
+  await assert.rejects(
+    load({ [`GET ${REPO}/issues/5`]: found(issueData({ parent_issue_url: `https://api.github.com${REPO}/issues/3` })) }),
+    (error) => error instanceof GitHubError && /cannot be read/.test(error.message),
+  );
+});
+
+test('loadIssueFacts: a custom issue type name passes through', async () => {
+  const facts = await load({ [`GET ${REPO}/issues/5`]: found(issueData({ type: { name: 'Initiative' } })) });
+  assert.equal(facts.type, 'Initiative');
+});
+
+test('loadIssueFacts: a stray PR with another head ref is ignored', async () => {
+  const facts = await load({
+    [PULLS_KEY]: found([pullData({ number: 9, created_at: '2026-01-05T00:00:00Z', head: { ref: 'issue/50', repo: null } })]),
+  });
+  assert.equal(facts.pr, null);
+});
+
+test('loadIssueFacts: an open older PR beats a newer closed one', async () => {
+  const facts = await load({
+    [PULLS_KEY]: found([
+      pullData({ number: 6, state: 'open', created_at: '2026-01-01T01:00:00Z' }),
+      pullData({ number: 8, state: 'closed', created_at: '2026-01-03T00:00:00Z' }),
+    ]),
+    [`GET ${REPO}/issues/6/comments?per_page=100`]: found([]),
+    'POST /graphql': mergeQueueReply(false),
+  });
+  assert.equal(facts.pr.number, 6);
+  assert.equal(facts.pr.state, 'open');
+});
+
+test('loadIssueFacts: a missing pull request in the merge-queue read throws GitHubError', async () => {
+  await assert.rejects(
+    load({
+      [PULLS_KEY]: found([pullData()]),
+      [`GET ${REPO}/issues/7/comments?per_page=100`]: found([]),
+      'POST /graphql': found({ data: { repository: { pullRequest: null } } }),
+    }),
+    (error) => error instanceof GitHubError && /merge queue/.test(error.message),
+  );
+});
+
+test('loadIssueFacts: the latest labeled event decides label validity', async () => {
+  const facts = await load({
+    [`GET ${REPO}/issues/5`]: found(issueData({ labels: [{ name: 'accepted' }] })),
+    [`GET ${REPO}/issues/5/timeline?per_page=100`]: found([
+      labeledBy('accepted', 'owner1', '2026-01-01T00:00:00Z'), labeledBy('accepted', 'someone-else', '2026-01-02T00:00:00Z'),
+    ]),
+  });
+  assert.deepEqual(facts.validLabels, []);
+});
+
+test('loadIssueFacts: the timeline is read across pages', async () => {
+  const nextLink = `<https://api.github.com${REPO}/issues/5/timeline?page=2&per_page=100>; rel="next"`;
+  const facts = await load({
+    [`GET ${REPO}/issues/5`]: found(issueData({ labels: [{ name: 'accepted' }] })),
+    [`GET ${REPO}/issues/5/timeline?per_page=100`]: found([{ event: 'commented', created_at: '2026-01-01T00:00:00Z' }], { link: nextLink }),
+    [`GET ${REPO}/issues/5/timeline?page=2&per_page=100`]: found([labeledBy('accepted', 'owner1')]),
+  });
+  assert.deepEqual(facts.validLabels, ['accepted']);
+});
+
+test('loadIssueFacts: a claim commit subject with trailing text gives null', async () => {
+  const facts = await load({
+    [`GET ${REPO}/git/ref/heads/issue/5`]: found({ object: { sha: 'abc123' } }),
+    [`GET ${REPO}/git/commits/abc123`]: found({
+      message: 'chore(claim): #5 [session s-1] extra', committer: { date: '2026-01-01T10:00:00Z' },
+    }),
+  });
+  assert.equal(facts.claimCommitAt, null);
 });
 
 test('loadIssueFacts: a non-404 error propagates as GitHubError', async () => {
