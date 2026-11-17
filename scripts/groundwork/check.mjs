@@ -1,5 +1,5 @@
 import {
-  compareStates, loadDesiredState, readLiveState, readSignals, repoKind, resolvePlaceholders,
+  compareStates, loadDesiredState, readLiveState, readSignals, repoKind, resolvePlaceholders, SettingsError,
 } from '../lib/settings.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
@@ -26,6 +26,8 @@ const TABLE_DIVIDER = '|---|---|---|---|---|';
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const isPassing = (row) => row.result === 'match' || row.result === 'deferred';
+
 /**
  * @param {any} args parsed JSON object from the dispatch
  * @returns {string[]} one line per invalid argument; empty when valid
@@ -36,7 +38,7 @@ export function validateArgs(args) {
   return Object.keys(args).map((key) => `unknown argument "${key}"`);
 }
 
-// Same repos filter as settings.mjs checkEnvironment: which environments apply to a repo kind.
+// Same repos filter as settings.mjs compareEnvironments (appliesToKind there): which environments apply to a repo kind.
 const appliesToKind = (repos, kind) => repos === 'all'
   || (repos === 'projects' && kind === 'project')
   || (repos === 'control' && kind === 'control');
@@ -48,11 +50,14 @@ function applicableEnvironmentNames(settings, kind) {
     .map(([name]) => name);
 }
 
-/** Live values are untrusted text: JSON-encode, strip backticks so the code span cannot break, truncate. */
-function renderValue(value) {
-  const text = value === undefined ? 'null' : JSON.stringify(value) ?? 'null';
-  return `\`${text.replaceAll('`', '').slice(0, VALUE_MAX_LENGTH)}\``;
+/** Table cells hold untrusted text: strip backticks and line breaks so the code span and row cannot break, truncate. */
+function renderCell(text) {
+  const stripped = String(text).replaceAll('`', '').replace(/[\r\n]/g, '');
+  const truncated = stripped.length > VALUE_MAX_LENGTH ? `${stripped.slice(0, VALUE_MAX_LENGTH)}...` : stripped;
+  return `\`${truncated.replaceAll('|', '\\|')}\``;
 }
+
+const valueText = (value) => JSON.stringify(value) ?? 'null';
 
 /**
  * @param {{ org: string, repo: string }} target
@@ -61,8 +66,8 @@ function renderValue(value) {
  * @returns {string} Markdown job summary
  */
 function renderSummary({ org, repo }, rows, ok) {
-  const mismatches = rows.filter((row) => row.result !== 'match');
-  const failing = mismatches.filter((row) => row.result !== 'deferred').length;
+  const mismatches = rows.filter((row) => !isPassing(row));
+  const failing = mismatches.length;
   const lines = [
     `## check ${org}/${repo}`,
     '',
@@ -74,7 +79,7 @@ function renderSummary({ org, repo }, rows, ok) {
   if (mismatches.length > 0) {
     lines.push(TABLE_HEADER, TABLE_DIVIDER);
     for (const row of mismatches) {
-      lines.push(`| ${row.section} | ${row.key} | ${row.result} | ${renderValue(row.desired)} | ${renderValue(row.live)} |`);
+      lines.push(`| ${renderCell(row.section)} | ${renderCell(row.key)} | ${row.result} | ${renderCell(valueText(row.desired))} | ${renderCell(valueText(row.live))} |`);
     }
     lines.push('');
   }
@@ -91,6 +96,7 @@ function renderSummary({ org, repo }, rows, ok) {
  * @returns {Promise<{ ok: boolean, rows: import('../lib/settings.mjs').ComparisonRow[] }>}
  */
 export async function runCheck({ client, org, repo, settingsRoot, config }) {
+  if (repo === null) throw new SettingsError('check: repo is required');
   const desired = await loadDesiredState({ root: settingsRoot });
   desired.rulesets = await Promise.all(
     desired.rulesets.map((ruleset) => resolvePlaceholders(ruleset, { client, config })),
@@ -100,7 +106,11 @@ export async function runCheck({ client, org, repo, settingsRoot, config }) {
   const live = await readLiveState(client, repoRef, { environmentNames: applicableEnvironmentNames(desired.settings, kind) });
   const signals = await readSignals(client, repoRef, { repoKind: kind });
   const rows = compareStates(desired, live, { repoKind: kind, config, signals });
-  return { ok: rows.every((row) => row.result === 'match' || row.result === 'deferred'), rows };
+  for (const [name, section] of Object.entries(live)) {
+    if (section?.readable === true || rows.some((row) => row.section === name)) continue;
+    rows.push({ section: name, key: '(section)', desired: null, live: null, result: 'unreadable' });
+  }
+  return { ok: rows.length > 0 && rows.every(isPassing), rows };
 }
 
 /**
@@ -109,7 +119,7 @@ export async function runCheck({ client, org, repo, settingsRoot, config }) {
  */
 export async function run(ctx) {
   const { ok, rows } = await runCheck(ctx);
-  const failing = rows.length - rows.filter((row) => row.result === 'match' || row.result === 'deferred').length;
-  ctx.log(`check ${ctx.org}/${ctx.repo}: ${rows.length} rows, ${failing === 0 ? 'all match' : `${failing} mismatching`}`);
+  const failing = rows.filter((row) => !isPassing(row)).length;
+  ctx.log(`check ${ctx.org}/${ctx.repo}: ${rows.length} rows, ${failing === 0 ? 'all match or deferred' : `${failing} mismatching`}`);
   return { ok, summary: renderSummary({ org: ctx.org, repo: ctx.repo }, rows, ok) };
 }

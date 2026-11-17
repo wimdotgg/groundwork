@@ -122,7 +122,7 @@ test('runCheck: one differing setting fails and the row lands in the summary tab
     assert.equal(row.result, 'differ');
     const result = await run({ ...opContext(client, root), log: (line) => logged.push(line) });
     assert.match(result.summary, /Result: \*\*fail\*\*/);
-    assert.match(result.summary, /\| repository \| has_issues \| differ \| `true` \| `false` \|/);
+    assert.match(result.summary, /\| `repository` \| `has_issues` \| differ \| `true` \| `false` \|/);
     assert.match(result.summary, /- match: \d+/);
     assert.deepEqual(logged, [`check wimdotgg/groundwork: ${checkResult.rows.length} rows, 1 mismatching`]);
   });
@@ -160,6 +160,22 @@ test('runCheck: an unreadable section fails the check with unreadable rows', asy
   });
 });
 
+test('run: a hostile extra label cannot break the summary table', async () => {
+  await withTempRoot({ ...MATCH_FILES, 'labels.json': { labels: [] } }, async (root) => {
+    const name = 'evil|label\r\n[link](https://evil.example) ![img](https://evil.example/x.png) `tick` '.repeat(8);
+    const liveLabel = { name, color: 'FF0000', description: 'hostile' };
+    const client = createFixtureClient(liveRoutes({ [`GET ${R}/labels?per_page=100`]: ok([liveLabel]) }));
+    const result = await run(opContext(client, root));
+    const row = result.summary.split('\n').find((line) => line.includes('| `labels` |') && line.includes('| extra |'));
+    assert.ok(row, 'extra label row renders');
+    // Same pipeline as renderCell: JSON-encode, strip backticks and CR/LF, truncate with ellipsis, escape pipes.
+    const stripped = JSON.stringify(liveLabel).replaceAll('`', '').replace(/[\r\n]/g, '');
+    const expected = (stripped.length > 120 ? `${stripped.slice(0, 120)}...` : stripped).replaceAll('|', '\\|');
+    assert.ok(row.includes(`\`${expected}\``), 'live cell is sanitized, truncated and pipe-escaped');
+    assert.ok(row.startsWith('| `labels` | ') && row.endsWith(' |'), 'row stays on one line with six cells');
+  });
+});
+
 test('run: live values are JSON-encoded, backtick-stripped, truncated and code-spanned', async () => {
   await withTempRoot({
     ...MATCH_FILES,
@@ -168,9 +184,106 @@ test('run: live values are JSON-encoded, backtick-stripped, truncated and code-s
     const injected = 'a`b';
     const client = createFixtureClient(liveRoutes({ [`GET ${R}`]: ok({ description: injected, name: 'groundwork' }) }));
     const result = await run(opContext(client, root));
-    const cell = result.summary.split('\n').find((line) => line.includes('| repository | description |'));
+    const cell = result.summary.split('\n').find((line) => line.includes('| `repository` | `description` |'));
     const rendered = cell.match(/\| `([^`]*)` \| `([^`]*)` \|$/).slice(1);
-    assert.equal(rendered[0].length, 120);
+    assert.equal(rendered[0], `"${'x'.repeat(119)}...`);
     assert.equal(rendered[1], JSON.stringify(injected).replaceAll('`', ''));
+  });
+});
+
+test('runCheck: empty desired state against an empty repo fails instead of passing vacuously', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'check-test-'));
+  try {
+    const dir = path.join(root, '.github', 'groundwork');
+    await mkdir(path.join(dir, 'rulesets'), { recursive: true });
+    await writeFile(path.join(dir, 'settings.json'), JSON.stringify({ schemaVersion: 1 }));
+    await writeFile(path.join(dir, 'labels.json'), JSON.stringify({ labels: [] }));
+    const client = createFixtureClient(liveRoutes({
+      [`GET ${R}`]: ok({ name: 'groundwork' }),
+      [`GET ${R}/labels?per_page=100`]: ok([]),
+      [`GET ${R}/rulesets?includes_parents=false&per_page=100`]: ok([]),
+    }));
+    const result = await runCheck(opContext(client, root));
+    assert.equal(result.rows.length, 0);
+    assert.equal(result.ok, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('runCheck: an unreadable section with nothing desired still fails the check', async () => {
+  await withTempRoot({ ...MATCH_FILES, 'labels.json': { labels: [] } }, async (root) => {
+    const client = createFixtureClient(liveRoutes({ [`GET ${R}/labels?per_page=100`]: failure(403) }));
+    const result = await runCheck(opContext(client, root));
+    assert.equal(result.ok, false);
+    assert.deepEqual(
+      result.rows.filter((row) => row.section === 'labels'),
+      [{ section: 'labels', key: '(section)', desired: null, live: null, result: 'unreadable' }],
+    );
+  });
+});
+
+test('runCheck: control repo reads only control and all environments and resolves the app-id placeholder', async () => {
+  const settings = {
+    schemaVersion: 1,
+    repository: { has_issues: true },
+    environments: {
+      build: { repos: 'control', can_admins_bypass: false, prevent_self_review: false },
+      staging: { repos: 'projects', can_admins_bypass: true, prevent_self_review: false },
+      publish: { repos: 'all', can_admins_bypass: true, prevent_self_review: true },
+    },
+  };
+  const ruleset = {
+    name: 'main', target: 'branch', enforcement: 'active',
+    conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+    bypass_actors: [{ actor_type: 'Integration', actor_id: '{{app-id:release}}', bypass_mode: 'always' }],
+    rules: [],
+  };
+  const files = {
+    'settings.json': settings,
+    'labels.json': { labels: [] },
+    'rulesets/main.json': ruleset,
+  };
+  await withTempRoot(files, async (root) => {
+    const client = createFixtureClient(liveRoutes({
+      [`GET ${R}/labels?per_page=100`]: ok([]),
+      // The staging (projects) environment gets no fixtures for its sub-requests: any request for
+      // them throws from the fixture client, proving the repos filter kept it name-only.
+      [`GET ${R}/environments?per_page=100`]: ok({
+        environments: [
+          { name: 'build', can_admins_bypass: false, protection_rules: [] },
+          { name: 'staging', can_admins_bypass: true, protection_rules: [] },
+          { name: 'publish', can_admins_bypass: true, protection_rules: [{ type: 'required_reviewers', prevent_self_review: true, reviewers: [] }] },
+        ],
+      }),
+      [`GET ${R}/environments/build/secrets?per_page=100`]: ok({ secrets: [] }),
+      [`GET ${R}/environments/build/variables?per_page=100`]: ok({ variables: [] }),
+      [`GET ${R}/environments/publish/secrets?per_page=100`]: ok({ secrets: [] }),
+      [`GET ${R}/environments/publish/variables?per_page=100`]: ok({ variables: [] }),
+      [`GET ${R}/rulesets/1`]: ok({
+        id: 1, name: 'main', target: 'branch', enforcement: 'active',
+        conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+        bypass_actors: [{ actor_type: 'Integration', actor_id: 9911, bypass_mode: 'always' }],
+        rules: [],
+      }),
+      'GET /apps/wimdotgg-release': ok({ id: 9911 }),
+    }));
+    const result = await runCheck(opContext(client, root));
+    assert.equal(result.ok, true);
+    assert.ok(result.rows.length > 0);
+    assert.ok(result.rows.every((row) => row.result === 'match'));
+    const environmentKeys = result.rows.filter((row) => row.section === 'environments').map((row) => row.key);
+    assert.ok(environmentKeys.some((key) => key.startsWith('build.')));
+    assert.ok(environmentKeys.some((key) => key.startsWith('publish.')));
+    assert.ok(!environmentKeys.some((key) => key.startsWith('staging.')), 'projects environment is not compared on a control repo');
+  });
+});
+
+test('runCheck: a null repo throws SettingsError before any reading', async () => {
+  await withTempRoot(MATCH_FILES, async (root) => {
+    await assert.rejects(
+      runCheck({ ...opContext(createFixtureClient(liveRoutes()), root), repo: null }),
+      /^SettingsError: check: repo is required$/,
+    );
   });
 });
