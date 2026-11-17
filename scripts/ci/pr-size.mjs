@@ -30,6 +30,7 @@ export async function collect(ctx) {
   if (ctx.eventName === MERGE_GROUP_EVENT) return { eventName: ctx.eventName, author: null, validLabels: [], files: [] };
   if (ctx.eventName !== PULL_REQUEST_EVENT) throw new Error(`pr-size does not handle the ${ctx.eventName} event`);
   const pullRequest = ctx.payload.pull_request;
+  if (!Number.isInteger(pullRequest.changed_files)) throw new Error('pull_request.changed_files is missing from the event payload');
   const params = { ...ctx.repo, number: pullRequest.number };
   const rawFiles = await ctx.client.paginate(apiPath(FILES_PATH, params));
   // GitHub lists at most 3000 files per PR; a short list would undercount and let an oversized PR pass.
