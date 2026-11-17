@@ -1,0 +1,8 @@
+# The owner's global ignore excludes .claude/skills/; re-include the groundwork skills only.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/groundwork-*/
+.claude/worktrees/
+.claude/settings.local.json
+.artifacts/
+node_modules/
