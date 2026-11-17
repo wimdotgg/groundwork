@@ -1,0 +1,1069 @@
+[
+  {
+    "description": "valid Feature without the label -> still clears needs-format",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "valid Feature carrying needs-format -> remove the label",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": [
+          "needs-format"
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "invalid body -> add label and upsert comment with errors",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Missing section ## Risk`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "invalid body already labelled -> still add label and upsert",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": [
+          "needs-format"
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Missing section ## Risk`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "no type -> add label and upsert comment",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": null,
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Issue type is missing`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "web-form ### body with _No response_ -> valid",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "### Outcome\nDo it.\n\n### Serves\nE1\n\n### Scope\nSmall.\n\n### Touches\nscripts/\n\n### Acceptance criteria\n- [ ] AC1: works\n\n### Verification plan\nRun tests.\n\n### Risk\nLow.\n\n### Context\n_No response_\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "CRLF body -> valid",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\r\nDo it.\r\n\r\n## Serves\r\nE1\r\n\r\n## Scope\r\nSmall.\r\n\r\n## Touches\r\nscripts/\r\n\r\n## Acceptance criteria\r\n- [ ] AC1: works\r\n\r\n## Verification plan\r\nRun tests.\r\n\r\n## Risk\r\nLow.\r\n\r\n## Context\r\nNone.\r\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "valid now, marker comment exists and label present -> remove label and upsert No format errors.",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": true,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": [
+          "needs-format"
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "No format errors."
+        }
+      ]
+    }
+  },
+  {
+    "description": "valid, marker comment exists, no label -> clear and upsert",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": true,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "No format errors."
+        }
+      ]
+    }
+  },
+  {
+    "description": "github-actions[bot] author -> skip",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "github-actions[bot]",
+        "type": null,
+        "body": "",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "closed action -> skip",
+    "facts": {
+      "eventName": "issues",
+      "action": "closed",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "labeled action -> skip",
+    "facts": {
+      "eventName": "issues",
+      "action": "labeled",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "non-issues event -> skip",
+    "facts": {
+      "eventName": "pull_request",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "edited action is validated",
+    "facts": {
+      "eventName": "issues",
+      "action": "edited",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Missing section ## Risk`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "reopened action is validated",
+    "facts": {
+      "eventName": "issues",
+      "action": "reopened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Missing section ## Risk`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "typed action is validated",
+    "facts": {
+      "eventName": "issues",
+      "action": "typed",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Missing section ## Risk`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "untyped action is validated",
+    "facts": {
+      "eventName": "issues",
+      "action": "untyped",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Missing section ## Risk`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end-to-end: invalid body, comments over two pages without a marker -> add label and upsert",
+    "eventName": "issues",
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "number": 5,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "type": {
+          "name": "Feature"
+        },
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues/5/comments?per_page=100": {
+        "status": 200,
+        "headers": {
+          "link": "<https://api.github.com/repos/wimdotgg/groundwork/issues/5/comments?page=2&per_page=100>; rel=\"next\""
+        },
+        "data": [
+          {
+            "id": 2,
+            "user": {
+              "login": "wianvdm"
+            },
+            "body": "hello"
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/5/comments?page=2&per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "id": 2,
+            "user": {
+              "login": "wianvdm"
+            },
+            "body": "hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Missing section ## Risk`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end-to-end: valid body, marker comment on page two -> remove label and upsert No format errors.",
+    "eventName": "issues",
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "number": 5,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "type": {
+          "name": "Feature"
+        },
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": [
+          {
+            "name": "needs-format"
+          }
+        ]
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues/5/comments?per_page=100": {
+        "status": 200,
+        "headers": {
+          "link": "<https://api.github.com/repos/wimdotgg/groundwork/issues/5/comments?page=2&per_page=100>; rel=\"next\""
+        },
+        "data": [
+          {
+            "id": 2,
+            "user": {
+              "login": "wianvdm"
+            },
+            "body": "hello"
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/5/comments?page=2&per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "id": 1,
+            "user": {
+              "login": "github-actions[bot]"
+            },
+            "body": "Issue format errors:\n\n- x\n\n<!-- groundwork:issue-format -->\n"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "No format errors."
+        }
+      ]
+    }
+  },
+  {
+    "description": "end-to-end: marker text in a human comment does not count",
+    "eventName": "issues",
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "number": 5,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "type": {
+          "name": "Feature"
+        },
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues/5/comments?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "id": 3,
+            "user": {
+              "login": "wianvdm"
+            },
+            "body": "<!-- groundwork:issue-format -->"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end-to-end: bot-authored issue skips without reading comments",
+    "eventName": "issues",
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "number": 5,
+        "user": {
+          "login": "github-actions[bot]"
+        },
+        "type": null,
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "end-to-end: labeled action skips without reading comments",
+    "eventName": "issues",
+    "payload": {
+      "action": "labeled",
+      "issue": {
+        "number": 5,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "type": {
+          "name": "Feature"
+        },
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "end-to-end: issue without a type -> add label and upsert",
+    "eventName": "issues",
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "number": 5,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "type": null,
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues/5/comments?per_page=100": {
+        "status": 200,
+        "data": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Issue type is missing`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "hostile Serves text is quoted in a code span",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\n@org/everyone <img src=x> [click](http://evil.example) #1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Serves lists only E<n> IDs; found @org/everyone, <img, src=x>, [click](http://evil.example), #1`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "backticks in quoted text become apostrophes",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1 `x`\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Serves lists only E<n> IDs; found 'x'`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "duplicate criterion IDs -> add label and upsert",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: a\n- [ ] AC1: b\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Acceptance criteria: duplicate criterion AC1`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "unknown type Task -> add label and upsert",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Task",
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Unknown issue type Task`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "valid Epic -> clear",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Epic",
+        "body": "## Goal\nx\n\n## Success criteria\n- [ ] E1: done\n\n## Constraints\nx\n\n## Plan\nx\n\n## Decisions\nx\n\n## Open questions\nx\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "valid Spike -> clear",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Spike",
+        "body": "## Question\nx\n\n## Serves\nE1\n\n## Timebox\nx\n\n## Output\nx\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "Bug with empty Serves is valid",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Bug",
+        "body": "## Outcome\nDo it.\n\n## Serves\n\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n\n## Reproduction\nSteps.\n\n## Expected vs actual\nDiffers.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "mixed-case github-actions[bot] author -> skip",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "GitHub-Actions[bot]",
+        "type": null,
+        "body": "",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "skip",
+      "actions": []
+    }
+  },
+  {
+    "description": "long error text is truncated to 200 characters",
+    "facts": {
+      "eventName": "issues",
+      "action": "opened",
+      "markerCommentExists": false,
+      "issue": {
+        "number": 5,
+        "author": "wianvdm-agent",
+        "type": "Feature",
+        "body": "## Outcome\nDo it.\n\n## Serves\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Serves lists only E<n> IDs; found xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end-to-end: payload label Needs-Format and valid body -> clear",
+    "eventName": "issues",
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "number": 5,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "type": {
+          "name": "Feature"
+        },
+        "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
+        "labels": [
+          {
+            "name": "Needs-Format"
+          }
+        ]
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues/5/comments?per_page=100": {
+        "status": 200,
+        "data": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 5,
+          "label": "needs-format"
+        }
+      ]
+    }
+  },
+  {
+    "description": "end-to-end: null body -> invalid, no throw",
+    "eventName": "issues",
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "number": 5,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "type": {
+          "name": "Feature"
+        },
+        "body": null,
+        "labels": []
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues/5/comments?per_page=100": {
+        "status": 200,
+        "data": []
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "add-label",
+          "number": 5,
+          "label": "needs-format"
+        },
+        {
+          "kind": "upsert-comment",
+          "number": 5,
+          "marker": "issue-format",
+          "body": "Issue format errors:\n\n- `Missing section ## Outcome`\n- `Missing section ## Serves`\n- `Missing section ## Scope`\n- `Missing section ## Touches`\n- `Missing section ## Acceptance criteria`\n- `Missing section ## Verification plan`\n- `Missing section ## Risk`\n- `Missing section ## Context`"
+        }
+      ]
+    }
+  },
+  {
+    "description": "payload without issue.number throws",
+    "eventName": "issues",
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "user": {
+          "login": "x"
+        }
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "no issue.number"
+    }
+  }
+]
