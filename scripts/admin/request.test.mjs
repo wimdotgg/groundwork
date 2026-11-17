@@ -58,6 +58,8 @@ test('parseArgs rejects bad input before any call', () => {
     ['create-issue-types', '--repo', 'demo'],
     ['check', '--repo', 'a/b'],
     ['check', '--repo', ''],
+    ['check', '--repo', '.'],
+    ['check', '--repo', '..'],
     ['check', '--repo', 'demo', '--bogus', 'x'],
     ['check', '--repo'],
     ['check', '--repo', 'demo', '--repo', 'again'],
@@ -154,6 +156,7 @@ test('probe sends the exact commit and ref bodies, no author or committer', asyn
     `GET /repos/wimdotgg/demo/git/commits/${MAIN_SHA}`,
     'POST /repos/wimdotgg/demo/git/commits',
     'PATCH /repos/wimdotgg/demo/git/refs/heads/main',
+    'GET /repos/wimdotgg/demo/git/ref/heads/main',
   ]);
   assert.deepEqual(calls[2].body, { message: 'chore(check): probe', tree: TREE_SHA, parents: [MAIN_SHA] });
   assert.deepEqual(calls[3].body, { sha: PROBE_SHA, force: false });
@@ -176,7 +179,18 @@ test('probe --json prints the verdict as an object', async () => {
   });
 });
 
-test('probe treats other failures as errors, not as a verdict', async () => {
-  const { done } = run(['probe', '--repo', 'demo'], { ...PROBE_KEYS, [PATCH_KEY]: { status: 500, data: {} } });
-  await assert.rejects(done, { name: 'GitHubError', status: 500 });
+for (const status of [403, 404, 500]) {
+  test(`probe treats ${status} as an error, not as a verdict`, async () => {
+    const { done } = run(['probe', '--repo', 'demo'], { ...PROBE_KEYS, [PATCH_KEY]: { status, data: {} } });
+    await assert.rejects(done, { name: 'GitHubError', status });
+  });
+}
+
+test('probe 422 with main moved since the first read is inconclusive, never a verdict', async () => {
+  const movedMain = [
+    { status: 200, data: { object: { sha: MAIN_SHA } } },
+    { status: 200, data: { object: { sha: OTHER_SHA } } },
+  ];
+  const { done } = run(['probe', '--repo', 'demo'], { ...PROBE_KEYS, [REF_KEY]: movedMain, [PATCH_KEY]: { status: 422, data: {} } });
+  await assert.rejects(done, { name: 'GitHubError', message: /inconclusive: main moved during the probe; rerun/ });
 });
