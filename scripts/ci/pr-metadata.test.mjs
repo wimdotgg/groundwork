@@ -47,6 +47,11 @@ const UPDATE_TYPE_CASES = [
   ['prerelease suffix', 'Bump a from 1.2.3-beta.1 to 1.2.3', '', 'patch'],
   ['pairs that are not versions are ignored', 'Bump a from 1.0.0 to 1.1.0', 'migrate from express to fastify', 'minor'],
   ['no version pair is unknown and fails closed', 'Bump a', 'no pairs here', 'major'],
+  ['link syntax around versions', 'Bump a', 'Updates [a](https://x.test) from [1.0.0](https://y.test) to [1.2.0](https://z.test)', 'minor'],
+  ['From/To table rows', 'Bump the group', '| Package | From | To |\n| --- | --- | --- |\n| [a](https://x.test) | `1.0.0` | `1.0.1` |\n| b | `2.0.0` | `3.0.0` |', 'major'],
+  ['table rows without a From/To header are not read', 'Bump a from 1.0.0 to 1.0.1', '| a | 1.0.0 | 9.0.0 |', 'patch'],
+  ['a digit-led pair that does not parse is major', 'Bump a from 1.0.0 to 1.0.1', 'from 2fa to 3ds', 'major'],
+  ['HTML tags around versions', 'Bump a', 'from <code>1.0.0</code> to <code>1.1.0</code>', 'minor'],
 ];
 
 for (const [description, title, body, expected] of UPDATE_TYPE_CASES) {

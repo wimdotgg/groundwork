@@ -92,6 +92,14 @@ test('validateIssueBody passes for each type', () => {
   }
 });
 
+test('normalizeIssueBody promotes only required ### headings, and only when no ## required heading exists', () => {
+  const form = '### Outcome\n\nDone.\n\n### Notes\n\ntext\n';
+  assert.equal(model.normalizeIssueBody('Feature', form), '## Outcome\n\nDone.\n\n### Notes\n\ntext\n');
+  const mixed = '## Outcome\n\nDone.\n\n### Scope\n\ntext\n';
+  assert.equal(model.normalizeIssueBody('Feature', mixed), mixed);
+  assert.equal(model.normalizeIssueBody('Feature', null), '');
+});
+
 test('validateIssueBody rejects missing or unknown type', () => {
   assert.equal(validateIssueBody({ type: null, body: bodyFor('Feature') }).ok, false);
   assert.equal(validateIssueBody({ type: 'Story', body: '' }).ok, false);
