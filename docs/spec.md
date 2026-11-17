@@ -1,6 +1,6 @@
 # groundwork: specification v1
 
-Status: agreed design; Phase 0 probes done (section 19); Phase 1 in progress. Date: 2026-11-16. Owner: `wianvdm`. Organization: `wimdotgg`.
+Status: agreed design; Phase 0 probes done (section 19); Phase 2 in progress. Date: 2026-11-16. Owner: `wianvdm`. Organization: `wimdotgg`.
 
 `groundwork` is three things in one public repository:
 
@@ -45,10 +45,10 @@ Its purpose: a solo human orchestrates, AI agents do the work (plan, implement, 
 |---|---|---|---|
 | `wianvdm` | Your user | Org owner | **None.** You act in the browser or GitHub mobile app. Bootstrap and admin work go through tier 2 (section 12). |
 | `wianvdm-agent` (user id 357302967) | Machine user (GitHub ToS allows one free machine account per person) | Org member, Write on `groundwork` and every project repo via team `agents` | Fine-grained PAT, stored by `gh` and Git Credential Manager. |
-| `wimdotgg-release` | GitHub App (not created yet) | Installed on all org repos | None. Key only in each repo's `release` environment. |
+| `wimdotgg-release` | GitHub App | Installed on all org repos | None. Key only in each repo's `release` environment. |
 | `wimdotgg-admin` | GitHub App (App ID 5782869, client ID `Iv23lipUuaiDCWGAKcYI`) | Installed on all org repos | None. Key only in the control repo's `admin` environment. |
 
-App slugs live only in `.github/groundwork/config.json` (`apps.admin`, `apps.release`); scripts and rulesets never hardcode them. Bot logins are `<slug>[bot]`. Both Apps must be installed with "All repositories" so new project repos are covered without a manual step.
+App slugs live only in `.github/groundwork/config.json` (`apps.admin`, `apps.release`); scripts and rulesets never hardcode them. Bot logins are `<slug>[bot]`. Both Apps are owned by the organization (created at `https://github.com/organizations/<org>/settings/apps/new`, "Only on this account" = the org) and installed on the org with "All repositories" so new project repos are covered without a manual step. `GET /apps/{slug}` for a private org App returns 404 to the agent PAT.
 GitHub reports the owner login as `WianVDM`. Logins are compared case-insensitively everywhere; `config.json` stores them lower-case.
 
 ### 2.2 Agent PAT (fine-grained, resource owner = the org, repository access "All repositories")
@@ -143,7 +143,7 @@ scripts/
           fixtures/<script>.json   fixture cases and expected results for the ci tests
   lib/    github.mjs config.mjs trust.mjs markdown.mjs issue-model.mjs settings.mjs ci.mjs   (13.1)
   kit-update.mjs
-  groundwork/                     [control] bootstrap.mjs check.mjs selftest.mjs app-token.mjs
+  groundwork/                     [control] bootstrap.mjs check.mjs selftest.mjs app-token.mjs apply-settings.mjs create-issue-types.mjs admin-run.mjs
     stubs/ verify verify.cmd      [control] the project stub bootstrap writes to scripts/verify*; scripts/verify.cmd and the stub's verify.cmd are the same shim and need Git for Windows sh
   **/*.test.mjs                   unit tests beside each script (`node --test "scripts/**/*.test.mjs"`; a bare directory fails on Node 24)
 .claude/
@@ -467,7 +467,7 @@ Code scanning results are required through the ruleset's `code_scanning` rule (b
 ### 8.2 `ci.yml`
 
 Triggers: `pull_request` (opened, synchronize, reopened, ready_for_review), `merge_group`, `push` to `main`.
-Concurrency: `ci-${{ github.event.pull_request.number || github.ref }}`, `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, so `merge_group` and `push` runs are never cancelled.
+Concurrency: `ci-${{ github.event.pull_request.number || github.sha }}`, `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, so `merge_group` and `push` runs are never cancelled. Keyed by SHA, not ref: GitHub keeps one pending run per group and cancels older pending ones, so a shared `main` group could leave a push range unscanned by gitleaks.
 
 | Job | Calls | Does |
 |---|---|---|
@@ -475,7 +475,7 @@ Concurrency: `ci-${{ github.event.pull_request.number || github.ref }}`, `cancel
 | `security` | `reusable-security.yml@<tag>` | actionlint and zizmor on workflows; gitleaks (`--ignore-gitleaks-allow`) over the diff (PR, merge group) or history increment (push), failing on an unreachable or empty range or a partial scan; osv-scanner on lockfiles, failing on any severity with exceptions only through `osv-scanner.toml` (exit 128 passes only when no lockfile failed to parse); `actions/dependency-review-action` on `pull_request` only (fail on high, runtime and development scopes). |
 | `test-integrity` | local script | PR only (pass-through on `merge_group` and `push`). Fails when the diff deletes or skips tests, lowers a coverage or lint threshold, or adds a suppression (`eslint-disable`, `@ts-ignore`, `# noqa`, `.skip`, `xit`, and patterns from `config.json`), unless a valid `integrity-exception` is present (section 5). Labels are read live from the API; after you apply the label the agent re-runs the job. |
 | `scripts` | local steps | `node --test "scripts/**/*.test.mjs"` (a bare directory fails on Node 24). Runs the kit's unit tests in every repo; control-only tests live under `scripts/groundwork/` and leave with that directory at bootstrap. |
-| `settings-plan` | `scripts/ci/settings-plan.mjs` | PRs touching `.github/groundwork/**` only (step-level path check; otherwise exits 0). Writes desired vs. live settings to the job summary (tier 1, section 12); the PR's settings files are read as data from a second checkout of the PR head (`env.PR_ROOT`), never executed. The PR `GITHUB_TOKEN` reads rulesets, environments and labels; Actions settings return 403, so they are shown as a file diff against the base (V4). Fails only when a settings file is invalid. |
+| `settings-plan` | `scripts/ci/settings-plan.mjs` | PRs touching `.github/groundwork/**` only (the validator returns `skip` when the PR changes no file under `.github/groundwork/`). Writes desired vs. live settings to the job summary (tier 1, section 12); the PR's settings files are read as data from a second checkout of the PR head (`env.PR_ROOT`), never executed. The PR `GITHUB_TOKEN` reads rulesets, environments and labels; Actions settings return 403, so they are shown as a file diff against the base (V4). Fails only when a settings file is invalid. |
 | `Check` | `scripts/ci/check-results.mjs` | `needs: [verify, security, test-integrity, scripts, settings-plan]`, `if: always()`. Reads `toJSON(needs)` from `env`. Fails if any needed job has a result other than `success`. Stays in the caller so the required name is stable. |
 
 `test-integrity`, `settings-plan` and `Check` check out their validator scripts, `scripts/lib/` and `.github/groundwork/config.json` from the **base** commit (`github.event.pull_request.base.sha`), like `PR metadata` and `pr-size` (8.3), so a PR cannot change the rules it is judged by; on `merge_group` and `push` they use the event's own commit. The workflow YAML comes from the PR and changes to it need your CODEOWNERS approval.
@@ -486,7 +486,7 @@ A commit message containing `[skip ci]` suppresses `pull_request` and `push` run
 
 Triggers: `pull_request` (opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled), `merge_group`.
 Both jobs run local steps (no reusable workflow) so the check names are exactly `PR metadata` and `pr-size`. Concurrency per PR number, cancel in progress.
-The validator scripts and `.github/groundwork/config.json` are checked out from the **base** commit (`github.event.pull_request.base.sha`) so a PR cannot change the rules it is judged by. (The workflow YAML itself comes from the PR; changes to it require your CODEOWNERS approval.) Permissions: `contents: read`, `pull-requests: read`, `issues: read`, `actions: read`. The jobs report through exit code and job summary and never comment, so they work on fork and Dependabot PRs.
+The validator scripts and `.github/groundwork/config.json` are checked out from the **base** commit (`github.event.pull_request.base.sha`) so a PR cannot change the rules it is judged by. (The workflow YAML itself comes from the PR; changes to it require your CODEOWNERS approval.) Permissions: `contents: read`, `pull-requests: read`, `issues: read`. Arrival time comes from the repository activity API, so no workflow-run permission is needed. The jobs report through exit code and job summary and never comment, so they work on fork and Dependabot PRs.
 
 `PR metadata` fails unless:
 - Exactly one closing reference `Closes #N` (outside HTML comments and code fences), to an open issue in this repo.
@@ -742,11 +742,13 @@ Jobs:
 |---|---|---|---|
 | `bootstrap` | step 1: `groundwork` (fallback: installation-wide for the generate call only, revoked at once; 2.4); step 2: `target_repo` | step 1: Administration write, Contents read. Step 2: Administration, Contents, Workflows, Environments, Variables, Issues write; Members, Actions read | 14.2 pass 1, then `check` |
 | `bootstrap-pass2` | `target_repo` | Administration, Variables write; Contents, Environments, Actions, Issues, Members read | 14.2 step 4, then `check` |
-| `apply-settings` | `target_repo` | Administration, Environments, Variables, Issues write; Contents, Members, Actions read | Syncs `settings.json`, `labels.json`, environments and rulesets from `ref`, then `check`. On `groundwork` it also writes the `release` environment. |
+| `apply-settings` | `target_repo` | Administration, Environments, Variables, Issues write; Contents, Members, Actions read | Syncs `settings.json`, `labels.json`, environments and rulesets from `ref`, then `check`. On `groundwork` it also writes the `release` environment. On every target it writes the `release` environment secret `RELEASE_APP_KEY` and variable `RELEASE_APP_CLIENT_ID`, and deletes live repository-level rulesets the settings do not declare. Refuses before any write when no `main` ruleset is desired, or when the desired `main` lacks `code_scanning` while pass 2 has run or its state is unreadable. |
 | `check` | `target_repo` | Administration, Contents, Environments, Variables, Actions, Issues, Members read | Read-only comparison (section 13); stays a standalone op for drift checks |
-| `create-issue-types` | none (org) | Issue types write | Creates the five types, deletes default types not in the list; idempotent |
+| `create-issue-types` | none (org) | Issue types write | Creates the five types, renames case variants, deletes only GitHub default types (Task); other types outside the five are left alone and fail the run for the owner to review; idempotent. Permission key `issue_types` (V7: the GitHub API names it in the `X-Accepted-GitHub-Permissions` header; mint body still to confirm live) |
 | `script` | `target_repo` | the script's exported `permissions` | Runs `admin-ops/<name>.mjs` |
 | `selftest` | step 1 as `bootstrap`; then the throwaway repo | as `bootstrap` | Bootstraps `selftest-<run id>`, runs `check` and the section 19 probes that need admin rights, archives the repo. Deleting it is tier 3. |
+
+Ops available now: `apply-settings`, `check` and `create-issue-types`; `bootstrap`, `bootstrap-pass2`, `script` and `selftest` arrive in Phase 4.
 
 Labels are written through the Issues permission. The permission keys for the token request body come from the GitHub App permissions reference (V7 covers the Issue types key).
 
@@ -770,7 +772,7 @@ Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent mac
 | `agent/plan-lint.mjs` | epic number, `--close` | Lint report; exit non-zero on failure |
 | `agent/review-queue.mjs` | | PRs ready for review without a review from another session |
 | `human/inbox.mjs` | | Proposed epics, `needs-decision`, protected-path PRs awaiting you, release PR, pending `production` and `admin` approvals, alert issues, orphaned claims. Run by an agent with the PAT; it prints links you open in the browser. |
-| `admin/request.mjs` | `op`, `--repo`, `--ref`, `--script`, `--args` | Dispatches `admin-run` on `main` of `groundwork` (org and control repo name from `config.json`); prints the run URL to approve. `request.mjs probe --repo <r>` dispatches nothing: it runs the push probe below locally with the PAT, no approval. |
+| `admin/request.mjs` | `op` (`apply-settings`, `check`, `create-issue-types`, `probe`), `--repo`, `--ref` (`apply-settings`; defaults to the target `main` head), `--args` | Dispatches `admin-run` on `main` of `groundwork` (org and control repo name from `config.json`); prints the run URL to approve. `request.mjs probe --repo <r>` dispatches nothing: it runs the push probe below locally with the PAT, no approval. |
 | `ci/*.mjs` | event payload path, env | CI validators (section 8); contracts in 13.1 |
 | `lib/*.mjs` | | Shared modules; contracts in 13.1 |
 | `kit-update.mjs` | `<tag>` | Copies scripts, templates and caller workflows from that groundwork tag onto a branch, rewrites the reusable-workflow tag and `kit-version.txt`, and opens a PR. Never touches `[project]` paths or `config.json` values the project changed. The PR goes through a Chore issue like any other. |
@@ -778,6 +780,7 @@ Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent mac
 | `groundwork/check.mjs` | repo | Pass/fail table of live vs. expected settings, rulesets, labels, environments (reviewers, `can_admins_bypass`, ref policies, secret and variable names), repository variables, team access, Actions settings. Pass-2 items are `deferred` before pass 2 and fail closed after it (10). Reads only; token reads in 12.1. |
 | `groundwork/selftest.mjs` | | 12.1 |
 | `groundwork/app-token.mjs` | client ID, key, repositories, permissions | Installation token (2.4) |
+| `groundwork/apply-settings.mjs`, `groundwork/create-issue-types.mjs`, `groundwork/admin-run.mjs` | | Admin ops (12.1); `admin-run.mjs` is the dispatcher |
 
 Push probe (the agent identity is the one the rule must stop, so it runs on the agent machine with the PAT, not in `admin-run`): create a dangling empty commit on top of `main` with `POST /git/commits`, then `PATCH /git/refs/heads/main` to it without `force`. Expected: rejected with a rule violation (422 or 409). An accepted update means protection is broken; `request.mjs` reports failure and leaves the empty commit `chore(check): probe` on `main` as evidence. Tag rules are checked by ruleset comparison only: a probe tag could never be deleted (9.3).
 
@@ -791,6 +794,15 @@ Conventions for every module under `scripts/lib/` and `scripts/ci/`:
 - Library modules never call `process.exit`, never write to stdout or stderr, and read the environment only through an `env` argument. They throw; every thrown error is a `GitHubError`, `ConfigError` or `SettingsError` with a one-line `message`. Content problems (an invalid body, a missing heading) are return values, not throws.
 - Logins are compared only through `trust.sameLogin`. URL path segments built from caller input go through `github.apiPath`, never string concatenation.
 - Internal dependencies (no cycles): `github`, `config`, `markdown` depend on nothing internal; `trust` → `config`; `issue-model` → `github`, `markdown`, `trust`; `settings` → `github`, `config`, `trust` (`resolveActor` for reviewer `owner`); `ci` → `github`, `config`, `trust`. Validators import `ci` plus what their row names.
+
+#### Admin op modules
+
+Each module under `scripts/groundwork` exports `OP`, `PERMISSIONS`, `TOKEN_SCOPE` (`target` or `org`), `validateArgs(args) -> string[]` and `run(ctx) -> { ok, summary }` with `ctx { client, token, org, repo, settingsRoot, config, env, log }`. `check` also exports `runCheck`, which fails on zero rows and adds an `unreadable` row per unreadable live section.
+
+`app-token.mjs` exports:
+- `createAppJwt({ clientId, privateKey, now? })`: RS256 JWT, RSA keys only.
+- `mintInstallationToken({ client, org, repositories: string[]|"all", permissions, env? })`: the granted scope must equal the requested one except one extra `metadata: read`; any mismatch revokes the token and throws; a failed revoke is reported.
+- `revokeInstallationToken(client)`.
 
 #### `lib/github.mjs`: one client over `gh api`, `fetch` and fixtures
 
@@ -994,7 +1006,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 1. Create the free organization; enable 2FA requirement and the settings in 2.5.
 2. Transfer `wianvdm/groundwork` into the organization (done: `wimdotgg/groundwork`); mark it as a template repository. Its `main` must already contain `admin-run.yml`: nothing below works before that.
 3. Create `wianvdm-agent`, invite it to the org, add to team `agents`, give the team Write on `groundwork`, create its fine-grained PAT (2.2), approve it, and log `gh` and git in with it on the agent machine. Remove your own `gh` and Git Credential Manager login for github.com from that machine.
-4. Create `wimdotgg-admin` (done) and `wimdotgg-release` from their manifests (one click each via `docs/setup.md` links), install both on all repositories. The slugs are recorded in `config.json`.
+4. Create `wimdotgg-admin` and `wimdotgg-release` as organization-owned Apps (no manifests; `docs/setup.md` gives the manual form) and install both on the org with All repositories. The slugs are recorded in `config.json`.
 5. In `groundwork`, create environment `admin` (reviewer you, deployment branch `main`, selected-branches policy, "Allow administrators to bypass" off) and store both App keys and client IDs there.
 6. Approve `admin-run op=create-issue-types`, then `admin-run op=apply-settings --repo groundwork --ref <main sha>`. The second run creates groundwork's `release` environment with its key, sets `GROUNDWORK_READY`, applies the rulesets and ends with `check`. From here `main` is protected; the agent runs `request.mjs probe --repo groundwork` to confirm.
 7. The agent dispatches `release-please.yml` once (or any PR merges); you merge the resulting release PR so `v0.1.0` exists. Bootstrap refuses to run without a release tag, because projects pin reusable workflows to one.
@@ -1086,7 +1098,7 @@ Phase 0 ran on `wimdotgg/probe` (archived; links stay valid). Result values: ver
 | V4 | Rulesets are readable with Metadata read (documented); environments and Actions settings are readable enough for tier 1 plans with the PR `GITHUB_TOKEN` | API test from a PR run | Redesigned: rulesets and environments readable; `actions/permissions` returns 403, so `settings-plan` shows Actions settings as a file diff (8.2). |
 | V5 | A fine-grained PAT for a machine user, resource owner the org, can hold Workflows and Actions write; it can set issue types, sub-issues and dependencies with Issues write; check runs are readable without a Checks permission | Create the PAT, run `claim` and the planner once | Verified: the agent PAT set an issue type, `--parent`, `--blocked-by`, read check runs and enqueued a PR. |
 | V6 | Org-admin `pull_request` bypass lets you merge your own protected-path PR without lifting rules for agents | Throwaway repo test | Verified: [probe#6](https://github.com/wimdotgg/probe/pull/6) merged by the owner through the bypass; the bypass also skips the merge queue (9.1). |
-| V7 | A `wimdotgg-admin` installation token with repository Administration write and Contents read (no organization Administration) can generate a repo from the template while members cannot create repositories; whether that token may be repository-scoped (to `groundwork`) or must be installation-wide; the request-body key for the Issue types organization permission | `selftest`, first bootstrap | Pending (Phase 2). Decides which 2.4 token variant ships. The tier 2 elevation path itself is verified: PAT 403 on admin calls, owner approval gate, reject stops the run, non-`main` dispatch refused, no self-approval, minted token cannot reach another repo. |
+| V7 | A `wimdotgg-admin` installation token with repository Administration write and Contents read (no organization Administration) can generate a repo from the template while members cannot create repositories; whether that token may be repository-scoped (to `groundwork`) or must be installation-wide; the request-body key for the Issue types organization permission | `selftest`, first bootstrap | Partial (Phase 2): the permission key `issue_types` is confirmed by the API `X-Accepted-GitHub-Permissions` header; the generate call is still pending Phase 4. Decides which 2.4 token variant ships. The tier 2 elevation path itself is verified: PAT 403 on admin calls, owner approval gate, reject stops the run, non-`main` dispatch refused, no self-approval, minted token cannot reach another repo. |
 | V8 | Check names: caller-level jobs report under their own name (`Check`, `PR metadata`, `pr-size`); jobs calling reusable workflows report as `<caller job> / <called job>` | First CI run in `groundwork` | Verified on `probe`: `Check`, `PR metadata`, `pr-size`; a reusable call reports as `called / inner`. |
 | V9 | `issues: labeled` and `pull_request_target: labeled` events triggered by the agent PAT start `protected-labels`; `github.event.sender.login` is the labeling actor | Label test | Verified: both events fired for labels applied by the agent; sender login printed. |
 | V10 | The `code_scanning` ruleset rule works with the merge queue (CodeQL default setup analyses `merge_group` refs or the rule is satisfied by the PR analysis). Not found in the docs. If it blocks the queue, drop the rule and keep CodeQL alerts as advisory | Throwaway repo with pass 2 applied | Verified: rule `CodeQL` `high_or_higher`/`errors` with the merge queue; [probe#7](https://github.com/wimdotgg/probe/pull/7) merged through the queue. No analysis runs for the queue ref; the PR analysis satisfies the rule. |
@@ -1174,3 +1186,15 @@ Folded in after Phase 0 (section 19 has the evidence) and the implementation-pla
 20. 4.4, 6.3, 6.4, 9.1, 10, 13, 13.1, 14.2: a ref with neither PR nor pointer comment expires 15 minutes after the claim commit's server-stamped committer date (`claimCommitAt`; `claim.mjs` never sends dates; the only trusted commit date), not at once. Pass-2 items fail closed once the live `main` ruleset has the `code_scanning` rule (`pass2Ran`): default setup not `configured`, or `DEPLOY_ENABLED` unset while `deploy` is not `none`, is a mismatch; before that they stay `deferred`.
 21. 3, 4.3, 8.2, 9.4, 13.1, 15: Phase 1 corrections from the implemented code. Test command is `node --test "scripts/**/*.test.mjs"` (Node 24); markdown and github module behaviour (`parseStateSection` input, `---` section end, closing-ref URLs and code spans, CRLF, `request` path rule, fixture key normalisation); web-form issue bodies (`###` headings, `_No response_`, optional Bug `Serves`); scanner strictness in `security`; scanner configs in CODEOWNERS; `.gitattributes`, ignored `.claude/worktrees/` and the shared verify shim; Stop and PreCompact hooks deferred to Phase 3.
 22. 4.4, 13.1: contract changes from implementation review. Epic with valid `accepted` is `blocked` or `ready`, `next` skips Epics, orphaned needs an open issue; `loadIssueFacts` PR selection, `isInMergeQueue`, cross-repo or missing parent throws, `type` is `string|null`; `readLiveState` `environmentNames` and 404/403 handling, `pass2Ran` branch-target rule, raw `can_admins_bypass`; `ci.mjs` exit 2 cases and required env; validator fixture `warningsInclude` and `throws`, `protected-labels` nullable facts, stricter `pr-size` and `test-integrity`; `testIntegrity` patterns in `config.json` now cover fixtures, `{ skip:`, `{ todo:` and `.todo(`.
+
+### 2026-11-17: Phase 2 corrections
+
+1. Header: status is Phase 2 in progress.
+2. 2.1, 2.3, 2.4, 14.1: `wimdotgg-release` exists; both Apps are org-owned with no manifests; private org App slug lookup returns 404 to the agent PAT.
+3. 3: `scripts/groundwork` lists `apply-settings.mjs`, `create-issue-types.mjs`, `admin-run.mjs`.
+4. 8.2: `settings-plan` row describes the validator's `skip`.
+5. 8.2: `ci.yml` concurrency keyed by SHA for pushes, so no push range is dropped (Phase 1 review R4).
+6. 8.3: `actions: read` removed from `PR metadata`; no script reads workflow runs.
+7. 12.1: available ops, `apply-settings` and `create-issue-types` behaviour, `issue_types` key.
+8. 13, 13.1: `request.mjs` ops; admin op module contract; `app-token.mjs` API.
+9. 19: V7 recorded as partial.
