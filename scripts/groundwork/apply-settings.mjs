@@ -284,27 +284,40 @@ function withoutDeferredRules(ruleset, signals) {
   return { ...ruleset, rules: ruleset.rules.filter((rule) => rule.type !== CODE_SCANNING_RULE) };
 }
 
-const hasCodeScanning = (ruleset) => ruleset?.rules.some((rule) => rule.type === CODE_SCANNING_RULE) === true;
+const hasCodeScanning = (ruleset) => ruleset.rules.some((rule) => rule.type === CODE_SCANNING_RULE);
 
-/** Fails closed on the pass-2 gate before any ruleset write, so a stale ref or the template never moves code_scanning. */
+/**
+ * Fails closed before any write, so deleting undeclared rulesets or a stale template never drops `main` or its
+ * code_scanning rule. Only a readable "pass 2 has not run" lets a main without code_scanning through.
+ */
 function assertPass2Gate(desiredRulesets, signals) {
   const desiredMain = desiredRulesets.find((ruleset) => ruleset.name === MAIN_RULESET);
-  if (hasCodeScanning(desiredMain) && (signals.pass2Ran === null || signals.codeScanningConfigured === null)) {
+  if (!desiredMain) throw new SettingsError(`no ${MAIN_RULESET} ruleset is desired; refusing to apply rulesets that would delete it`);
+  if (!hasCodeScanning(desiredMain)) {
+    if (signals.pass2Ran === false) return;
+    throw new SettingsError('pass 2 has run or its state is unreadable, and the desired main ruleset has no code_scanning rule; refusing to remove it');
+  }
+  if (signals.pass2Ran === null || signals.codeScanningConfigured === null) {
     throw new SettingsError('code_scanning signals are unreadable; not sending the main ruleset');
   }
-  if (signals.pass2Ran === true && !hasCodeScanning(desiredMain)) {
-    throw new SettingsError('pass 2 has run but the desired main ruleset has no code_scanning rule; refusing to remove it');
+}
+
+/** A case-only difference misses the exact-name match in applyRulesets, so the apply would create a second ruleset or fail on a name clash. */
+function assertNoCaseOnlyNameClash(live, bodies) {
+  for (const body of bodies) {
+    const clash = live.find((candidate) => candidate.name !== body.name && candidate.name.toLowerCase() === body.name.toLowerCase());
+    if (clash) throw new SettingsError(`live ruleset "${clash.name}" differs from desired "${body.name}" only by case; rename one`);
   }
 }
 
 async function applyRulesets(context) {
-  assertPass2Gate(context.desired.rulesets, context.signals);
   const bodies = [];
   for (const ruleset of context.desired.rulesets) {
     const resolved = await resolvePlaceholders(ruleset, context);
     bodies.push(withoutDeferredRules(resolved, context.signals));
   }
   const live = await repoList(context, { suffix: '/rulesets', query: { includes_parents: false } });
+  assertNoCaseOnlyNameClash(live, bodies);
   const counts = { created: 0, updated: 0, deleted: 0 };
   for (const body of bodies) {
     const existing = live.find((candidate) => candidate.name === body.name);
@@ -366,6 +379,7 @@ export async function run(ctx, dependencies = DEFAULT_DEPENDENCIES) {
   const kind = repoKind(ctx.repo, ctx.config);
   const desired = await loadDesiredState({ root: ctx.settingsRoot });
   const signals = await runStep(ctx.log, 'reading live signals', () => readSignals(ctx.client, repoRef, { repoKind: kind }));
+  assertPass2Gate(desired.rulesets, signals);
   const context = { ...ctx, desired, kind, repoRef, dependencies, signals };
   const outcomes = [];
   for (const [index, step] of STEPS.entries()) {

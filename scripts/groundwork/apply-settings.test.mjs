@@ -28,7 +28,7 @@ const repoPath = (repo) => `/repos/wimdotgg/${repo}`;
 
 const temporaryRoots = [];
 
-async function makeRoot({ settings = { schemaVersion: 1 }, labels = [], rulesets = [] } = {}) {
+async function makeRoot({ settings = { schemaVersion: 1 }, labels = [], rulesets = [mainRuleset([{ type: 'deletion' }])] } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'apply-settings-'));
   temporaryRoots.push(root);
   const directory = path.join(root, '.github', 'groundwork');
@@ -77,6 +77,8 @@ function readRoutes(repo, { kitInstalled = true, setupState = 'configured', live
   return routes;
 }
 
+/** The write every default root makes in step 9, since the gate needs a desired `main` ruleset. */
+const createMain = (repo) => `POST ${repoPath(repo)}/rulesets`;
 const writeLines = (events) => events.filter((event) => !event.gh).map((event) => event.line);
 
 /**
@@ -171,7 +173,7 @@ test('control repo: full apply in spec order with rulesets last and controlRepos
 test('control repo: every step is logged once, in order, before its calls', async () => {
   const root = await makeRoot();
   const reads = readRoutes(CONTROL);
-  const outcome = succeeded(await runOp({ root, reads }));
+  const outcome = succeeded(await runOp({ root, reads, writes: okWrites([createMain(CONTROL)]) }));
   assert.deepEqual(outcome.logs.map((line) => line.replace(/ .*/, '')), ['reading', ...Array(9).fill('step')]);
   assert.match(outcome.logs[1], /^step 1\/9 repository$/);
   assert.match(outcome.logs[9], /^step 9\/9 rulesets$/);
@@ -228,7 +230,7 @@ test('variables: asserted only while the signal holds, otherwise left alone', as
   const base = repoPath(PROJECT);
   const before = succeeded(await runOp({
     root, repo: PROJECT, reads: readRoutes(PROJECT, { setupState: 'not_configured' }),
-    writes: okWrites([`POST ${base}/actions/variables`]),
+    writes: okWrites([`POST ${base}/actions/variables`, createMain(PROJECT)]),
   }));
   const variableWrites = (events) => events.filter((event) => event.line.includes('/actions/variables'));
   assert.deepEqual(variableWrites(before.events).map((event) => event.body), [{ name: 'GROUNDWORK_READY', value: 'true' }]);
@@ -236,7 +238,7 @@ test('variables: asserted only while the signal holds, otherwise left alone', as
   const after = succeeded(await runOp({
     root, repo: PROJECT,
     reads: readRoutes(PROJECT, { variables: [{ name: 'GROUNDWORK_READY', value: 'false' }] }),
-    writes: okWrites([`PATCH ${base}/actions/variables/GROUNDWORK_READY`, `POST ${base}/actions/variables`]),
+    writes: okWrites([`PATCH ${base}/actions/variables/GROUNDWORK_READY`, `POST ${base}/actions/variables`, createMain(PROJECT)]),
   }));
   assert.deepEqual(variableWrites(after.events).map((event) => [event.line, event.body]), [
     [`PATCH ${base}/actions/variables/GROUNDWORK_READY`, { name: 'GROUNDWORK_READY', value: 'true' }],
@@ -248,8 +250,8 @@ test('variables: deploy none keeps deployReady variables alone even when CodeQL 
   const settings = { schemaVersion: 1, variables: { DEPLOY_ENABLED: { value: 'true', assertWhen: 'deployReady' } } };
   const root = await makeRoot({ settings });
   const config = { ...CONFIG, deploy: 'none' };
-  const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL), config }));
-  assert.deepEqual(writeLines(outcome.events), []);
+  const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL), config, writes: okWrites([createMain(CONTROL)]) }));
+  assert.deepEqual(writeLines(outcome.events), [createMain(CONTROL)]);
 });
 
 test('labels: missing created, differing updated, matching kept, defaults deleted', async () => {
@@ -266,7 +268,7 @@ test('labels: missing created, differing updated, matching kept, defaults delete
   const root = await makeRoot({ labels });
   const base = repoPath(CONTROL);
   const expected = [`PATCH ${base}/labels/Accepted`, `POST ${base}/labels`, `DELETE ${base}/labels/bug`];
-  const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL, { labels: live }), writes: okWrites(expected) }));
+  const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL, { labels: live }), writes: okWrites([...expected, createMain(CONTROL)]) }));
   const labelEvents = outcome.events.filter((event) => event.line.includes('/labels'));
   assert.deepEqual(labelEvents.map((event) => event.line), expected);
   assert.deepEqual(labelEvents[0].body, { color: '0e8a16', description: 'Epic authorized' });
@@ -360,6 +362,7 @@ test('deployment refs: missing refs are added, then extras deleted by id', async
     `PUT ${base}/environments/release`,
     `POST ${base}/environments/release/deployment-branch-policies`,
     `DELETE ${base}/environments/release/deployment-branch-policies/8`,
+    createMain(CONTROL),
   ];
   const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL, { policies }), writes: okWrites(expected) }));
   assert.deepEqual(writeLines(outcome.events), expected);
@@ -396,7 +399,7 @@ test('a missing release value throws before any step runs', async () => {
 test('gh gets argument arrays, the value on stdin and the installation token only', async () => {
   const root = await makeRoot();
   const env = { ...RELEASE_ENV, GH_TOKEN: 'ambient-token', ADMIN_APP_KEY: 'admin-key', GITHUB_TOKEN: 'other-token' };
-  const outcome = succeeded(await runOp({ root, repo: PROJECT, reads: readRoutes(PROJECT), env }));
+  const outcome = succeeded(await runOp({ root, repo: PROJECT, reads: readRoutes(PROJECT), writes: okWrites([createMain(PROJECT)]), env }));
   const invocations = outcome.events.filter((event) => event.gh).map((event) => event.gh);
   assert.deepEqual(invocations.map((invocation) => invocation.args), [
     ['secret', 'set', 'RELEASE_APP_KEY', '--env', 'release', '--repo', `wimdotgg/${PROJECT}`],
@@ -468,7 +471,7 @@ test('security: a false switch sends DELETE and a true switch sends PUT', async 
   const settings = { schemaVersion: 1, security: { vulnerability_alerts: false, private_vulnerability_reporting: true } };
   const root = await makeRoot({ settings });
   const base = repoPath(CONTROL);
-  const expected = [`PUT ${base}/private-vulnerability-reporting`, `DELETE ${base}/vulnerability-alerts`];
+  const expected = [`PUT ${base}/private-vulnerability-reporting`, `DELETE ${base}/vulnerability-alerts`, createMain(CONTROL)];
   const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL), writes: okWrites(expected) }));
   assert.deepEqual(writeLines(outcome.events), expected);
 });
@@ -502,8 +505,8 @@ test('rulesets: an unreadable pass-2 signal with code_scanning desired throws be
   };
   const outcome = await runOp({ root, reads });
   assert.ok(outcome.error instanceof SettingsError);
-  assert.match(outcome.error.message, /^step 9\/9 rulesets: code_scanning signals are unreadable/);
-  assert.deepEqual(writeLines(outcome.events), []);
+  assert.match(outcome.error.message, /^code_scanning signals are unreadable/);
+  assert.equal(outcome.events.length, 0);
 });
 
 test('rulesets: after pass 2 a desired main without code_scanning throws before any ruleset write', async () => {
@@ -513,6 +516,60 @@ test('rulesets: after pass 2 a desired main without code_scanning throws before 
   });
   const outcome = await runOp({ root, reads });
   assert.ok(outcome.error instanceof SettingsError);
-  assert.match(outcome.error.message, /^step 9\/9 rulesets: pass 2 has run but the desired main ruleset has no code_scanning rule/);
+  assert.match(outcome.error.message, /^pass 2 has run or its state is unreadable, and the desired main ruleset has no code_scanning rule/);
   assert.deepEqual(writeLines(outcome.events), []);
+});
+
+test('rulesets: the pass-2 gate runs after reading signals and before step 1, with no write of any kind', async () => {
+  const root = await makeRoot({ rulesets: [mainRuleset([{ type: 'deletion' }])] });
+  const reads = readRoutes(CONTROL, { liveRulesets: [{ id: 5, name: 'main', target: 'branch', source_type: 'Repository' }], mainRules: [CODE_SCANNING_RULE] });
+  const outcome = await runOp({ root, reads });
+  assert.ok(outcome.error instanceof SettingsError);
+  assert.deepEqual(outcome.logs, ['reading live signals']);
+  assert.equal(outcome.events.length, 0);
+});
+
+test('rulesets: no desired main ruleset throws whatever the signals say', async () => {
+  const root = await makeRoot({ rulesets: [tagRuleset] });
+  const base = repoPath(CONTROL);
+  const liveMain = { id: 5, name: 'main', target: 'branch', source_type: 'Repository' };
+  const afterPass2 = await runOp({ root, reads: readRoutes(CONTROL, { liveRulesets: [liveMain], mainRules: [CODE_SCANNING_RULE] }) });
+  const beforePass2 = await runOp({ root, reads: readRoutes(CONTROL, { setupState: 'not_configured', liveRulesets: [liveMain] }) });
+  for (const outcome of [afterPass2, beforePass2]) {
+    assert.ok(outcome.error instanceof SettingsError);
+    assert.match(outcome.error.message, /^no main ruleset is desired/);
+    assert.equal(outcome.events.length, 0);
+  }
+  assert.equal(afterPass2.events.some((event) => event.line === `DELETE ${base}/rulesets/5`), false);
+});
+
+test('rulesets: an unreadable main ruleset with a desired main lacking code_scanning throws before any write', async () => {
+  const root = await makeRoot({ rulesets: [mainRuleset([{ type: 'deletion' }])] });
+  const base = repoPath(CONTROL);
+  const reads = {
+    ...readRoutes(CONTROL, { liveRulesets: [{ id: 5, name: 'main', target: 'branch', source_type: 'Repository' }] }),
+    [`GET ${base}/rulesets/5`]: { status: 403, data: { message: 'Forbidden' } },
+  };
+  const outcome = await runOp({ root, reads });
+  assert.ok(outcome.error instanceof SettingsError);
+  assert.match(outcome.error.message, /^pass 2 has run or its state is unreadable/);
+  assert.equal(outcome.events.length, 0);
+});
+
+test('rulesets: a live name differing from a desired name only by case throws before any ruleset write', async () => {
+  const root = await makeRoot({ rulesets: [mainRuleset([{ type: 'deletion' }]), tagRuleset] });
+  const reads = readRoutes(CONTROL, { liveRulesets: [{ id: 7, name: 'Release-Tag-Creation', target: 'tag', source_type: 'Repository' }] });
+  const outcome = await runOp({ root, reads, writes: okWrites([createMain(CONTROL)]) });
+  assert.ok(outcome.error instanceof SettingsError);
+  assert.match(outcome.error.message, /^step 9\/9 rulesets: live ruleset "Release-Tag-Creation" differs from desired "release-tag-creation" only by case/);
+  assert.equal(writeLines(outcome.events).some((line) => line.includes('/rulesets')), false);
+});
+
+test('rulesets: a live summary without source_type is kept, not deleted', async () => {
+  const root = await makeRoot({ rulesets: [mainRuleset([{ type: 'deletion' }])] });
+  const base = repoPath(CONTROL);
+  const live = [{ id: 5, name: 'main', target: 'branch' }, { id: 9, name: 'unknown-source', target: 'branch' }];
+  const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL, { liveRulesets: live }), writes: okWrites([`PUT ${base}/rulesets/5`]) }));
+  assert.deepEqual(writeLines(outcome.events), [`PUT ${base}/rulesets/5`]);
+  assert.match(outcome.result.summary, /rulesets: 1 updated$/m);
 });
