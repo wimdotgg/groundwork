@@ -1,0 +1,2739 @@
+[
+  {
+    "description": "under limits -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 200,
+          "deletions": 100,
+          "patch": null
+        },
+        {
+          "filename": "src/b.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 50,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "exactly at limits -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/f0.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f1.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f2.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f3.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f4.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f5.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f6.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f7.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f8.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f9.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f10.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f11.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f12.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f13.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f14.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f15.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f16.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f17.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f18.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/big.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 381,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "lines over limit -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 300,
+          "deletions": 101,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "401 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "files over limit -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/f0.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f1.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f2.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f3.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f4.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f5.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f6.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f7.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f8.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f9.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f10.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f11.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f12.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f13.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f14.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f15.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f16.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f17.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f18.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f19.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f20.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "21 files exceed"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "lockfile excluded -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "package-lock.json",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5000,
+          "deletions": 3000,
+          "patch": null
+        },
+        {
+          "filename": "web/yarn.lock",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 900,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "snapshot files excluded -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/__snapshots__/a.test.js.snap",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 900,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/b.snap",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 900,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "generatedGlobs excluded -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/api.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 2000,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "excluded files do not count toward file limit -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/f0.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f1.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f2.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f3.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f4.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f5.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f6.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f7.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f8.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f9.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f10.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f11.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f12.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f13.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f14.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f15.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f16.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f17.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f18.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/f19.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g0.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g1.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g2.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g3.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g4.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g5.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g6.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g7.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g8.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/generated/g9.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "non-excluded file beside excluded still counts -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "package-lock.json",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 9000,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 450,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "450 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "valid size-exception over limit -> pass with warning",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [
+        "size-exception"
+      ],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 900,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass",
+      "warningsInclude": [
+        "size-exception applied"
+      ]
+    }
+  },
+  {
+    "description": "size-exception not valid (applied by agent) -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 900,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "900 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "valid size-exception under limit -> pass without warning",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [
+        "size-exception"
+      ],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "dependabot with valid dependencies label -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "dependabot[bot]",
+      "validLabels": [
+        "dependencies"
+      ],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 2000,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "dependabot author without valid dependencies label -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "dependabot[bot]",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 2000,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "2000 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "dependencies label without dependabot author -> not exempt",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [
+        "dependencies"
+      ],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 2000,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "2000 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "release bot with valid automated label -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wimdotgg-release[bot]",
+      "validLabels": [
+        "automated"
+      ],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 2000,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "automated label without release bot author -> not exempt",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [
+        "automated"
+      ],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 2000,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "2000 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "dependabot author with automated label -> not exempt",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "dependabot[bot]",
+      "validLabels": [
+        "automated"
+      ],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 2000,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "2000 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "rename where both names match exclusion -> excluded, pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "yarn.lock",
+          "previousFilename": "old/yarn.lock",
+          "status": "renamed",
+          "additions": 900,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "rename from source to lockfile name -> counted, fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "yarn.lock",
+          "previousFilename": "src/big.js",
+          "status": "renamed",
+          "additions": 450,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "450 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "rename from lockfile to source name -> counted, fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/big.js",
+          "previousFilename": "yarn.lock",
+          "status": "renamed",
+          "additions": 450,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "450 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "dot-directory file does not match ** globs -> counted, fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": ".hidden/yarn.lock",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 450,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "450 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "merge_group -> skip",
+    "facts": {
+      "eventName": "merge_group",
+      "author": null,
+      "validLabels": [],
+      "files": []
+    },
+    "expected": {
+      "conclusion": "skip",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "end-to-end: files over two pages, size-exception applied by the agent -> fail",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "changed_files": 102
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "headers": {
+          "link": "<https://api.github.com/repos/wimdotgg/groundwork/pulls/7/files?page=2&per_page=100>; rel=\"next\""
+        },
+        "data": [
+          {
+            "filename": "src/f0.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f1.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f2.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f3.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f4.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f5.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f6.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f7.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f8.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f9.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f10.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f11.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f12.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f13.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f14.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f15.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f16.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f17.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f18.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f19.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f20.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f21.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f22.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f23.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f24.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f25.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f26.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f27.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f28.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f29.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f30.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f31.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f32.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f33.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f34.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f35.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f36.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f37.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f38.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f39.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f40.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f41.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f42.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f43.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f44.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f45.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f46.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f47.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f48.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f49.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f50.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f51.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f52.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f53.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f54.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f55.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f56.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f57.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f58.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f59.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f60.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f61.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f62.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f63.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f64.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f65.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f66.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f67.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f68.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f69.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f70.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f71.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f72.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f73.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f74.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f75.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f76.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f77.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f78.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f79.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f80.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f81.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f82.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f83.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f84.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f85.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f86.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f87.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f88.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f89.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f90.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f91.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f92.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f93.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f94.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f95.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f96.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f97.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f98.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f99.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?page=2&per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/last.js",
+            "status": "modified",
+            "additions": 5,
+            "deletions": 0
+          },
+          {
+            "filename": "yarn.lock",
+            "status": "modified",
+            "additions": 3000,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": [
+            {
+              "name": "size-exception"
+            }
+          ]
+        }
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "event": "labeled",
+            "label": {
+              "name": "size-exception"
+            },
+            "actor": {
+              "login": "wianvdm-agent"
+            },
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "101 files exceed"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "end-to-end: files over two pages, size-exception by owner -> pass with warning",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "changed_files": 102
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "headers": {
+          "link": "<https://api.github.com/repos/wimdotgg/groundwork/pulls/7/files?page=2&per_page=100>; rel=\"next\""
+        },
+        "data": [
+          {
+            "filename": "src/f0.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f1.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f2.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f3.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f4.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f5.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f6.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f7.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f8.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f9.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f10.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f11.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f12.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f13.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f14.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f15.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f16.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f17.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f18.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f19.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f20.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f21.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f22.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f23.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f24.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f25.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f26.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f27.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f28.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f29.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f30.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f31.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f32.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f33.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f34.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f35.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f36.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f37.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f38.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f39.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f40.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f41.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f42.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f43.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f44.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f45.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f46.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f47.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f48.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f49.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f50.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f51.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f52.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f53.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f54.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f55.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f56.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f57.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f58.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f59.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f60.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f61.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f62.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f63.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f64.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f65.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f66.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f67.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f68.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f69.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f70.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f71.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f72.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f73.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f74.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f75.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f76.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f77.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f78.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f79.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f80.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f81.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f82.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f83.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f84.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f85.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f86.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f87.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f88.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f89.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f90.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f91.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f92.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f93.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f94.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f95.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f96.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f97.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f98.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          },
+          {
+            "filename": "src/f99.js",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?page=2&per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/last.js",
+            "status": "modified",
+            "additions": 5,
+            "deletions": 0
+          },
+          {
+            "filename": "yarn.lock",
+            "status": "modified",
+            "additions": 3000,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": [
+            {
+              "name": "size-exception"
+            }
+          ]
+        }
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "event": "labeled",
+            "label": {
+              "name": "size-exception"
+            },
+            "actor": {
+              "login": "WianVDM"
+            },
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "warningsInclude": [
+        "size-exception applied"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "end-to-end: merge_group makes no API call -> skip",
+    "eventName": "merge_group",
+    "payload": {},
+    "env": {},
+    "routes": {},
+    "expected": {
+      "conclusion": "skip",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "end-to-end: dependabot author with dependencies labeled by dependabot -> exempt pass",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "dependabot[bot]"
+        },
+        "changed_files": 1
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/big.js",
+            "status": "modified",
+            "additions": 900,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": [
+            {
+              "name": "dependencies"
+            }
+          ]
+        }
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "event": "labeled",
+            "label": {
+              "name": "dependencies"
+            },
+            "actor": {
+              "login": "dependabot[bot]"
+            },
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "end-to-end: dependencies applied by the agent -> not exempt, fail",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "dependabot[bot]"
+        },
+        "changed_files": 1
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/big.js",
+            "status": "modified",
+            "additions": 900,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": [
+            {
+              "name": "dependencies"
+            }
+          ]
+        }
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "event": "labeled",
+            "label": {
+              "name": "dependencies"
+            },
+            "actor": {
+              "login": "wianvdm-agent"
+            },
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "errorsInclude": [
+        "900 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "end-to-end: size-exception removed since the event -> live labels drop it, fail",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "changed_files": 1
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/big.js",
+            "status": "modified",
+            "additions": 900,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": []
+        }
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "event": "labeled",
+            "label": {
+              "name": "none"
+            },
+            "actor": {
+              "login": "WianVDM"
+            },
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "errorsInclude": [
+        "900 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "end-to-end: file list shorter than changed_files -> collect throws",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "changed_files": 3001
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/big.js",
+            "status": "modified",
+            "additions": 900,
+            "deletions": 0
+          }
+        ]
+      }
+    },
+    "expected": {
+      "throws": "incomplete"
+    }
+  },
+  {
+    "description": "end-to-end: non pull_request event -> collect throws",
+    "eventName": "push",
+    "payload": {},
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "push"
+    }
+  }
+]
