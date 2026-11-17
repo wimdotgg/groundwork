@@ -8,7 +8,7 @@ import { ISSUE_TYPES } from '../lib/issue-model.mjs';
 const ORG_TYPES_PATH = '/orgs/{org}/issue-types';
 const TYPE_PATH = '/orgs/{org}/issue-types/{id}';
 
-/** @type {Record<string, string>} one-line description per type, sent on create and enable */
+/** @type {Record<string, string>} one-line description per type, sent on create */
 export const TYPE_DESCRIPTIONS = {
   Epic: 'Large body of work that breaks down into smaller tasks',
   Feature: 'New functionality or enhancement',
@@ -20,7 +20,7 @@ export const TYPE_DESCRIPTIONS = {
 /** Op identity, read by admin-run (12.1). */
 export const OP = 'create-issue-types';
 
-/** Token restricted to no repositories: this op writes org-level types, not repo state. */
+/** Org scope: the minted installation token carries no repository restriction. */
 export const TOKEN_SCOPE = 'org';
 
 // The published OpenAPI app-permissions schema has not caught up with the "Issue types"
@@ -29,8 +29,20 @@ export const TOKEN_SCOPE = 'org';
 /** @type {Record<string, string>} GitHub App permission key -> level */
 export const PERMISSIONS = { issue_types: 'write' };
 
+// GitHub pre-creates this default org type; only defaults may be deleted (12.1).
+// Matching is case-insensitive because orgs carry variants like "task".
+const DEFAULT_TYPES_TO_REMOVE = ['Task'];
+
 const lower = (name) => String(name).toLowerCase();
 const WANTED = new Set(ISSUE_TYPES.map(lower));
+
+/**
+ * @param {Array<{ name: string }>} types live list from the API
+ * @param {string} name wanted name, matched case-insensitively
+ */
+const findByName = (types, name) => types.find((type) => lower(type.name) === lower(name));
+
+const isDefault = (name) => DEFAULT_TYPES_TO_REMOVE.some((candidate) => lower(candidate) === lower(name));
 
 /**
  * @param {object} args parsed JSON object from the dispatch input
@@ -45,32 +57,46 @@ export function validateArgs(args) {
 
 /**
  * @param {Array<{ id: number, name: string, is_enabled: boolean }>} types
- * @returns {{ missing: string[], extra: string[] }} wanted types absent or disabled, and unwanted names
+ * @returns {{ missing: string[], extra: string[], exact: boolean }} wanted types absent,
+ * disabled or misnamed; unwanted names; whether the count matches ISSUE_TYPES
  */
 function diffTypes(types) {
-  const byName = new Map(types.map((type) => [lower(type.name), type]));
-  const missing = ISSUE_TYPES.filter((name) => byName.get(lower(name))?.is_enabled !== true);
+  // Exact-name match: other tooling (pr-metadata) compares names case-sensitively,
+  // so a case variant like "bug" must count as divergence, not as "Bug".
+  const missing = ISSUE_TYPES.filter((name) => {
+    const type = types.find((candidate) => candidate.name === name);
+    return type === undefined || type.is_enabled !== true;
+  });
   const extra = types.filter((type) => !WANTED.has(lower(type.name))).map((type) => type.name);
-  return { missing, extra };
+  return { missing, extra, exact: types.length === ISSUE_TYPES.length };
 }
 
 /**
- * Makes the org's issue types exactly ISSUE_TYPES, enabled: creates missing types,
- * enables disabled wanted types, deletes everything else (GitHub's default Task).
- * A follow-up read verifies convergence; API failures throw GitHubError.
+ * Makes the org's issue types exactly ISSUE_TYPES, enabled: deletes GitHub's default
+ * types, creates missing types, renames case variants and enables disabled wanted types.
+ * Types outside the five that are not defaults are left alone and make the run report
+ * ok:false so the owner can review them. A follow-up read verifies convergence;
+ * API failures throw GitHubError.
  *
  * @param {{ client: GitHubClient, org: string, log(line: string): void }} deps
  * @returns {Promise<{ ok: boolean, summary: string }>}
  */
 export async function syncIssueTypes({ client, org, log }) {
-  if (typeof org !== 'string' || org === '') throw new GitHubError('org is required');
   const listPath = apiPath(ORG_TYPES_PATH, { org });
   const existing = await client.paginate(listPath);
-  const byName = new Map(existing.map((type) => [lower(type.name), type]));
+  const foreign = existing.filter((type) => !WANTED.has(lower(type.name)) && !isDefault(type.name));
   const writes = [];
 
+  // Delete before create: a default name collision would otherwise fail the POST.
+  for (const type of existing) {
+    if (WANTED.has(lower(type.name)) || !isDefault(type.name)) continue;
+    await client.request('DELETE', apiPath(TYPE_PATH, { org, id: type.id }));
+    writes.push(`deleted ${type.name}`);
+    log(`deleted issue type ${type.name}`);
+  }
+
   for (const name of ISSUE_TYPES) {
-    const current = byName.get(lower(name));
+    const current = findByName(existing, name);
     if (current === undefined) {
       await client.request('POST', listPath, {
         body: { name, is_enabled: true, description: TYPE_DESCRIPTIONS[name] },
@@ -79,28 +105,29 @@ export async function syncIssueTypes({ client, org, log }) {
       log(`created issue type ${name}`);
       continue;
     }
-    if (current.is_enabled !== true) {
-      await client.request('PUT', apiPath(TYPE_PATH, { org, id: current.id }), {
-        body: { name, is_enabled: true, description: TYPE_DESCRIPTIONS[name] },
-      });
-      writes.push(`enabled ${name}`);
-      log(`enabled issue type ${name}`);
-    }
-  }
-  for (const [key, type] of byName) {
-    if (WANTED.has(key)) continue;
-    await client.request('DELETE', apiPath(TYPE_PATH, { org, id: type.id }));
-    writes.push(`deleted ${type.name}`);
-    log(`deleted issue type ${type.name}`);
+    if (current.is_enabled === true && current.name === name) continue;
+    const body = {
+      name,
+      is_enabled: true,
+      description: current.description ?? TYPE_DESCRIPTIONS[name],
+    };
+    if (current.color != null) body.color = current.color;
+    await client.request('PUT', apiPath(TYPE_PATH, { org, id: current.id }), { body });
+    const verb = current.name === name ? 'enabled' : 'renamed';
+    const label = current.name === name ? name : `${current.name} to ${name}`;
+    writes.push(`${verb} ${label}`);
+    log(`${verb} issue type ${label}`);
   }
 
   const final = await client.paginate(listPath);
-  const { missing, extra } = diffTypes(final);
-  if (missing.length > 0 || extra.length > 0) {
-    return {
-      ok: false,
-      summary: `issue types diverged after sync: missing or disabled ${missing.join(', ') || 'none'}; extra ${extra.join(', ') || 'none'}`,
-    };
+  const { missing, extra, exact } = diffTypes(final);
+  if (missing.length > 0 || extra.length > 0 || !exact) {
+    const parts = [
+      `missing or disabled ${missing.join(', ') || 'none'}`,
+      `extra ${extra.join(', ') || 'none'}`,
+    ];
+    if (foreign.length > 0) parts.push(`left for the owner: ${foreign.map((type) => type.name).join(', ')}`);
+    return { ok: false, summary: `issue types diverged after sync: ${parts.join('; ')}` };
   }
   const summary = writes.length === 0 ? 'issue types already in place' : `synced issue types: ${writes.join('; ')}`;
   return { ok: true, summary };
