@@ -19,6 +19,10 @@ async function factsFor(testCase) {
 
 for (const testCase of cases) {
   test(testCase.description, async () => {
+    if (testCase.expected.throws) {
+      await assert.rejects(factsFor(testCase), (error) => error.message.includes(testCase.expected.throws));
+      return;
+    }
     const result = evaluate(await factsFor(testCase), config);
     assert.equal(result.conclusion, testCase.expected.conclusion);
     for (const text of testCase.expected.errorsInclude) {
