@@ -64,7 +64,7 @@
     "expected": {
       "conclusion": "fail",
       "errorsInclude": [
-        "renamed to non-test path docs/old.txt"
+        "test file renamed to non-guarded path docs/old.txt"
       ],
       "actions": []
     }
@@ -498,6 +498,387 @@
     "expected": {
       "conclusion": "pass",
       "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "added line starting with ++ is still checked -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.mjs",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1,1 +1,1 @@\n+++i; // eslint-disable-line"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "suppression added"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "removed line starting with -- counts as removed -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "vitest.config.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "@@ -1,1 +1,1 @@\n--lines: 90"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "threshold value changed or removed"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "removed declaration starting with -- counts -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "scripts/a.test.mjs",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "@@ -1,1 +1,1 @@\n--it(\"a\", () => {});"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "test declarations dropped"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "threshold number removed without replacement -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "vitest.config.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "@@ -1,1 +1,1 @@\n-  lines: 90,"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "threshold value changed or removed"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "threshold number change hidden by whitespace -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "vitest.config.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1,2 +1,2 @@\n-  lines: 90,\n+lines:   80,"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "threshold value changed"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "threshold line moved with only whitespace changes -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "vitest.config.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1,2 +1,2 @@\n-  lines: 90,\n+    lines:   90,"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "decimal threshold changed -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "vitest.config.ts",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1,2 +1,2 @@\n-  ratio: 0.9,\n+  ratio: .8,"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "threshold value changed"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "threshold file deleted -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "vitest.config.ts",
+          "previousFilename": null,
+          "status": "removed",
+          "additions": 0,
+          "deletions": 4,
+          "patch": "@@ -1,1 +1,1 @@\n-x"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "threshold file deleted"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "threshold file renamed to non-matching path -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "config/limits.ts",
+          "previousFilename": "vitest.config.ts",
+          "status": "renamed",
+          "additions": 0,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "threshold file renamed to non-guarded path"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "threshold file renamed to matching path -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "web/vitest.config.ts",
+          "previousFilename": "vitest.config.ts",
+          "status": "renamed",
+          "additions": 0,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "test declaration commented out -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "scripts/a.test.mjs",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1,2 +1,2 @@\n-test(\"a\", () => {});\n+// test(\"a\", () => {});"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "test declarations dropped (1 removed, 0 added)"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "test declaration inside a block comment line -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "scripts/a.test.mjs",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1,2 +1,2 @@\n-it(\"a\", () => {});\n+ * it(\"a\", () => {});"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "test declarations dropped"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "patch omitted on a source file with additions -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/big.mjs",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 900,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "src/big.mjs: patch omitted"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "patch omitted on a removed file -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/big.mjs",
+          "previousFilename": null,
+          "status": "removed",
+          "additions": 0,
+          "deletions": 900,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "suppression match ignores case -> fail",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.mjs",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1,1 +1,1 @@\n+# NOQA"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "fail",
+      "errorsInclude": [
+        "suppression added"
+      ],
+      "actions": []
+    }
+  },
+  {
+    "description": "exception label matches case-insensitively -> pass",
+    "facts": {
+      "eventName": "pull_request",
+      "validLabels": [
+        "Integrity-Exception"
+      ],
+      "files": [
+        {
+          "filename": "scripts/a.test.mjs",
+          "previousFilename": null,
+          "status": "removed",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1,1 +1,1 @@\n-x"
+        }
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "warningsInclude": [
+        "test file deleted"
+      ],
       "actions": []
     }
   },

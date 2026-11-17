@@ -1,7 +1,8 @@
+import { posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runValidator } from '../lib/ci.mjs';
 import { apiPath } from '../lib/github.mjs';
-import { validLabels } from '../lib/trust.mjs';
+import { normalizeLabel, validLabels } from '../lib/trust.mjs';
 
 /** @typedef {import('../lib/ci.mjs').ValidatorContext} ValidatorContext */
 /** @typedef {import('../lib/ci.mjs').ValidatorResult} ValidatorResult */
@@ -13,10 +14,10 @@ export const name = 'test-integrity';
 const PULL_REQUEST_EVENT = 'pull_request';
 const EXCEPTION_LABEL = 'integrity-exception';
 const REPO_PATH = '/repos/{owner}/{repo}';
-const NUMBER_PATTERN = /\d+(?:\.\d+)?/g;
-const NUMBER_PLACEHOLDER = '#';
+const COMMENT_LINE_PATTERN = /^\s*(?:\/\/|#|\*|\/\*)/;
 const REMOVED_STATUS = 'removed';
 const RENAMED_STATUS = 'renamed';
+const GUARDED_KINDS = [{ label: 'test', matches: 'isTestPath' }, { label: 'threshold', matches: 'isThresholdPath' }];
 
 function emptyFacts(eventName) {
   return { eventName, validLabels: [], files: [] };
@@ -55,62 +56,40 @@ export async function collect(ctx) {
   };
 }
 
-function escapeRegExp(character) {
-  return character.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-}
-
-/** `**` followed by `/` also matches zero directories, so `**` + `/x` matches a root-level `x`. */
-function globToRegExp(glob) {
-  let source = '';
-  for (let index = 0; index < glob.length; index += 1) {
-    if (glob.startsWith('**/', index)) {
-      source += '(?:.*/)?';
-      index += 2;
-    } else if (glob.startsWith('**', index)) {
-      source += '.*';
-      index += 1;
-    } else if (glob[index] === '*') source += '[^/]*';
-    else if (glob[index] === '?') source += '[^/]';
-    else source += escapeRegExp(glob[index]);
-  }
-  return new RegExp(`^${source}$`);
-}
-
 function matcherFor(globs) {
-  const expressions = globs.map(globToRegExp);
-  return (path) => expressions.some((expression) => expression.test(path));
+  return (path) => globs.some((glob) => posix.matchesGlob(path, glob));
 }
 
 const anyMatch = (patterns) => (line) => patterns.some((pattern) => pattern.test(line));
 
+/** GitHub patches carry no file headers, so the first character alone classifies a line. */
 function patchLines(patch, marker) {
-  const header = marker.repeat(3);
   return patch
     .split('\n')
-    .filter((line) => line.startsWith(marker) && !line.startsWith(header))
+    .filter((line) => line.startsWith(marker))
     .map((line) => line.slice(1));
 }
 
-const normalizeNumbers = (line) => line.replace(NUMBER_PATTERN, NUMBER_PLACEHOLDER);
+const collapseWhitespace = (line) => line.replace(/\s+/g, ' ').trim();
+const hasNumber = (line) => /\d*\.?\d+/.test(line);
 
-function hasNumberOnlyChange(removed, added) {
-  const addedByShape = new Map();
-  for (const line of added) {
-    const shape = normalizeNumbers(line);
-    addedByShape.set(shape, [...(addedByShape.get(shape) ?? []), line]);
-  }
-  return removed.some((line) => {
-    const shape = normalizeNumbers(line);
-    return shape !== line && (addedByShape.get(shape) ?? []).some((candidate) => candidate !== line);
-  });
+function hasThresholdChange(removed, added) {
+  const keptLines = new Set(added.map(collapseWhitespace));
+  return removed.some((line) => hasNumber(line) && !keptLines.has(collapseWhitespace(line)));
 }
 
-const hasNoChangedLines = (file) => file.additions + file.deletions === 0;
+const isCommentLine = (line) => COMMENT_LINE_PATTERN.test(line);
 
 function renameProblem(file, rules) {
-  const wasTest = file.status === RENAMED_STATUS && file.previousFilename && rules.isTestPath(file.previousFilename);
-  if (!wasTest || rules.isTestPath(file.filename)) return null;
-  return `${file.previousFilename}: test file renamed to non-test path ${file.filename}`;
+  if (file.status !== RENAMED_STATUS || !file.previousFilename) return null;
+  const left = GUARDED_KINDS.find(({ matches }) => rules[matches](file.previousFilename) && !rules[matches](file.filename));
+  return left ? `${file.previousFilename}: ${left.label} file renamed to non-guarded path ${file.filename}` : null;
+}
+
+function deletionProblem(file, rules) {
+  if (file.status !== REMOVED_STATUS) return null;
+  const kind = GUARDED_KINDS.find(({ matches }) => rules[matches](file.filename));
+  return kind ? `${file.filename}: ${kind.label} file deleted` : null;
 }
 
 function patchProblems(file, patch, rules) {
@@ -119,22 +98,22 @@ function patchProblems(file, patch, rules) {
   const problems = [];
   if (rules.isTestPath(file.filename)) {
     const lost = removed.filter(rules.isDeclaration).length;
-    const gained = added.filter(rules.isDeclaration).length;
+    const gained = added.filter((line) => !isCommentLine(line) && rules.isDeclaration(line)).length;
     if (lost > gained) problems.push(`${file.filename}: test declarations dropped (${lost} removed, ${gained} added)`);
   }
   for (const line of added.filter(rules.isSuppression)) problems.push(`${file.filename}: suppression added: ${line.trim()}`);
-  if (rules.isThresholdPath(file.filename) && hasNumberOnlyChange(removed, added)) {
-    problems.push(`${file.filename}: threshold value changed`);
+  if (rules.isThresholdPath(file.filename) && hasThresholdChange(removed, added)) {
+    problems.push(`${file.filename}: threshold value changed or removed`);
   }
   return problems;
 }
 
 function fileProblems(file, rules) {
-  const isGuarded = rules.isTestPath(file.filename) || rules.isThresholdPath(file.filename);
-  if (rules.isTestPath(file.filename) && file.status === REMOVED_STATUS) return [`${file.filename}: test file deleted`];
+  const deletion = deletionProblem(file, rules);
+  if (deletion) return [deletion];
   const problems = [renameProblem(file, rules)].filter(Boolean);
   if (file.patch !== null) return [...problems, ...patchProblems(file, file.patch, rules)];
-  if (isGuarded && !hasNoChangedLines(file)) problems.push(`${file.filename}: patch omitted by GitHub, cannot verify`);
+  if (file.additions > 0 && file.status !== REMOVED_STATUS) problems.push(`${file.filename}: patch omitted by GitHub, cannot verify`);
   return problems;
 }
 
@@ -144,7 +123,7 @@ function compileRules(config) {
     isTestPath: matcherFor(testGlobs),
     isThresholdPath: matcherFor(thresholdGlobs),
     isDeclaration: anyMatch(testDeclarationPatterns.map((pattern) => new RegExp(pattern))),
-    isSuppression: anyMatch(suppressionPatterns.map((pattern) => new RegExp(pattern))),
+    isSuppression: anyMatch(suppressionPatterns.map((pattern) => new RegExp(pattern, 'i'))),
   };
 }
 
@@ -162,7 +141,7 @@ export function evaluate(facts, config) {
   const rules = compileRules(config);
   const problems = facts.files.flatMap((file) => fileProblems(file, rules));
   if (problems.length === 0) return result('pass', { details: `${facts.files.length} files checked.` });
-  if (facts.validLabels.includes(EXCEPTION_LABEL)) {
+  if (facts.validLabels.some((label) => normalizeLabel(label) === EXCEPTION_LABEL)) {
     return result('pass', { warnings: problems, details: `${EXCEPTION_LABEL} label applied: failures reported as warnings.` });
   }
   return result('fail', { errors: problems });
