@@ -554,5 +554,89 @@
     "expected": {
       "throws": "pull_request.number"
     }
+  },
+  {
+    "description": "synchronize with no-issue -> remove and comment",
+    "facts": {
+      "eventName": "pull_request_target",
+      "action": "synchronize",
+      "number": 12,
+      "label": null,
+      "sender": null,
+      "labels": [
+        "bug",
+        "No-Issue"
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 12,
+          "label": "no-issue"
+        },
+        {
+          "kind": "comment",
+          "number": 12,
+          "body": "`no-issue` was removed because new commits arrived; the owner re-applies it after reviewing them."
+        }
+      ]
+    }
+  },
+  {
+    "description": "synchronize without no-issue -> pass, no actions",
+    "facts": {
+      "eventName": "pull_request_target",
+      "action": "synchronize",
+      "number": 12,
+      "label": null,
+      "sender": null,
+      "labels": [
+        "bug"
+      ]
+    },
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": []
+    }
+  },
+  {
+    "description": "collect: pull_request_target synchronize with no-issue -> remove and comment",
+    "eventName": "pull_request_target",
+    "payload": {
+      "action": "synchronize",
+      "pull_request": {
+        "number": 12,
+        "labels": [
+          {
+            "name": "no-issue"
+          }
+        ]
+      },
+      "sender": {
+        "login": "wianvdm-agent"
+      }
+    },
+    "env": {},
+    "expected": {
+      "conclusion": "pass",
+      "errorsInclude": [],
+      "actions": [
+        {
+          "kind": "remove-label",
+          "number": 12,
+          "label": "no-issue"
+        },
+        {
+          "kind": "comment",
+          "number": 12,
+          "body": "`no-issue` was removed because new commits arrived; the owner re-applies it after reviewing them."
+        }
+      ]
+    },
+    "routes": {}
   }
 ]

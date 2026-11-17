@@ -1051,5 +1051,23 @@
     "env": {},
     "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"head_ref_force_pushed","created_at":"2026-01-01T10:03:00Z"},{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/actions/runs?head_sha=a1b2c3&per_page=100":{"status":200,"data":{"total_count":1,"workflow_runs":[{"id":1,"created_at":"2026-01-01T10:00:00Z","head_branch":"feature/x"}]},"headers":{}}},
     "expected": {"conclusion":"pass","errorsInclude":[],"actions":[]}
+  },
+  {
+    "description": "no-issue exemption: valid and fresh but the run is a synchronize -> fail",
+    "facts": {"eventName":"pull_request","action":"synchronize","repo":"wimdotgg/groundwork","pr":{"number":7,"title":"chore: tweak","body":"No issue","draft":false,"author":"wianvdm-agent","headRef":"feature/x","headRepo":"wimdotgg/groundwork","headSha":"a1b2c3","labels":["no-issue"],"validLabels":["no-issue"]},"closingRefs":[],"issue":null,"noIssueLabeledAt":"2026-01-01T10:05:00Z","headArrivedAt":"2026-01-01T10:00:00Z","files":[],"stateTemplate":"## State  (checkpoint <n> · <date time> · <model>/<harness> · session <id>)\nDone:        <ACs done, with test evidence>\nIn progress: <current work and files>\nNext:        <next steps>\nProven:      <ACs proven, with CI run>\nUnproven:    <ACs not yet proven>\nRejected:    <approaches tried and dropped, with why>\nGotchas:     <environment or repo traps>\nOpen:        <open questions, or none>\n","commitAuthors":[],"renamedBy":[]},
+    "expected": {"conclusion":"fail","errorsInclude":["must be re-applied after new commits"],"actions":[]}
+  },
+  {
+    "description": "no-issue exemption: valid and fresh on a labeled run -> pass",
+    "facts": {"eventName":"pull_request","action":"labeled","repo":"wimdotgg/groundwork","pr":{"number":7,"title":"chore: tweak","body":"No issue","draft":false,"author":"wianvdm-agent","headRef":"feature/x","headRepo":"wimdotgg/groundwork","headSha":"a1b2c3","labels":["no-issue"],"validLabels":["no-issue"]},"closingRefs":[],"issue":null,"noIssueLabeledAt":"2026-01-01T10:05:00Z","headArrivedAt":"2026-01-01T10:00:00Z","files":[],"stateTemplate":"## State  (checkpoint <n> · <date time> · <model>/<harness> · session <id>)\nDone:        <ACs done, with test evidence>\nIn progress: <current work and files>\nNext:        <next steps>\nProven:      <ACs proven, with CI run>\nUnproven:    <ACs not yet proven>\nRejected:    <approaches tried and dropped, with why>\nGotchas:     <environment or repo traps>\nOpen:        <open questions, or none>\n","commitAuthors":[],"renamedBy":[]},
+    "expected": {"conclusion":"pass","errorsInclude":[],"actions":[]}
+  },
+  {
+    "description": "end-to-end: no-issue by the owner after the earliest run for the head on a synchronize run -> fail",
+    "eventName": "pull_request",
+    "payload": {"action":"synchronize","pull_request":{"number":7,"draft":false,"user":{"login":"wianvdm-agent"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/actions/runs?head_sha=a1b2c3&per_page=100":{"status":200,"data":{"total_count":2,"workflow_runs":[{"id":1,"created_at":"2026-01-01T10:02:00Z","head_branch":"feature/x"},{"id":1,"created_at":"2026-01-01T10:00:00Z","head_branch":"feature/x"}]},"headers":{}}},
+    "expected": {"conclusion":"fail","errorsInclude":["must be re-applied after new commits"],"actions":[]}
   }
 ]

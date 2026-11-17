@@ -20,19 +20,20 @@ import {
 /** @typedef {{ filename: string, previousFilename: string|null, status: string, additions: number, deletions: number, patch: string|null }} PrFile */
 /** @typedef {{ number: number, title: string, body: string, draft: boolean, author: string, headRef: string,
  *   headRepo: string, headSha: string, labels: string[], validLabels: string[] }} PrFacts   headRepo is owner/name */
-/** @typedef {{ eventName: string, repo: string, pr: PrFacts|null, closingRefs: Array<{ keyword: string, owner: string|null, repo: string|null, number: number }>,
+/** @typedef {{ eventName: string, action?: string|null, repo: string, pr: PrFacts|null, closingRefs: Array<{ keyword: string, owner: string|null, repo: string|null, number: number }>,
  *   issue: IssueFacts|null, noIssueLabeledAt: string|null, headArrivedAt: string|null, files: PrFile[], stateTemplate: string|null,
  *   commitAuthors: string[], renamedBy: string[] }} PrMetadataFacts
  *   repo is owner/name. issue: the single same-repository closing reference's issue, else null; files: only for Spike issues, else [];
  *   headArrivedAt: the later of the earliest run created_at for the head SHA on the head branch and the newest head_ref_force_pushed event,
  *   read only when no-issue is present on the PR; commitAuthors: one login per PR commit, read only for Dependabot PRs;
- *   renamedBy: actor of every `renamed` timeline event */
+ *   renamedBy: actor of every `renamed` timeline event; action: the payload action, absent in older facts */
 
 export const name = 'pr-metadata';
 
 const PULL_REQUEST_EVENT = 'pull_request';
 const MERGE_GROUP_EVENT = 'merge_group';
 const NO_ISSUE_LABEL = 'no-issue';
+const SYNCHRONIZE_ACTION = 'synchronize';
 const DEPENDENCIES_LABEL = 'dependencies';
 const AUTOMATED_LABEL = 'automated';
 const NEEDS_FORMAT_LABEL = 'needs-format';
@@ -78,6 +79,7 @@ const STATE_FIELD_LINE = /^[\s>*_~`+-]*([A-Za-z][A-Za-z ]*?)[\s*_~`]*:[\s*_~`]*(
 function emptyFacts(eventName) {
   return {
     eventName,
+    action: null,
     repo: '',
     pr: null,
     closingRefs: [],
@@ -202,6 +204,7 @@ export async function collect(ctx) {
   const hasNoIssue = hasLabel(labels, NO_ISSUE_LABEL);
   return {
     eventName: ctx.eventName,
+    action: ctx.payload.action ?? null,
     repo: `${ctx.repo.owner}/${ctx.repo.repo}`,
     pr,
     closingRefs,
@@ -311,11 +314,12 @@ function exemptionReason(facts, config) {
   if (hasLabel(valid, AUTOMATED_LABEL) && sameLogin(author, resolveActor(RELEASE_ACTOR, config))) {
     return 'release automation PR';
   }
-  if (hasLabel(valid, NO_ISSUE_LABEL) && isFreshNoIssue(facts)) return 'no-issue applied after the head commit arrived';
+  if (hasLabel(valid, NO_ISSUE_LABEL) && facts.action !== SYNCHRONIZE_ACTION && isFreshNoIssue(facts)) return 'no-issue applied after the head commit arrived';
   return null;
 }
 
 function staleNoIssueError(facts) {
+  if (hasLabel(facts.pr.validLabels, NO_ISSUE_LABEL) && facts.action === SYNCHRONIZE_ACTION) return ['`no-issue` must be re-applied after new commits'];
   if (!hasLabel(facts.pr.validLabels, NO_ISSUE_LABEL) || isFreshNoIssue(facts)) return [];
   if (facts.headArrivedAt === null) return ['no-issue cannot be honored: no workflow run was found for the head commit'];
   return ['no-issue predates the head commit; the owner must re-apply it after the latest push'];
