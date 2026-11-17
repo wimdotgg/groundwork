@@ -1047,6 +1047,112 @@
     }
   },
   {
+    "description": "rename where both names match exclusion -> excluded, pass",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/a.js",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": null
+        },
+        {
+          "filename": "yarn.lock",
+          "previousFilename": "old/yarn.lock",
+          "status": "renamed",
+          "additions": 900,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "rename from source to lockfile name -> counted, fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "yarn.lock",
+          "previousFilename": "src/big.js",
+          "status": "renamed",
+          "additions": 450,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "450 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "rename from lockfile to source name -> counted, fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": "src/big.js",
+          "previousFilename": "yarn.lock",
+          "status": "renamed",
+          "additions": 450,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "450 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "dot-directory file does not match ** globs -> counted, fail",
+    "facts": {
+      "eventName": "pull_request",
+      "author": "wianvdm-agent",
+      "validLabels": [],
+      "files": [
+        {
+          "filename": ".hidden/yarn.lock",
+          "previousFilename": null,
+          "status": "modified",
+          "additions": 450,
+          "deletions": 0,
+          "patch": null
+        }
+      ]
+    },
+    "expected": {
+      "errorsInclude": [
+        "450 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
     "description": "merge_group -> skip",
     "facts": {
       "eventName": "merge_group",
@@ -1069,11 +1175,7 @@
         "user": {
           "login": "wianvdm-agent"
         },
-        "labels": [
-          {
-            "name": "size-exception"
-          }
-        ]
+        "changed_files": 102
       }
     },
     "env": {},
@@ -1702,6 +1804,16 @@
             "deletions": 0
           }
         ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": [
+            {
+              "name": "size-exception"
+            }
+          ]
+        }
       },
       "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
         "status": 200,
@@ -1736,11 +1848,7 @@
         "user": {
           "login": "wianvdm-agent"
         },
-        "labels": [
-          {
-            "name": "size-exception"
-          }
-        ]
+        "changed_files": 102
       }
     },
     "env": {},
@@ -2369,6 +2477,16 @@
             "deletions": 0
           }
         ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": [
+            {
+              "name": "size-exception"
+            }
+          ]
+        }
       },
       "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
         "status": 200,
@@ -2405,6 +2523,217 @@
       "conclusion": "skip",
       "errorsInclude": [],
       "actions": []
+    }
+  },
+  {
+    "description": "end-to-end: dependabot author with dependencies labeled by dependabot -> exempt pass",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "dependabot[bot]"
+        },
+        "changed_files": 1
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/big.js",
+            "status": "modified",
+            "additions": 900,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": [
+            {
+              "name": "dependencies"
+            }
+          ]
+        }
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "event": "labeled",
+            "label": {
+              "name": "dependencies"
+            },
+            "actor": {
+              "login": "dependabot[bot]"
+            },
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "errorsInclude": [],
+      "actions": [],
+      "conclusion": "pass"
+    }
+  },
+  {
+    "description": "end-to-end: dependencies applied by the agent -> not exempt, fail",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "dependabot[bot]"
+        },
+        "changed_files": 1
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/big.js",
+            "status": "modified",
+            "additions": 900,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": [
+            {
+              "name": "dependencies"
+            }
+          ]
+        }
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "event": "labeled",
+            "label": {
+              "name": "dependencies"
+            },
+            "actor": {
+              "login": "wianvdm-agent"
+            },
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "errorsInclude": [
+        "900 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "end-to-end: size-exception removed since the event -> live labels drop it, fail",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "changed_files": 1
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/big.js",
+            "status": "modified",
+            "additions": 900,
+            "deletions": 0
+          }
+        ]
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7": {
+        "status": 200,
+        "data": {
+          "labels": []
+        }
+      },
+      "GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "event": "labeled",
+            "label": {
+              "name": "none"
+            },
+            "actor": {
+              "login": "WianVDM"
+            },
+            "created_at": "2026-01-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "errorsInclude": [
+        "900 changed lines"
+      ],
+      "actions": [],
+      "conclusion": "fail"
+    }
+  },
+  {
+    "description": "end-to-end: file list shorter than changed_files -> collect throws",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7,
+        "user": {
+          "login": "wianvdm-agent"
+        },
+        "changed_files": 3001
+      }
+    },
+    "env": {},
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/pulls/7/files?per_page=100": {
+        "status": 200,
+        "data": [
+          {
+            "filename": "src/big.js",
+            "status": "modified",
+            "additions": 900,
+            "deletions": 0
+          }
+        ]
+      }
+    },
+    "expected": {
+      "throws": "incomplete"
+    }
+  },
+  {
+    "description": "end-to-end: non pull_request event -> collect throws",
+    "eventName": "push",
+    "payload": {},
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "push"
     }
   }
 ]

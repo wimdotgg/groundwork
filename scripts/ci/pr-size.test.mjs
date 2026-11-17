@@ -21,6 +21,10 @@ async function factsFor(testCase) {
 
 for (const testCase of cases) {
   test(testCase.description, async () => {
+    if (testCase.expected.throws) {
+      await assert.rejects(factsFor(testCase), (error) => error.message.includes(testCase.expected.throws));
+      return;
+    }
     const result = evaluate(await factsFor(testCase), config);
     assert.equal(result.conclusion, testCase.expected.conclusion);
     for (const text of testCase.expected.errorsInclude) {
@@ -29,6 +33,7 @@ for (const testCase of cases) {
     for (const text of testCase.expected.warningsInclude ?? []) {
       assert.ok(result.warnings.some((warning) => warning.includes(text)), `no warning includes ${text}: ${result.warnings.join(' | ')}`);
     }
+    if (!testCase.expected.warningsInclude) assert.deepEqual(result.warnings, []);
     if (testCase.expected.conclusion !== 'fail') assert.deepEqual(result.errors, []);
     assert.deepEqual(result.actions, testCase.expected.actions);
   });

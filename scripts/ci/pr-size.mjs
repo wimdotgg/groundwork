@@ -11,6 +11,7 @@ import { normalizeLabel, resolveActor, sameLogin, validLabels } from '../lib/tru
 
 export const name = 'pr-size';
 
+const PULL_REQUEST_EVENT = 'pull_request';
 const MERGE_GROUP_EVENT = 'merge_group';
 const SIZE_EXCEPTION_LABEL = 'size-exception';
 const DEPENDENCIES_LABEL = 'dependencies';
@@ -18,6 +19,7 @@ const AUTOMATED_LABEL = 'automated';
 const DEPENDABOT_ACTOR = 'dependabot[bot]';
 const RELEASE_ACTOR = 'app:release';
 const FILES_PATH = '/repos/{owner}/{repo}/pulls/{number}/files';
+const ISSUE_PATH = '/repos/{owner}/{repo}/issues/{number}';
 const TIMELINE_PATH = '/repos/{owner}/{repo}/issues/{number}/timeline';
 
 /**
@@ -26,11 +28,18 @@ const TIMELINE_PATH = '/repos/{owner}/{repo}/issues/{number}/timeline';
  */
 export async function collect(ctx) {
   if (ctx.eventName === MERGE_GROUP_EVENT) return { eventName: ctx.eventName, author: null, validLabels: [], files: [] };
+  if (ctx.eventName !== PULL_REQUEST_EVENT) throw new Error(`pr-size does not handle the ${ctx.eventName} event`);
   const pullRequest = ctx.payload.pull_request;
   const params = { ...ctx.repo, number: pullRequest.number };
   const rawFiles = await ctx.client.paginate(apiPath(FILES_PATH, params));
+  // GitHub lists at most 3000 files per PR; a short list would undercount and let an oversized PR pass.
+  if (rawFiles.length < pullRequest.changed_files) {
+    throw new Error(`PR file list is incomplete: ${rawFiles.length} listed, ${pullRequest.changed_files} changed`);
+  }
   const timeline = await ctx.client.paginate(apiPath(TIMELINE_PATH, params));
-  const labels = (pullRequest.labels ?? []).map((label) => label.name);
+  // Live read: the event payload's labels are stale on a re-run after a label was removed.
+  const issue = await ctx.client.request('GET', apiPath(ISSUE_PATH, params));
+  const labels = (issue.data.labels ?? []).map((label) => label.name);
   return {
     eventName: ctx.eventName,
     author: pullRequest.user?.login ?? null,
@@ -56,8 +65,15 @@ function isExempt(facts, config) {
   return dependabot || releaseBot;
 }
 
-function isExcluded(filename, config) {
+function matchesExclusion(filename, config) {
+  // Dot-directories do not match ** globs, so such files are counted (fails closed).
   return [...config.sizeExcludeGlobs, ...config.generatedGlobs].some((glob) => path.posix.matchesGlob(filename, glob));
+}
+
+// A rename or copy is excluded only when both sides are, so renaming a source file to a lockfile name still counts.
+function isExcluded(file, config) {
+  if (!matchesExclusion(file.filename, config)) return false;
+  return file.previousFilename === null || matchesExclusion(file.previousFilename, config);
 }
 
 /**
@@ -70,7 +86,7 @@ export function evaluate(facts, config) {
   if (isExempt(facts, config)) {
     return { conclusion: 'pass', errors: [], warnings: [], details: 'Exempt: dependency or release automation PR.', actions: [] };
   }
-  const counted = facts.files.filter((file) => !isExcluded(file.filename, config));
+  const counted = facts.files.filter((file) => !isExcluded(file, config));
   const lines = counted.reduce((total, file) => total + file.additions + file.deletions, 0);
   const { prChangedLines, prFiles } = config.limits;
   const errors = [];
