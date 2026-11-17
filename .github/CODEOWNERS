@@ -1,0 +1,17 @@
+# Gates protected paths behind owner review; admin-run executes scripts/groundwork/ with the admin token.
+/.github/                       @wianvdm
+/scripts/verify*                @wianvdm
+/scripts/ci/                    @wianvdm
+/scripts/lib/                   @wianvdm
+/scripts/groundwork/            @wianvdm
+/admin-ops/                     @wianvdm
+/AGENTS.md                      @wianvdm
+/CLAUDE.md                      @wianvdm
+/.claude/                       @wianvdm
+/release-please-config.json     @wianvdm
+/.release-please-manifest.json  @wianvdm
+/version.txt                    @wianvdm
+/.gitleaks.toml                 @wianvdm
+/.gitleaksignore                @wianvdm
+/osv-scanner.toml               @wianvdm
+/zizmor.yml                     @wianvdm
