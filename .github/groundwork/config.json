@@ -71,10 +71,12 @@
       "**/__tests__/**",
       "**/test_*.py",
       "**/*_test.py",
-      "**/*_test.go"
+      "**/*_test.go",
+      "**/fixtures/**"
     ],
     "testDeclarationPatterns": [
-      "\\b(?:it|test|describe)\\s*\\(",
+      "(?<![.\\w])(?:it|test|describe)\\s*\\(",
+      "\"description\"\\s*:",
       "^\\s*def\\s+test_",
       "^\\s*func\\s+Test"
     ],
@@ -89,7 +91,9 @@
       "\\.only\\s*\\(",
       "\\bxit\\s*\\(",
       "\\bxdescribe\\s*\\(",
-      "\\{\\s*skip\\s*:\\s*true",
+      "\\{\\s*skip\\s*:",
+      "\\{\\s*todo\\s*:",
+      "\\.todo\\s*\\(",
       "pytest\\.mark\\.skip",
       "\\bt\\.Skip\\("
     ],
