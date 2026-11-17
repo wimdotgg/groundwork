@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { runValidator } from '../lib/ci.mjs';
 import { apiPath } from '../lib/github.mjs';
 import { addMarker, hasMarker } from '../lib/markdown.mjs';
+import { sameLogin } from '../lib/trust.mjs';
 
 /** @typedef {import('../lib/ci.mjs').ValidatorContext} ValidatorContext */
 /** @typedef {import('../lib/ci.mjs').ValidatorResult} ValidatorResult */
@@ -11,6 +12,7 @@ import { addMarker, hasMarker } from '../lib/markdown.mjs';
 export const name = 'failure-alert';
 
 const WORKFLOW_RUN_EVENT = 'workflow_run';
+const COMPLETED_ACTION = 'completed';
 const BOT_LOGIN = 'github-actions[bot]';
 const ISSUES_PATH = '/repos/{owner}/{repo}/issues';
 const FAILING_CONCLUSIONS = ['failure', 'timed_out', 'startup_failure'];
@@ -28,8 +30,16 @@ function requireRunField(run, field) {
 
 async function findOpenAlert(ctx, workflowPath) {
   const issues = await ctx.client.paginate(apiPath(ISSUES_PATH, ctx.repo), { query: { state: 'open', creator: BOT_LOGIN } });
-  const alert = issues.find((issue) => issue.pull_request === undefined && hasMarker(issue.body ?? '', markerName(workflowPath)));
-  return alert === undefined ? null : { number: alert.number };
+  // The creator query filter is not trusted alone: the author is checked again, so a lookalike marker from anyone else is ignored.
+  const alerts = issues.filter((issue) => issue.pull_request === undefined
+    && sameLogin(issue.user?.login, BOT_LOGIN)
+    && hasMarker(issue.body ?? '', markerName(workflowPath)));
+  if (alerts.length === 0) return null;
+  return { number: Math.min(...alerts.map((issue) => issue.number)) };
+}
+
+function skipFacts(eventName) {
+  return { eventName, workflowPath: '', workflowName: '', conclusion: '', runUrl: '', openAlert: null };
 }
 
 /**
@@ -38,8 +48,9 @@ async function findOpenAlert(ctx, workflowPath) {
  */
 export async function collect(ctx) {
   if (ctx.eventName !== WORKFLOW_RUN_EVENT) {
-    return { eventName: ctx.eventName, workflowPath: '', workflowName: '', conclusion: '', runUrl: '', openAlert: null };
+    return skipFacts(ctx.eventName);
   }
+  if (ctx.payload?.action !== COMPLETED_ACTION) return skipFacts(`${ctx.eventName} (${ctx.payload?.action})`);
   const run = ctx.payload?.workflow_run;
   for (const field of REQUIRED_RUN_FIELDS) requireRunField(run, field);
   const facts = { eventName: ctx.eventName, workflowPath: run.path, workflowName: run.name, conclusion: run.conclusion, runUrl: run.html_url, openAlert: null };
@@ -52,26 +63,30 @@ function result(conclusion, details, actions = []) {
 }
 
 // Workflow names are author-controlled text, so they go in a code span: mentions and links stay inert.
-function codeSpan(text) {
-  return `\`${text.replaceAll('`', '').replace(/\s+/g, ' ')}\``;
+function plainName(facts) {
+  const cleaned = facts.workflowName.replaceAll('`', '').replace(/\s+/g, ' ').trim();
+  return cleaned === '' ? facts.workflowPath : cleaned;
+}
+
+function codeSpan(facts) {
+  return `\`${plainName(facts)}\``;
 }
 
 function createAlert(facts) {
-  const label = codeSpan(facts.workflowName);
-  const body = addMarker(`Workflow ${label} ended with \`${facts.conclusion}\`: ${facts.runUrl}`, markerName(facts.workflowPath));
-  const title = `Workflow failure: ${facts.workflowName.replaceAll('`', '').replace(/\s+/g, ' ')}`;
+  const body = addMarker(`Workflow ${codeSpan(facts)} ended with \`${facts.conclusion}\`: ${facts.runUrl}`, markerName(facts.workflowPath));
+  const title = `Workflow failure: ${plainName(facts)}`;
   return result('pass', `Workflow ${facts.workflowPath} failed; opening an alert.`, [{ kind: 'create-issue', title, body }]);
 }
 
 function repeatAlert(facts) {
-  const body = `Workflow ${codeSpan(facts.workflowName)} ended with \`${facts.conclusion}\` again: ${facts.runUrl}`;
+  const body = `Workflow ${codeSpan(facts)} ended with \`${facts.conclusion}\` again: ${facts.runUrl}`;
   return result('pass', `Workflow ${facts.workflowPath} failed again; commenting on alert ${facts.openAlert.number}.`, [
     { kind: 'comment', number: facts.openAlert.number, body },
   ]);
 }
 
 function closeAlert(facts) {
-  const comment = `Workflow ${codeSpan(facts.workflowName)} succeeded: ${facts.runUrl}. Closing.`;
+  const comment = `Workflow ${codeSpan(facts)} succeeded: ${facts.runUrl}. Closing.`;
   return result('pass', `Workflow ${facts.workflowPath} succeeded; closing alert ${facts.openAlert.number}.`, [
     { kind: 'close-issue', number: facts.openAlert.number, comment },
   ]);

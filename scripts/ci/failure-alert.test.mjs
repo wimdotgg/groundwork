@@ -23,6 +23,7 @@ for (const testCase of cases) {
     const result = evaluate(await factsFor(testCase));
     assert.equal(result.conclusion, testCase.expected.conclusion);
     assert.deepEqual(result.errors, []);
+    if (testCase.expected.warningsInclude === undefined) assert.deepEqual(result.warnings, []);
     assert.deepEqual(result.actions, testCase.expected.actions);
   });
 }
