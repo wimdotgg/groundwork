@@ -1,5 +1,6 @@
-import { criterionIds, parseSections } from './markdown.mjs';
-import { normalizeLabel } from './trust.mjs';
+import { GitHubError, apiPath } from './github.mjs';
+import { criterionIds, hasMarker, parseSections } from './markdown.mjs';
+import { normalizeLabel, sameLogin, validLabels } from './trust.mjs';
 
 /** @typedef {'Epic'|'Feature'|'Bug'|'Chore'|'Spike'} IssueType */
 /** @typedef {'done'|'needs-decision'|'queued'|'in-review'|'claimed'|'orphaned'|'proposed'|'blocked'|'ready'} Status */
@@ -190,4 +191,121 @@ export function deriveStatus(facts, { config, now }) {
     return { status: 'blocked', reason: `blocked by ${openBlockers.map((blocker) => `#${blocker.number}`).join(', ')}` };
   }
   return { status: 'ready', reason: result.reason };
+}
+
+const NOT_FOUND = 404;
+const REPO_PATH = '/repos/{owner}/{repo}';
+const MERGE_QUEUE_QUERY = 'query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) '
+  + '{ pullRequest(number: $number) { mergeQueueEntry { id } } } }';
+
+const newestFirst = (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+const labelName = (label) => (typeof label === 'string' ? label : label?.name);
+const openOrClosed = (state) => (state === 'closed' ? 'closed' : 'open');
+
+function newestCreatedAt(comments, predicate) {
+  const matching = comments.filter(predicate).sort(newestFirst);
+  return matching.length === 0 ? null : matching[0].created_at;
+}
+
+async function loadLabels(client, repoRef, issue, config) {
+  const timelinePath = apiPath(`${REPO_PATH}/issues/{number}/timeline`, { ...repoRef, number: issue.number });
+  const timeline = await client.paginate(timelinePath);
+  const labels = (issue.labels ?? []).map(labelName).filter(Boolean);
+  return { labels, valid: validLabels({ labels, timeline }, config) };
+}
+
+async function loadAncestors(client, repoRef, issueNumber, config) {
+  const ancestors = [];
+  const seen = new Set([issueNumber]);
+  let current = issueNumber;
+  for (;;) {
+    const parentPath = apiPath(`${REPO_PATH}/issues/{number}/parent`, { ...repoRef, number: current });
+    const response = await client.request('GET', parentPath, { okStatuses: [NOT_FOUND] });
+    if (response.status === NOT_FOUND) return ancestors;
+    const parent = response.data;
+    if (seen.has(parent.number)) throw new GitHubError(`issue #${issueNumber} has a parent cycle at #${parent.number}`);
+    seen.add(parent.number);
+    const { valid } = await loadLabels(client, repoRef, parent, config);
+    ancestors.push({ number: parent.number, type: parent.type?.name ?? null, validLabels: valid });
+    current = parent.number;
+  }
+}
+
+async function loadBranch(client, repoRef, number) {
+  const refPath = apiPath(`${REPO_PATH}/git/ref/heads/issue/{number}`, { ...repoRef, number });
+  const response = await client.request('GET', refPath, { okStatuses: [NOT_FOUND] });
+  if (response.status === NOT_FOUND) return { exists: false, sha: null };
+  return { exists: true, sha: response.data.object.sha };
+}
+
+async function loadClaimCommitAt(client, repoRef, number, sha) {
+  const response = await client.request('GET', apiPath(`${REPO_PATH}/git/commits/{sha}`, { ...repoRef, sha }));
+  const subject = String(response.data.message ?? '').split(/\r?\n/)[0];
+  const isClaimCommit = new RegExp(`^chore\\(claim\\): #${number} \\[session [^\\]\\s]+\\]$`).test(subject);
+  return isClaimCommit ? response.data.committer?.date ?? null : null;
+}
+
+async function isInMergeQueue(client, { owner, repo }, number) {
+  const data = await client.graphql(MERGE_QUEUE_QUERY, { owner, repo, number });
+  return Boolean(data.repository?.pullRequest?.mergeQueueEntry);
+}
+
+async function loadPullFacts(client, repoRef, number, config) {
+  const pulls = await client.paginate(apiPath(`${REPO_PATH}/pulls`, repoRef), {
+    query: { head: `${repoRef.owner}:issue/${number}`, state: 'all' },
+  });
+  const newest = [...pulls].sort(newestFirst)[0];
+  if (!newest) return null;
+  const commentsPath = apiPath(`${REPO_PATH}/issues/{number}/comments`, { ...repoRef, number: newest.number });
+  const comments = await client.paginate(commentsPath);
+  const state = openOrClosed(newest.state);
+  return {
+    number: newest.number,
+    state,
+    merged: Boolean(newest.merged_at) || newest.merged === true,
+    draft: newest.draft === true,
+    inMergeQueue: state === 'open' && await isInMergeQueue(client, repoRef, newest.number),
+    released: hasMarker(newest.body ?? '', 'released'),
+    headRepo: newest.head?.repo?.full_name ?? '',
+    createdAt: newest.created_at,
+    lastAgentCommentAt: newestCreatedAt(comments, (comment) => sameLogin(comment.user?.login, config.accounts.agent)),
+  };
+}
+
+/**
+ * @param {import('./github.mjs').GitHubClient} client
+ * @param {{ owner: string, repo: string, number: number }} target
+ * @param {{ config: { accounts: { agent: string } } }} context
+ * @returns {Promise<IssueFacts>}
+ * @throws {GitHubError}
+ */
+export async function loadIssueFacts(client, { owner, repo, number }, { config }) {
+  const repoRef = { owner, repo };
+  const issue = (await client.request('GET', apiPath(`${REPO_PATH}/issues/{number}`, { ...repoRef, number }))).data;
+  const { labels, valid } = await loadLabels(client, repoRef, issue, config);
+  const ancestors = await loadAncestors(client, repoRef, number, config);
+  const blockers = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/dependencies/blocked_by`, { ...repoRef, number }));
+  const branch = await loadBranch(client, repoRef, number);
+  const issueComments = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/comments`, { ...repoRef, number }));
+  const claimCommentAt = newestCreatedAt(
+    issueComments,
+    (comment) => sameLogin(comment.user?.login, config.accounts.agent) && hasMarker(comment.body ?? '', 'claim'),
+  );
+  return {
+    number: issue.number,
+    title: issue.title ?? '',
+    type: issue.type?.name ?? null,
+    state: openOrClosed(issue.state),
+    stateReason: issue.state_reason ?? null,
+    author: issue.user?.login ?? '',
+    body: issue.body ?? '',
+    labels,
+    validLabels: valid,
+    ancestors,
+    blockedBy: blockers.map((blocker) => ({ number: blocker.number, state: openOrClosed(blocker.state) })),
+    branch,
+    claimCommentAt,
+    claimCommitAt: branch.exists ? await loadClaimCommitAt(client, repoRef, number, branch.sha) : null,
+    pr: await loadPullFacts(client, repoRef, number, config),
+  };
 }
