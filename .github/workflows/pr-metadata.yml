@@ -33,6 +33,7 @@ jobs:
         with:
           node-version: 24
       - name: Validate PR metadata
+        if: github.event_name != 'merge_group'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci/pr-metadata.mjs
@@ -45,7 +46,6 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
-      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,6 +55,7 @@ jobs:
         with:
           node-version: 24
       - name: Check PR size
+        if: github.event_name != 'merge_group'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci/pr-size.mjs
