@@ -13,7 +13,7 @@ export const PERMISSIONS = {
   administration: 'read',
   contents: 'read',
   environments: 'read',
-  variables: 'read',
+  actions_variables: 'read',
   actions: 'read',
   issues: 'read',
   members: 'read',
