@@ -29,8 +29,9 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const OP_WITH_REF = 'apply-settings';
 const OP_THEN_CHECK = 'apply-settings';
 const OP_CHECK = 'check';
-const ANCESTRY_PASSING = new Set(['identical', 'ahead']);
-const SETTINGS_PREFIX = '.github/groundwork/';
+const SETTINGS_SEGMENTS = ['.github', 'groundwork'];
+const SECRET_ENV_NAMES = ['ADMIN_APP_KEY', 'RELEASE_APP_KEY'];
+const MIN_SCRUBBED_LINE_LENGTH = 17;
 const BLOB_MODE_PREFIX = '100';
 const TEXT_MAX_LENGTH = 200;
 const TEMP_DIR_PREFIX = 'admin-run-';
@@ -113,21 +114,41 @@ export function validateRequest(inputs, registry) {
 }
 
 /**
+ * Resolves main to a SHA first: a bare `main` in a compare path can match a tag of that name.
+ * Problem text is unsanitised; callers clean it.
  * @param {GitHubClient} client
  * @param {{ org: string, repo: string, ref: string }} target
- * @returns {Promise<string|undefined>} the problem, or undefined when `ref` is `main` or an ancestor of it
+ * @returns {Promise<{ problem?: string, aheadBy?: number }>} `aheadBy` is how many commits main has beyond `ref`
  */
-export async function findAncestryProblem(client, { org, repo, ref }) {
-  const comparePath = apiPath('/repos/{org}/{repo}/compare/{ref}...main', { org, repo, ref });
-  let status;
+export async function checkAncestry(client, { org, repo, ref }) {
   try {
-    status = (await client.request('GET', comparePath)).data?.status;
+    const mainSha = await readMainSha(client, { org, repo });
+    const comparePath = apiPath('/repos/{org}/{repo}/compare/{ref}...{mainSha}', { org, repo, ref, mainSha });
+    return interpretCompare((await client.request('GET', comparePath)).data);
   } catch (error) {
     if (!(error instanceof GitHubError)) throw error;
-    return `ref ancestry check failed: ${safeText(error.message)}`;
+    return { problem: `ref ancestry check failed: ${error.message}` };
   }
-  if (ANCESTRY_PASSING.has(status)) return undefined;
-  return `ref is not main or an ancestor of main (compare status ${safeText(status ?? 'missing')})`;
+}
+
+async function readMainSha(client, { org, repo }) {
+  const refPath = apiPath('/repos/{org}/{repo}/git/ref/heads/main', { org, repo });
+  const sha = (await client.request('GET', refPath)).data?.object?.sha;
+  if (typeof sha !== 'string' || !SHA_PATTERN.test(sha)) throw new GitHubError(`GET ${refPath}: response has no commit SHA`);
+  return sha;
+}
+
+function interpretCompare(compare) {
+  if (compare?.status === 'identical') return { aheadBy: 0 };
+  if (compare?.status === 'ahead' && Number.isInteger(compare.ahead_by) && compare.ahead_by > 0) {
+    return { aheadBy: compare.ahead_by };
+  }
+  return { problem: `ref is not main or an ancestor of main (compare status ${compare?.status ?? 'missing'})` };
+}
+
+function describeAncestry(aheadBy) {
+  if (aheadBy === 0) return 'ref is main head';
+  return `ref is ${aheadBy} ${aheadBy === 1 ? 'commit' : 'commits'} behind main`;
 }
 
 /** Fence longer than any backtick run inside, so rendered content cannot close the block early. */
@@ -151,19 +172,20 @@ function renderPermissions(permissions) {
   ];
 }
 
-function renderFacts({ org, request }) {
+function renderFacts({ org, request, ancestry }) {
   const { op, module, targetRepo, ref } = request;
   return [
     `- Op: \`${op}\``,
     `- Target: ${module.TOKEN_SCOPE === 'org' ? `organisation \`${org}\`` : `\`${org}/${targetRepo}\``}`,
     `- Ref: ${ref === '' ? 'none' : `\`${ref}\``}`,
+    ...(ancestry === undefined ? [] : [`- Ancestry: ${ancestry}`]),
     `- Token: ${describeScope(module, targetRepo)}`,
   ];
 }
 
-function renderRequest({ org, request }) {
+function renderRequest({ org, request, ancestry }) {
   return [
-    ...renderFacts({ org, request }),
+    ...renderFacts({ org, request, ancestry }),
     '',
     'Args:',
     '',
@@ -171,8 +193,11 @@ function renderRequest({ org, request }) {
   ];
 }
 
+/** Untrusted text in a code span: safeText removed the backticks, so links and images stay inert. */
+const inCodeSpan = (text) => `\`${safeText(text)}\``;
+
 function failure(heading, reason) {
-  return { exitCode: 1, summary: [`## ${heading}`, '', `Result: **fail**: ${safeText(reason)}`].join('\n'), reason: safeText(reason) };
+  return { exitCode: 1, summary: [`## ${heading}`, '', `Result: **fail**: ${inCodeSpan(reason)}`].join('\n'), reason: safeText(reason) };
 }
 
 /**
@@ -188,18 +213,18 @@ export async function plan(env, overrides = {}) {
   const { problems, request } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
   const { org } = await deps.loadConfig({ root: deps.controlRoot });
+  let ancestry;
   if (request.op === OP_WITH_REF) {
-    const ancestryProblem = await findAncestryProblem(
-      deps.createClient({ env }), { org, repo: request.targetRepo, ref: request.ref },
-    );
-    if (ancestryProblem !== undefined) return failure(heading, ancestryProblem);
+    const checked = await checkAncestry(deps.createClient({ env }), { org, repo: request.targetRepo, ref: request.ref });
+    if (checked.problem !== undefined) return failure(heading, checked.problem);
+    ancestry = describeAncestry(checked.aheadBy);
   }
   const summary = [
     `## ${heading}`,
     '',
     'Result: **pass**. Approve the `admin` environment to apply.',
     '',
-    ...renderRequest({ org, request }),
+    ...renderRequest({ org, request, ancestry }),
     '',
     'Requested token permissions:',
     '',
@@ -223,13 +248,36 @@ async function readDefaultBranchHead(client, { org, repo }) {
   return sha;
 }
 
-/** Only plain `.json` files directly or deeply under .github/groundwork/, with no traversal segment. */
+/** Only plain `.json` blobs with no traversal, backslash or colon in any segment. Paths are relative to the settings subtree. */
 function isSettingsFile(entry) {
   const filePath = entry?.path;
-  if (entry?.type !== 'blob' || typeof filePath !== 'string') return false;
+  if (entry?.type !== 'blob' || typeof filePath !== 'string' || !filePath.endsWith('.json')) return false;
   if (!String(entry.mode ?? '').startsWith(BLOB_MODE_PREFIX)) return false;
-  if (!filePath.startsWith(SETTINGS_PREFIX) || !filePath.endsWith('.json')) return false;
   return filePath.split('/').every((segment) => segment !== '' && !DOT_SEGMENTS.has(segment) && !/[\\:]/.test(segment));
+}
+
+/** @returns {Promise<object[]>} the entries of one tree; a truncated or malformed response throws */
+async function readTree(client, { org, repo, sha }, query) {
+  const treePath = apiPath('/repos/{org}/{repo}/git/trees/{sha}', { org, repo, sha });
+  const tree = (await client.request('GET', treePath, query === undefined ? {} : { query })).data;
+  if (tree?.truncated === true || !Array.isArray(tree?.tree)) {
+    throw new GitHubError(`GET ${treePath}: tree is truncated or malformed`);
+  }
+  return tree.tree;
+}
+
+/** Walks one directory level at a time so only the settings subtree is ever listed recursively. */
+async function findSettingsTreeSha(client, { org, repo, sha }) {
+  let treeSha = sha;
+  for (const name of SETTINGS_SEGMENTS) {
+    const entries = await readTree(client, { org, repo, sha: treeSha });
+    const child = entries.find((entry) => entry?.path === name && entry.type === 'tree');
+    if (typeof child?.sha !== 'string' || child.sha === '') {
+      throw new GitHubError(`commit ${sha} has no ${SETTINGS_SEGMENTS.join('/')} directory`);
+    }
+    treeSha = child.sha;
+  }
+  return treeSha;
 }
 
 /**
@@ -238,18 +286,15 @@ function isSettingsFile(entry) {
  * @param {{ org: string, repo: string, sha: string, directory: string }} source
  */
 export async function materialiseSettings(client, { org, repo, sha, directory }) {
-  const treePath = apiPath('/repos/{org}/{repo}/git/trees/{sha}', { org, repo, sha });
-  const tree = (await client.request('GET', treePath, { query: { recursive: 1 } })).data;
-  if (tree?.truncated === true || !Array.isArray(tree?.tree)) {
-    throw new GitHubError(`GET ${treePath}: tree is truncated or malformed`);
-  }
-  for (const entry of tree.tree.filter(isSettingsFile)) {
+  const settingsSha = await findSettingsTreeSha(client, { org, repo, sha });
+  const entries = await readTree(client, { org, repo, sha: settingsSha }, { recursive: 1 });
+  for (const entry of entries.filter(isSettingsFile)) {
     const blobPath = apiPath('/repos/{org}/{repo}/git/blobs/{sha}', { org, repo, sha: entry.sha });
     const blob = (await client.request('GET', blobPath)).data;
     if (blob?.encoding !== 'base64' || typeof blob.content !== 'string') {
       throw new GitHubError(`GET ${blobPath}: blob is not base64`);
     }
-    const destination = path.join(directory, ...entry.path.split('/'));
+    const destination = path.join(directory, ...SETTINGS_SEGMENTS, ...entry.path.split('/'));
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, Buffer.from(blob.content, 'base64'));
   }
@@ -264,32 +309,43 @@ async function prepareSettings({ deps, request, client, org, directory }) {
   return { settingsRoot: directory };
 }
 
-/** Runs the op (and `check` after apply-settings) with the minted client. */
-async function executeOp({ deps, request, client, token, org, env, logs }) {
-  const directory = await deps.makeTempDir();
+/** @returns {Promise<{ ancestry?: string, error?: string }>} an error means the ref must not be applied */
+async function verifyRefAncestry({ request, client, org, clean }) {
+  if (request.op !== OP_WITH_REF) return {};
+  const checked = await checkAncestry(client, { org, repo: request.targetRepo, ref: request.ref });
+  if (checked.problem !== undefined) return { error: clean(checked.problem) };
+  return { ancestry: describeAncestry(checked.aheadBy) };
+}
+
+async function runOp(context) {
+  const { deps, request, client, directory, token, org, env, logs, clean } = context;
+  const { ancestry, error } = await verifyRefAncestry(context);
+  if (error !== undefined) return { ok: false, parts: [], error };
+  const { settingsRoot } = await prepareSettings({ deps, request, client, org, directory });
+  const config = await deps.loadConfig({ root: settingsRoot });
+  const repo = request.module.TOKEN_SCOPE === 'org' ? null : request.targetRepo;
+  const ctx = { client, token, org, repo, settingsRoot, config, env, log: (line) => logs.push(clean(line)) };
+  const parts = [await request.module.run(ctx)];
+  if (request.op === OP_THEN_CHECK && parts[0].ok) parts.push(await deps.registry[OP_CHECK].run(ctx));
+  return { ok: parts.every((part) => part.ok), parts, ancestry };
+}
+
+/** Runs the op (and `check` after apply-settings) with the minted client, then removes the temp directory. */
+async function executeOp(context) {
+  const directory = await context.deps.makeTempDir();
   try {
-    if (request.op === OP_WITH_REF) {
-      const problem = await findAncestryProblem(client, { org, repo: request.targetRepo, ref: request.ref });
-      if (problem !== undefined) return { ok: false, parts: [], error: problem };
-    }
-    const { settingsRoot } = await prepareSettings({ deps, request, client, org, directory });
-    const config = await deps.loadConfig({ root: settingsRoot });
-    const repo = request.module.TOKEN_SCOPE === 'org' ? null : request.targetRepo;
-    const ctx = { client, token, org, repo, settingsRoot, config, env, log: (line) => logs.push(safeText(line)) };
-    const parts = [await request.module.run(ctx)];
-    if (request.op === OP_THEN_CHECK && parts[0].ok) parts.push(await deps.registry[OP_CHECK].run(ctx));
-    return { ok: parts.every((part) => part.ok), parts };
+    return await runOp({ ...context, directory });
   } finally {
-    await deps.removeDir(directory);
+    await context.deps.removeDir(directory);
   }
 }
 
-async function revokeQuietly(deps, client) {
+async function revokeQuietly(deps, { env, token, onCall, clean }) {
   try {
-    await deps.revokeInstallationToken(client);
+    await deps.revokeInstallationToken(deps.createClient({ env, token, onCall }));
     return undefined;
   } catch (error) {
-    return `token revocation failed, valid until expiry: ${safeText(error?.message)}`;
+    return `token revocation failed, valid until expiry: ${clean(error?.message)}`;
   }
 }
 
@@ -305,19 +361,29 @@ function renderApplySummary({ org, request, outcome, calls, logs }) {
   const lines = [
     '## admin-run apply',
     '',
-    outcome.ok ? 'Result: **pass**' : `Result: **fail**${outcome.error ? `: ${safeText(outcome.error)}` : ''}`,
+    outcome.ok ? 'Result: **pass**' : `Result: **fail**${outcome.error ? `: ${inCodeSpan(outcome.error)}` : ''}`,
     '',
-    ...renderFacts({ org, request }),
+    ...renderFacts({ org, request, ancestry: outcome.ancestry }),
     '',
   ];
   for (const part of outcome.parts ?? []) lines.push(part.summary, '');
   lines.push('### API calls', '', ...renderCalls(calls), '');
-  if (logs.length > 0) lines.push('### Log', '', ...logs.map((line) => `- ${line}`), '');
+  if (logs.length > 0) lines.push('### Log', '', ...logs.map((line) => `- ${inCodeSpan(line)}`), '');
   return lines.join('\n').trimEnd();
 }
 
+/** Each secret whole, plus every long line of a multi-line one (a reflowed PEM never survives), longest first. */
+function scrubFragments(secrets) {
+  const present = secrets.filter((secret) => typeof secret === 'string' && secret !== '');
+  const longLines = present
+    .flatMap((secret) => secret.split(/\r?\n/).map((line) => line.trim()))
+    .filter((line) => line.length >= MIN_SCRUBBED_LINE_LENGTH);
+  return [...present, ...longLines].sort((first, second) => second.length - first.length);
+}
+
+/** Runs on raw text, before safeText flattens or truncates it. */
 function scrub(text, secrets) {
-  return secrets.reduce((clean, secret) => (secret === '' ? clean : clean.replaceAll(secret, MASKED)), text);
+  return scrubFragments(secrets).reduce((clean, fragment) => clean.replaceAll(fragment, MASKED), String(text ?? ''));
 }
 
 /**
@@ -338,15 +404,19 @@ export async function apply(env, overrides = {}) {
   const { org } = await deps.loadConfig({ root: deps.controlRoot });
   const calls = [];
   const logs = [];
-  const secrets = [env.ADMIN_APP_KEY];
+  const secrets = SECRET_ENV_NAMES.map((name) => env[name]);
   const record = (call) => calls.push({ method: call.method, path: call.path, status: call.status });
+  const clean = (text) => safeText(scrub(text, secrets));
   const mask = (value) => {
     secrets.push(value);
     deps.stdout(`::add-mask::${value}\n`);
   };
+  // Ops never see the key that mints their token.
+  const opEnv = { ...env };
+  delete opEnv.ADMIN_APP_KEY;
 
   let outcome;
-  let opClient;
+  let token;
   try {
     const jwt = deps.createAppJwt({ clientId: env.ADMIN_APP_CLIENT_ID, privateKey: env.ADMIN_APP_KEY });
     mask(jwt);
@@ -357,14 +427,16 @@ export async function apply(env, overrides = {}) {
       repositories,
       permissions: request.module.PERMISSIONS,
       env,
+      makeClient: (installationToken) => deps.createClient({ env, token: installationToken, onCall: record }),
     });
-    mask(minted.token);
-    opClient = deps.createClient({ env, token: minted.token, onCall: record });
-    outcome = await executeOp({ deps, request, client: opClient, token: minted.token, org, env, logs });
+    token = minted.token;
+    mask(token);
+    const client = deps.createClient({ env: opEnv, token, onCall: record });
+    outcome = await executeOp({ deps, request, client, token, org, env: opEnv, logs, clean });
   } catch (error) {
-    outcome = { ok: false, parts: [], error: safeText(error?.message) };
+    outcome = { ok: false, parts: [], error: clean(error?.message) };
   } finally {
-    const revokeProblem = opClient === undefined ? undefined : await revokeQuietly(deps, opClient);
+    const revokeProblem = token === undefined ? undefined : await revokeQuietly(deps, { env: opEnv, token, onCall: record, clean });
     if (revokeProblem !== undefined) outcome = { ...outcome, ok: false, error: [outcome?.error, revokeProblem].filter(Boolean).join('; ') };
   }
   const summary = scrub(renderApplySummary({ org, request, outcome, calls, logs }), secrets);
