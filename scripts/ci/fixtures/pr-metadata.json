@@ -471,7 +471,7 @@
   },
   {
     "description": "no-issue exemption: bypasses issue, branch, title and State rules -> pass",
-    "facts": {"eventName":"pull_request","repo":"wimdotgg/groundwork","pr":{"number":7,"title":"whatever","body":"No issue","draft":false,"author":"wianvdm-agent","headRef":"feature/x","headRepo":"stranger/x","headSha":"a1b2c3","labels":["no-issue"],"validLabels":["no-issue"]},"closingRefs":[],"issue":null,"noIssueLabeledAt":"2026-01-01T10:05:00Z","headArrivedAt":"2026-01-01T10:00:00Z","files":[],"stateTemplate":"## State  (checkpoint <n> · <date time> · <model>/<harness> · session <id>)\nDone:        <ACs done, with test evidence>\nIn progress: <current work and files>\nNext:        <next steps>\nProven:      <ACs proven, with CI run>\nUnproven:    <ACs not yet proven>\nRejected:    <approaches tried and dropped, with why>\nGotchas:     <environment or repo traps>\nOpen:        <open questions, or none>\n","commitAuthors":[],"renamedBy":[]},
+    "facts": {"eventName":"pull_request","repo":"wimdotgg/groundwork","pr":{"number":7,"title":"whatever","body":"No issue","draft":false,"author":"wianvdm-agent","headRef":"feature/x","headRepo":"wimdotgg/groundwork","headSha":"a1b2c3","labels":["no-issue"],"validLabels":["no-issue"]},"closingRefs":[],"issue":null,"noIssueLabeledAt":"2026-01-01T10:05:00Z","headArrivedAt":"2026-01-01T10:00:00Z","files":[],"stateTemplate":"## State  (checkpoint <n> · <date time> · <model>/<harness> · session <id>)\nDone:        <ACs done, with test evidence>\nIn progress: <current work and files>\nNext:        <next steps>\nProven:      <ACs proven, with CI run>\nUnproven:    <ACs not yet proven>\nRejected:    <approaches tried and dropped, with why>\nGotchas:     <environment or repo traps>\nOpen:        <open questions, or none>\n","commitAuthors":[],"renamedBy":[]},
     "expected": {"conclusion":"pass","errorsInclude":[],"actions":[]}
   },
   {
@@ -1029,7 +1029,7 @@
     "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wianvdm-agent"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
     "env": {},
     "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"d4e5f6","ref":"refs/heads/feature/x","timestamp":"2026-01-01T09:00:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}}],"headers":{}}},
-    "expected": {"throws":"no push of head"}
+    "expected": {"throws":"not head"}
   },
   {
     "description": "end-to-end: force push after the label -> fail",
@@ -1132,6 +1132,38 @@
     "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wianvdm-agent"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
     "env": {},
     "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"},{"event":"reopened","created_at":"2026-01-01T10:08:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}}],"headers":{}}},
+    "expected": {"conclusion":"fail","errorsInclude":["predates the head commit"],"actions":[]}
+  },
+  {
+    "description": "end-to-end: fork head with a base-repo push of the same SHA before the label -> fail",
+    "eventName": "pull_request",
+    "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wianvdm-agent"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"someone/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:02:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}},{"id":2,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}}],"headers":{}}},
+    "expected": {"conclusion":"fail","errorsInclude":["no-issue does not apply to PRs from another repository"],"actions":[]}
+  },
+  {
+    "description": "end-to-end: newest arrival is another SHA and an older one is the head -> throws",
+    "eventName": "pull_request",
+    "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wianvdm-agent"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":2,"before":"0000000","after":"d4e5f6","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:10:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}},{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}}],"headers":{}}},
+    "expected": {"throws":"not head"}
+  },
+  {
+    "description": "end-to-end: another SHA arriving at the same instant as the head -> throws",
+    "eventName": "pull_request",
+    "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wianvdm-agent"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":2,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}},{"id":1,"before":"0000000","after":"d4e5f6","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}}],"headers":{}}},
+    "expected": {"throws":"not head"}
+  },
+  {
+    "description": "end-to-end: automatic_base_change_succeeded after the label -> fail",
+    "eventName": "pull_request",
+    "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wianvdm-agent"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"},{"event":"automatic_base_change_succeeded","created_at":"2026-01-01T10:08:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wianvdm-agent"}}],"headers":{}}},
     "expected": {"conclusion":"fail","errorsInclude":["predates the head commit"],"actions":[]}
   }
 ]
