@@ -2735,5 +2735,19 @@
     "expected": {
       "throws": "push"
     }
+  },
+  {
+    "description": "end-to-end: missing changed_files -> collect throws",
+    "eventName": "pull_request",
+    "payload": {
+      "pull_request": {
+        "number": 7
+      }
+    },
+    "env": {},
+    "routes": {},
+    "expected": {
+      "throws": "changed_files"
+    }
   }
 ]

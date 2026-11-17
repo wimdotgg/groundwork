@@ -427,6 +427,14 @@ test('loadDesiredState rejects bypass_actors that is not an array of objects', (
   files['rulesets/main.json'].bypass_actors = [null];
 }, /bypass_actors must be an array/));
 test('loadDesiredState rejects a teamAccess that is not an array', () => assertLoadFails((files) => { files['settings.json'].teamAccess = {}; }, /teamAccess must be an array/));
+test('loadDesiredState rejects a null teamAccess entry', () => assertLoadFails((files) => { files['settings.json'].teamAccess = [null]; }, /teamAccess entries must be objects/));
+test('loadDesiredState rejects a null ruleset rule', () => assertLoadFails((files) => { files['rulesets/main.json'].rules = [null]; }, /rules must be an array of objects/));
+test('loadDesiredState rejects environment reviewers that are not an array of strings', () => assertLoadFails((files) => {
+  files['settings.json'].environments = { admin: { repos: 'all', can_admins_bypass: false, prevent_self_review: false, reviewers: 'owner' } };
+}, /environment admin reviewers must be an array of strings/));
+test('loadDesiredState rejects environment deployment_refs holding a null', () => assertLoadFails((files) => {
+  files['settings.json'].environments = { admin: { repos: 'all', can_admins_bypass: false, prevent_self_review: false, deployment_refs: [null] } };
+}, /deployment_refs must be an array of objects/));
 test('loadDesiredState rejects a string actor_id that is not a placeholder', () => assertLoadFails((files) => {
   files['rulesets/main.json'].bypass_actors = [{ actor_type: 'Integration', actor_id: '123', bypass_mode: 'always' }];
 }, /not a \{\{app-id/));

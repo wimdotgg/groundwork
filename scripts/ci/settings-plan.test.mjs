@@ -42,6 +42,9 @@ async function runCase(testCase, tempRoot) {
   for (const text of testCase.expected.detailsInclude ?? []) {
     assert.ok(result.details.includes(text), `details lack ${text}:\n${result.details}`);
   }
+  for (const text of testCase.expected.detailsExclude ?? []) {
+    assert.ok(!result.details.includes(text), `details include ${JSON.stringify(text)}:\n${result.details}`);
+  }
   if (testCase.expected.conclusion !== 'fail') assert.deepEqual(result.errors, []);
   assert.deepEqual(result.warnings, []);
   assert.deepEqual(result.actions, testCase.expected.actions ?? []);

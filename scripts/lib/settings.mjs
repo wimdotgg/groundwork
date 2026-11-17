@@ -43,6 +43,7 @@ const SETTINGS_KEYS = [
   'schemaVersion', 'repository', 'controlRepository', 'teamAccess', 'security', 'actions', 'variables', 'environments',
 ];
 const ARRAY_SECTIONS = ['teamAccess', 'variables', 'environments', 'labels', 'rulesets'];
+const ENVIRONMENT_STRING_LISTS = ['reviewers', 'secrets', 'variables'];
 const ENVIRONMENT_REPOS =['all', 'projects', 'control'];
 const ASSERT_WHEN_VALUES =['kitInstalled', 'deployReady'];
 const CODE_SCANNING_RULE = 'code_scanning';
@@ -86,6 +87,9 @@ function checkSettings(file, settings) {
   if (settings.teamAccess !== undefined && !Array.isArray(settings.teamAccess)) {
     throw new SettingsError(`${SETTINGS_FILE}: teamAccess must be an array`, file);
   }
+  if (!(settings.teamAccess ?? []).every(isPlainObject)) {
+    throw new SettingsError(`${SETTINGS_FILE}: teamAccess entries must be objects`, file);
+  }
   for (const [name, variable] of Object.entries(settings.variables ?? {})) {
     if (!ASSERT_WHEN_VALUES.includes(variable?.assertWhen)) {
       throw new SettingsError(
@@ -101,6 +105,16 @@ function checkEnvironment(file, name, environment) {
   if (!isPlainObject(environment)) throw new SettingsError(`${SETTINGS_FILE}: environment ${name} must be an object`, file);
   if (!ENVIRONMENT_REPOS.includes(environment.repos)) {
     throw new SettingsError(`${SETTINGS_FILE}: environment ${name} repos must be ${ENVIRONMENT_REPOS.join(', ')}`, file);
+  }
+  for (const field of ENVIRONMENT_STRING_LISTS) {
+    const list = environment[field];
+    if (list !== undefined && !(Array.isArray(list) && list.every((entry) => typeof entry === 'string'))) {
+      throw new SettingsError(`${SETTINGS_FILE}: environment ${name} ${field} must be an array of strings`, file);
+    }
+  }
+  const refs = environment.deployment_refs;
+  if (refs !== undefined && !(Array.isArray(refs) && refs.every(isPlainObject))) {
+    throw new SettingsError(`${SETTINGS_FILE}: environment ${name} deployment_refs must be an array of objects`, file);
   }
   for (const flag of ['can_admins_bypass', 'prevent_self_review']) {
     if (typeof environment[flag] !== 'boolean') {
@@ -144,7 +158,9 @@ function checkRuleset(file, ruleset, fileName) {
   if (!Array.isArray(bypassActors) || !bypassActors.every(isPlainObject)) {
     throw new SettingsError(`${fileName}: bypass_actors must be an array of objects`, file);
   }
-  if (!Array.isArray(ruleset.rules ?? [])) throw new SettingsError(`${fileName}: rules must be an array`, file);
+  if (!Array.isArray(ruleset.rules ?? []) || !(ruleset.rules ?? []).every(isPlainObject)) {
+    throw new SettingsError(`${fileName}: rules must be an array of objects`, file);
+  }
   for (const actor of bypassActors) {
     if (typeof actor.actor_id === 'string' && !APP_PLACEHOLDER.test(actor.actor_id)) {
       throw new SettingsError(`${fileName}: actor_id "${actor.actor_id}" is not a {{app-id:<key>}} placeholder`, file);
