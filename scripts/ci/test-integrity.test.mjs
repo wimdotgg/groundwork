@@ -6,6 +6,7 @@ import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { collect, evaluate } from './test-integrity.mjs';
 
 const root = repoRoot(import.meta.url);
+// Fixtures escape suppression tokens (- etc.) so the fixture file does not trip test-integrity on its own PRs.
 const cases = JSON.parse(await readFile(new URL('./fixtures/test-integrity.json', import.meta.url), 'utf8'));
 const config = await loadConfig({ root });
 const REPO = { owner: 'wimdotgg', repo: 'groundwork' };
