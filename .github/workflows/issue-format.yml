@@ -1,0 +1,32 @@
+name: issue-format
+
+on:
+  issues:
+    types: [opened, edited, reopened, typed, untyped]
+
+permissions:
+  contents: read
+
+# Out-of-order runs must not strip needs-format, so runs queue instead of cancelling.
+concurrency:
+  group: issue-format-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  issue-format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Validate issue format
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/issue-format.mjs
