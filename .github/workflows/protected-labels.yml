@@ -5,7 +5,7 @@ on:
     types: [labeled]
   # No PR code is checked out or executed; the script reads only the event payload and calls the API.
   pull_request_target: # zizmor: ignore[dangerous-triggers]
-    types: [labeled, synchronize]
+    types: [labeled, synchronize, reopened]
 
 permissions:
   contents: read

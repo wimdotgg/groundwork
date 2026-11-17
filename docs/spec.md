@@ -289,7 +289,7 @@ GitHub default labels are deleted. `labels.json` is the source of truth; bootstr
 | `accepted` | you only | Epic authorized |
 | `priority:p0` ... `priority:p3` | you only | Epic priority; tasks inherit |
 | `size-exception` | you only | PR may exceed size limits |
-| `no-issue` | you only | PR needs no issue; void after new commits, so re-applied after each one |
+| `no-issue` | you only | PR needs no issue; honored only when applied after the head's first run in the PR, so re-applied after each push |
 | `integrity-exception` | you only | PR may trip `test-integrity` (8.2) |
 | `needs-decision` | agent | Work stopped until you answer; claim released |
 | `needs-format` | `issue-format` | Body invalid; agents skip the issue |
@@ -304,7 +304,7 @@ The required actor per protected label lives in `config.json` `labelActors` (13.
 
 That removal is hygiene, not the gate: a removal by `GITHUB_TOKEN` fires no `unlabeled` run (D6). Every consumer of a protected label (`issue-model`, `PR metadata`, `pr-size`, `test-integrity`) therefore treats the label as valid only when the latest `labeled` event for it in the issue or PR timeline has the label's required actor.
 
-`no-issue` is also void after new commits: `protected-labels` removes it on every `pull_request_target` `synchronize`, and `PR metadata` never honors it on a `synchronize` run. The removal is hygiene for the same reason; the `PR metadata` rule is the gate. The owner's re-applying the label fires `labeled`, which re-runs `PR metadata`.
+`no-issue` is honored only by the stateless freshness rule in `PR metadata` (8.3): the label's latest `labeled` event must be later than the head's first run in this PR and later than the newest force push, on every event type. `protected-labels` also removes it on `pull_request_target` `synchronize` and `reopened`, and `PR metadata` refuses it on those runs; the removal is hygiene and the failure an early signal, not the gate. The owner's re-applying the label fires `labeled`, which re-runs `PR metadata`.
 
 ---
 
@@ -496,7 +496,7 @@ The validator scripts and `.github/groundwork/config.json` are checked out from 
 - Every AC ID in the issue appears in the `## Evidence` table with non-empty evidence.
 - `## State` exists, has no template placeholders, and lists no criterion as proven without evidence (ready-for-review PRs only; drafts get a warning).
 - Spike PRs add exactly one file `docs/decisions/<N>-<slug>.md` (N is the closed issue).
-- Exemptions from all of the above: a valid `dependencies` with author `dependabot[bot]` and a minor or patch update; a valid `automated` with author `wimdotgg-release[bot]`; a valid `no-issue` whose `labeled` event is later than the head commit's arrival, except on a `synchronize` run, where it is refused with `` `no-issue` must be re-applied after new commits ``. Arrival time is the `created_at` of the earliest workflow run for the head SHA (server-side); commit dates are client-controlled and not used.
+- Exemptions from all of the above: a valid `dependencies` with author `dependabot[bot]` and a minor or patch update; a valid `automated` with author `wimdotgg-release[bot]`; a valid `no-issue` whose latest `labeled` event is later than the head's arrival in this PR, and never on a `synchronize` or `reopened` run, where it is refused with `` `no-issue` must be re-applied after new commits or a reopen ``. Arrival is the later of the earliest `pull_request` workflow run for the head SHA whose `pull_requests` lists this PR (server-side `created_at`; runs from other PRs or branches do not count) and the newest `head_ref_force_pushed` event; none found fails the check. Commit dates are client-controlled and not used.
 - Dependabot **major** updates fail until an agent edits the PR body to add `Closes #N` for a Chore issue. For author `dependabot[bot]` the branch, `## Evidence` and `## State` rules are waived; the issue rules apply.
 
 `pr-size` fails when changed lines (additions plus deletions) exceed 400 or files exceed 20, excluding lockfiles, snapshot files and the generated-file globs in `config.json`, unless a valid `size-exception` is present. Exempt by the same rule as `PR metadata` (section 5): a valid `dependencies` with author `dependabot[bot]` (any update type), or a valid `automated` with author `wimdotgg-release[bot]`.
@@ -506,7 +506,7 @@ The validator scripts and `.github/groundwork/config.json` are checked out from 
 | Workflow | Trigger | Does |
 |---|---|---|
 | `issue-format.yml` | `issues`: opened, edited, reopened, typed, untyped | Validates headings for the type and unique criterion IDs. Invalid (or no type): adds `needs-format` and posts or updates one comment with the errors. Valid: removes `needs-format`. Permissions `issues: write`. The parent link is not checked here: it is added after creation and fires no `issues` event, so `plan-lint`, `next` and `PR metadata` check parent and depth instead. |
-| `protected-labels.yml` | `issues`: labeled; `pull_request_target`: labeled, synchronize | Removes protected labels applied by anyone but their required actor (section 5; `github.event.sender.login`, V9), and removes `no-issue` on every `synchronize`. Checks out nothing from the PR and only calls the API. Permissions `issues: write`, `pull-requests: write`. |
+| `protected-labels.yml` | `issues`: labeled; `pull_request_target`: labeled, synchronize, reopened | Removes protected labels applied by anyone but their required actor (section 5; `github.event.sender.login`, V9), and removes `no-issue` on every `synchronize` and `reopened` (hygiene; the freshness rule in 8.3 is the gate). Checks out nothing from the PR and only calls the API. Permissions `issues: write`, `pull-requests: write`. |
 | `plan-lint.yml` | `issues`: opened, edited, labeled, filtered to type Epic by a job `if`; `workflow_dispatch` with input `epic` | Runs `plan-lint` and posts or updates one report comment on the epic. Permissions `issues: write`. |
 
 ### 8.5 Release and operations workflows
@@ -959,7 +959,7 @@ Pass-through is decided in `collect`: for an event the row below maps to `skip`,
  *   headRepo: string, headSha: string, labels: string[], validLabels: string[] }} PrFacts   headRepo is owner/name */
 /** @typedef {{ eventName: string, action?: string|null, repo: string, pr: PrFacts|null, closingRefs: Array<{ keyword: string, owner: string|null, repo: string|null, number: number }>,
  *   issue: IssueFacts|null, noIssueLabeledAt: string|null, headArrivedAt: string|null, files: PrFile[], stateTemplate: string|null }} PrMetadataFacts
- *   issue: the single closing reference's issue, else null; files: only for Spike issues, else []; headArrivedAt: earliest run created_at for the head SHA, read only when no-issue is present; action: the payload action, `synchronize` voids no-issue */
+ *   issue: the single closing reference's issue, else null; files: only for Spike issues, else []; headArrivedAt: the later of the earliest pull_request run created_at for the head SHA in this PR and the newest head_ref_force_pushed event, read only when no-issue is present; action: the payload action, `synchronize` and `reopened` void no-issue */
 /** @typedef {{ eventName: string, author: string|null, validLabels: string[], files: PrFile[] }} PrSizeFacts */
 /** @typedef {{ eventName: string, validLabels: string[], files: PrFile[] }} TestIntegrityFacts */
 /** @typedef {{ eventName: string, needs: Record<string, { result: string }>|null }} CheckResultsFacts   null when NEEDS_JSON is absent or invalid */
@@ -967,7 +967,7 @@ Pass-through is decided in `collect`: for an event the row below maps to `skip`,
  *   live: Record<string, LiveSection>, signals: Signals|null, baseSettings: object|null }} SettingsPlanFacts   loadError: the SettingsError message */
 /** @typedef {{ eventName: string, action: string, issue: { number: number, author: string, type: IssueType|null, body: string, labels: string[] },
  *   markerCommentExists: boolean }} IssueFormatFacts */
-/** @typedef {{ eventName: string, action: string|null, number: number|null, label: string|null, sender: string|null, labels: string[] }} ProtectedLabelsFacts   action is the payload action of a handled event, else null; label and sender are null for skipped and synchronize events; labels: PR label names, read only for synchronize; a labeled event with a missing sender, label or number, or a synchronize event with no pull_request.number, throws */
+/** @typedef {{ eventName: string, action: string|null, number: number|null, label: string|null, sender: string|null, labels: string[] }} ProtectedLabelsFacts   action is the payload action of a handled event, else null; label and sender are null for skipped, synchronize and reopened events; labels: PR label names, read only for synchronize and reopened; a labeled event with a missing sender, label or number, or a synchronize or reopened event with no pull_request.number, throws */
 /** @typedef {{ eventName: string, workflowPath: string, workflowName: string, conclusion: string, runUrl: string,
  *   openAlert: { number: number }|null }} FailureAlertFacts */
 ```
@@ -976,13 +976,13 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 | Validator | Events | Reads | Fails when (or acts) |
 |---|---|---|---|
-| `pr-metadata` | `pull_request`; `merge_group` → `skip` | `loadIssueFacts` for the closed issue; PR timeline; earliest run for the head SHA (`/actions/runs?head_sha=`) when `no-issue` is present; PR files for Spikes; base `templates/state-section.md` from `root` | Any 8.3 rule; `no-issue` never exempts a `synchronize` run. Dependabot update type is the largest semver jump over every `from <a> to <b>` pair in title and body. Drafts get `## State` problems as warnings. |
+| `pr-metadata` | `pull_request`; `merge_group` → `skip` | `loadIssueFacts` for the closed issue; PR timeline; earliest `pull_request` run for the head SHA that lists this PR (`/actions/runs?head_sha=`) and newest force push when `no-issue` is present, throws when no such run exists; PR files for Spikes; base `templates/state-section.md` from `root` | Any 8.3 rule; `no-issue` never exempts a `synchronize` or `reopened` run. Dependabot update type is the largest semver jump over every `from <a> to <b>` pair in title and body. Drafts get `## State` problems as warnings. |
 | `pr-size` | `pull_request`; `merge_group` → `skip` | PR files (paginated); labels read live from the issue | Non-excluded additions plus deletions over `limits.prChangedLines`, or non-excluded files over `limits.prFiles`, without a valid `size-exception`. Exclusions: `sizeExcludeGlobs` plus `generatedGlobs`; a rename is excluded only when both names match an exclusion glob. Fails (exit 2) when GitHub lists fewer files than `changed_files` (3000-file cap). Exemptions (`pass`) by the `PR metadata` rule: valid `dependencies` with author `dependabot[bot]`, or valid `automated` with the release bot as author (8.3). |
 | `test-integrity` | `pull_request`; `merge_group`, `push` → `skip` | PR files with `patch`; PR timeline | A `testGlobs` file deleted or renamed to a non-test path; a test file losing more `testDeclarationPatterns` lines than it gains; an added line matching a `suppressionPatterns` entry; a removed/added line pair in a `thresholdGlobs` file that differs only in numbers (any direction: tightening also needs the label); threshold numbers removed, or a threshold file deleted or renamed away; any file with additions whose patch GitHub omits (except removed files). Comment lines do not count as gained declarations. A valid `integrity-exception` turns failures into warnings. |
 | `check-results` | any | none (`needsClient = false`); `env.NEEDS_JSON` (`toJSON(needs)`) | `needs` empty, or any job result other than `success`. |
 | `settings-plan` | `pull_request`; others → `skip` | PR files (no `.github/groundwork/` change → `skip`); `loadDesiredState({ root: env.PR_ROOT })` from the PR head checkout (8.2); `readLiveState`; `readSignals`; base `settings.json` via the contents API for the Actions file diff (V4) | Only when the settings files fail `loadDesiredState`. Otherwise `pass` with the comparison table in `details`. |
 | `issue-format` | `issues`: opened, edited, reopened, typed, untyped | the issue's comments (marker `issue-format`) | Acts: invalid → `add-label needs-format` and `upsert-comment` with the errors; valid → `remove-label needs-format` and, if a marker comment exists, `upsert-comment` "No format errors.". Author `github-actions[bot]` → `skip`. |
-| `protected-labels` | `issues`: labeled; `pull_request_target`: labeled, synchronize | payload only | Labeled: acts when `requiredLabelActor` is set and the sender differs: `remove-label` plus `comment` naming the required actor. Synchronize: `remove-label` plus `comment` when the PR carries `no-issue`, else no actions. |
+| `protected-labels` | `issues`: labeled; `pull_request_target`: labeled, synchronize, reopened | payload only | Labeled: acts when `requiredLabelActor` is set and the sender differs: `remove-label` plus `comment` naming the required actor. Synchronize and reopened: `remove-label` plus `comment` when the PR carries `no-issue`, else no actions. |
 | `failure-alert` | `workflow_run`: completed | open issues by `github-actions[bot]` carrying marker `alert:<workflow path>` | Acts: conclusion `failure`, `timed_out` or `startup_failure` → `create-issue` or `comment` on the open alert; `success` → `close-issue` on the open alert; anything else → nothing. |
 
 ---

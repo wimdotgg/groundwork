@@ -24,7 +24,7 @@ import {
  *   issue: IssueFacts|null, noIssueLabeledAt: string|null, headArrivedAt: string|null, files: PrFile[], stateTemplate: string|null,
  *   commitAuthors: string[], renamedBy: string[] }} PrMetadataFacts
  *   repo is owner/name. issue: the single same-repository closing reference's issue, else null; files: only for Spike issues, else [];
- *   headArrivedAt: the later of the earliest run created_at for the head SHA on the head branch and the newest head_ref_force_pushed event,
+ *   headArrivedAt: the later of the earliest pull_request run created_at for the head SHA in this PR and the newest head_ref_force_pushed event,
  *   read only when no-issue is present on the PR; commitAuthors: one login per PR commit, read only for Dependabot PRs;
  *   renamedBy: actor of every `renamed` timeline event; action: the payload action, absent in older facts */
 
@@ -33,7 +33,8 @@ export const name = 'pr-metadata';
 const PULL_REQUEST_EVENT = 'pull_request';
 const MERGE_GROUP_EVENT = 'merge_group';
 const NO_ISSUE_LABEL = 'no-issue';
-const SYNCHRONIZE_ACTION = 'synchronize';
+// Actions that void no-issue: protected-labels removes the label on them, and the gate refuses it on their runs.
+const NO_ISSUE_VOIDING_ACTIONS = new Set(['synchronize', 'reopened']);
 const DEPENDENCIES_LABEL = 'dependencies';
 const AUTOMATED_LABEL = 'automated';
 const NEEDS_FORMAT_LABEL = 'needs-format';
@@ -128,13 +129,17 @@ function eventTimes(timeline, eventName) {
   return timeline.filter((item) => item.event === eventName).map((item) => new Date(item.created_at).getTime()).filter(Number.isFinite);
 }
 
-// Server-side arrival of the head: the earliest run for the head SHA on the PR's own branch (a run on another branch
-// could predate the PR), pushed later by the newest force push. Fast-forward pushes are covered by protected-labels
-// removing no-issue on every new commit.
-async function loadHeadArrival(ctx, { headSha, headRef }, timeline) {
+// Server-side arrival of the head in this PR: the earliest pull_request run for the head SHA that lists this PR (a run
+// seeded from another PR or branch does not), pushed later by the newest force push. Stateless, so it holds on every
+// event type. The current run is itself such a run, so none found means the data is wrong: throw rather than guess.
+// The head branch name is not filtered: the PR number already identifies the PR, and a branch name can be reused.
+async function loadHeadArrival(ctx, { number, headSha }, timeline) {
   const runs = await ctx.client.paginate(apiPath(RUNS_PATH, ctx.repo), { query: { head_sha: headSha }, itemsKey: 'workflow_runs' });
-  const runTimes = runs.filter((run) => run.head_branch === headRef).map((run) => new Date(run.created_at).getTime()).filter(Number.isFinite);
-  if (runTimes.length === 0) return null;
+  const runTimes = runs
+    .filter((run) => run.event === PULL_REQUEST_EVENT && (run.pull_requests ?? []).some((pull) => pull.number === number))
+    .map((run) => new Date(run.created_at).getTime())
+    .filter(Number.isFinite);
+  if (runTimes.length === 0) throw new Error(`no pull_request workflow run found for head ${headSha} in PR #${number}`);
   return new Date(Math.max(Math.min(...runTimes), ...eventTimes(timeline, FORCE_PUSH_EVENT))).toISOString();
 }
 
@@ -291,6 +296,11 @@ function isFreshNoIssue(facts) {
   return noIssueLabeledAt !== null && headArrivedAt !== null && isLaterThan(noIssueLabeledAt, headArrivedAt);
 }
 
+// Early signal only: freshness is the gate, but a label that is still present on these runs is stale by definition.
+function isVoidedNoIssue(facts) {
+  return hasLabel(facts.pr.validLabels, NO_ISSUE_LABEL) && NO_ISSUE_VOIDING_ACTIONS.has(facts.action);
+}
+
 function isMinorDependabotUpdate(pr, config) {
   return isDependabotAuthor(pr.author, config) && hasLabel(pr.validLabels, DEPENDENCIES_LABEL) && dependabotUpdateType(pr.title, pr.body) !== 'major';
 }
@@ -314,14 +324,13 @@ function exemptionReason(facts, config) {
   if (hasLabel(valid, AUTOMATED_LABEL) && sameLogin(author, resolveActor(RELEASE_ACTOR, config))) {
     return 'release automation PR';
   }
-  if (hasLabel(valid, NO_ISSUE_LABEL) && facts.action !== SYNCHRONIZE_ACTION && isFreshNoIssue(facts)) return 'no-issue applied after the head commit arrived';
+  if (hasLabel(valid, NO_ISSUE_LABEL) && !isVoidedNoIssue(facts) && isFreshNoIssue(facts)) return 'no-issue applied after the head commit arrived';
   return null;
 }
 
 function staleNoIssueError(facts) {
-  if (hasLabel(facts.pr.validLabels, NO_ISSUE_LABEL) && facts.action === SYNCHRONIZE_ACTION) return ['`no-issue` must be re-applied after new commits'];
+  if (isVoidedNoIssue(facts)) return ['`no-issue` must be re-applied after new commits or a reopen'];
   if (!hasLabel(facts.pr.validLabels, NO_ISSUE_LABEL) || isFreshNoIssue(facts)) return [];
-  if (facts.headArrivedAt === null) return ['no-issue cannot be honored: no workflow run was found for the head commit'];
   return ['no-issue predates the head commit; the owner must re-apply it after the latest push'];
 }
 
