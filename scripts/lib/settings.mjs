@@ -526,13 +526,14 @@ async function readVulnerabilityAlerts(client, repo) {
 async function readSecurity(client, repo) {
   const reporting = await get(client, `${REPO_PATH}/private-vulnerability-reporting`, repo);
   const alerts = await readVulnerabilityAlerts(client, repo);
-  const fixes = await get(client, `${REPO_PATH}/automated-security-fixes`, repo);
-  const setup = await get(client, `${REPO_PATH}/code-scanning/default-setup`, repo);
+  const fixes = await client.request('GET', apiPath(`${REPO_PATH}/automated-security-fixes`, repo), { okStatuses: [404] });
+  const setup = await client.request('GET', apiPath(`${REPO_PATH}/code-scanning/default-setup`, repo), { okStatuses: UNREADABLE_STATUSES });
+  const setupReadable = !UNREADABLE_STATUSES.includes(setup.status);
   return {
     private_vulnerability_reporting: reporting.data?.enabled === true,
     vulnerability_alerts: alerts,
-    automated_security_fixes: fixes.data?.enabled === true && fixes.data?.paused !== true,
-    code_scanning_default_setup: { state: setup.data?.state },
+    automated_security_fixes: fixes.status !== 404 && fixes.data?.enabled === true && fixes.data?.paused !== true,
+    code_scanning_default_setup: setupReadable ? { state: setup.data?.state } : {},
   };
 }
 
@@ -552,28 +553,40 @@ function reviewerName({ type, reviewer }) {
   return type === 'User' ? reviewer?.login : `${TEAM_REVIEWER_PREFIX}${reviewer?.slug}`;
 }
 
+async function readDeploymentRefs(client, repo, environment) {
+  if (environment.deployment_branch_policy?.custom_branch_policies !== true) return [];
+  const path = `${REPO_PATH}/environments/{name}/deployment-branch-policies`;
+  const refs = await list(client, path, repo, { itemsKey: 'branch_policies' }, { name: environment.name });
+  return refs.map((ref) => ({ name: ref.name, type: ref.type }));
+}
+
 async function readEnvironment(client, repo, environment) {
   const params = { name: environment.name };
   const environmentPath = `${REPO_PATH}/environments/{name}`;
   const rule = (environment.protection_rules ?? []).find((candidate) => candidate.type === REQUIRED_REVIEWERS_RULE);
-  const refs = await list(client, `${environmentPath}/deployment-branch-policies`, repo, { itemsKey: 'branch_policies' }, params);
+  const refs = await readDeploymentRefs(client, repo, environment);
   const secrets = await list(client, `${environmentPath}/secrets`, repo, { itemsKey: 'secrets' }, params);
   const variables = await list(client, `${environmentPath}/variables`, repo, { itemsKey: 'variables' }, params);
   return {
     name: environment.name,
-    can_admins_bypass: environment.can_admins_bypass === true,
+    can_admins_bypass: environment.can_admins_bypass,
     prevent_self_review: rule?.prevent_self_review === true,
     reviewers: (rule?.reviewers ?? []).map(reviewerName),
-    deployment_refs: refs.map((ref) => ({ name: ref.name, type: ref.type })),
+    deployment_refs: refs,
     secrets: secrets.map((secret) => secret.name),
     variables: variables.map((variable) => variable.name),
   };
 }
 
-async function readEnvironments(client, repo) {
+/** With `environmentNames`, only those environments are read in full; the rest are listed by name only. */
+async function readEnvironments(client, repo, { environmentNames } = {}) {
   const environments = await list(client, `${REPO_PATH}/environments`, repo, { itemsKey: 'environments' });
+  const detailed = environmentNames === undefined ? null : new Set(environmentNames);
   const result = [];
-  for (const environment of environments) result.push(await readEnvironment(client, repo, environment));
+  for (const environment of environments) {
+    const wanted = detailed === null || detailed.has(environment.name);
+    result.push(wanted ? await readEnvironment(client, repo, environment) : { name: environment.name });
+  }
   return result;
 }
 
@@ -604,9 +617,9 @@ const SECTION_READERS = {
 };
 
 /** @returns {Promise<LiveSection>} */
-async function readSection(reader, client, repo) {
+async function readSection(reader, client, repo, options) {
   try {
-    return { readable: true, value: await reader(client, repo) };
+    return { readable: true, value: await reader(client, repo, options) };
   } catch (error) {
     if (error instanceof GitHubError && UNREADABLE_STATUSES.includes(error.status)) return { readable: false, status: error.status };
     throw error;
@@ -618,14 +631,15 @@ async function readSection(reader, client, repo) {
  * 403 and 404 on any request of a section make that section unreadable; other errors throw.
  * @param {import('./github.mjs').GitHubClient} client
  * @param {import('./github.mjs').RepoRef} repo
- * @param {{ sections?: string[] }} [options]
+ * @param {{ sections?: string[], environmentNames?: string[] }} [options] `environmentNames` limits the per-environment
+ *   sub-requests (branch policies, secrets, variables) to those environments; others come back as `{ name }` only.
  * @returns {Promise<Record<string, LiveSection>>}
  */
-export async function readLiveState(client, repo, { sections = Object.keys(SECTION_READERS) } = {}) {
+export async function readLiveState(client, repo, { sections = Object.keys(SECTION_READERS), environmentNames } = {}) {
   const unknown = sections.find((name) => !Object.hasOwn(SECTION_READERS, name));
   if (unknown !== undefined) throw new SettingsError(`readLiveState: unknown section "${unknown}"`);
   const live = {};
-  for (const name of sections) live[name] = await readSection(SECTION_READERS[name], client, repo);
+  for (const name of sections) live[name] = await readSection(SECTION_READERS[name], client, repo, { environmentNames });
   return live;
 }
 
@@ -647,7 +661,7 @@ async function nullWhenUnreadable(read) {
 
 async function readPass2Ran(client, repo) {
   const summaries = await listRulesetSummaries(client, repo);
-  const main = summaries.find((summary) => summary.name === MAIN_RULESET);
+  const main = summaries.find((summary) => summary.name === MAIN_RULESET && summary.target === 'branch');
   if (!main) return false;
   const ruleset = await getRuleset(client, repo, main.id);
   return (ruleset.rules ?? []).some((rule) => rule.type === CODE_SCANNING_RULE);

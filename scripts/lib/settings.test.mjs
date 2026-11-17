@@ -433,6 +433,7 @@ test('loadDesiredState rejects a string actor_id that is not a placeholder', () 
 
 const REPO = { owner: 'wimdotgg', repo: 'groundwork' };
 const R = '/repos/wimdotgg/groundwork';
+const CUSTOM_POLICIES = { protected_branches: false, custom_branch_policies: true };
 const ok = (data, headers) => ({ status: 200, data, headers });
 const failure = (status) => ({ status, data: { message: `status ${status}` } });
 const RULESET_LIST = `GET ${R}/rulesets?includes_parents=false&per_page=100`;
@@ -450,9 +451,9 @@ async function resolvedDesiredState() {
 function environmentRoutes(name, secrets, variables, refs) {
   const base = `GET ${R}/environments/${name}`;
   return {
-    [`${base}/deployment-branch-policies?per_page=100`]: ok({ branch_policies: refs }),
-    [`${base}/secrets?per_page=100`]: ok({ secrets: secrets.map((entry) => ({ name: entry })) }),
-    [`${base}/variables?per_page=100`]: ok({ variables: variables.map((entry) => ({ name: entry })) }),
+    [`${base}/deployment-branch-policies?per_page=100`]: ok({ total_count: refs.length, branch_policies: refs }),
+    [`${base}/secrets?per_page=100`]: ok({ total_count: secrets.length, secrets: secrets.map((entry) => ({ name: entry })) }),
+    [`${base}/variables?per_page=100`]: ok({ total_count: variables.length, variables: variables.map((entry) => ({ name: entry })) }),
   };
 }
 
@@ -474,10 +475,11 @@ function liveRoutes(desired) {
       { name: 'GROUNDWORK_READY', value: 'true' }, { name: 'DEPLOY_ENABLED', value: 'true' },
     ] }),
     [`GET ${R}/environments?per_page=100`]: ok({ environments: [
-      { name: 'release', can_admins_bypass: true, protection_rules: [] },
+      { name: 'release', can_admins_bypass: true, deployment_branch_policy: CUSTOM_POLICIES, protection_rules: [] },
       {
         name: 'admin',
         can_admins_bypass: false,
+        deployment_branch_policy: CUSTOM_POLICIES,
         protection_rules: [
           { type: 'wait_timer' },
           { type: 'required_reviewers', prevent_self_review: false, reviewers: [{ type: 'User', reviewer: { login: 'wianvdm' } }] },
@@ -487,7 +489,7 @@ function liveRoutes(desired) {
     ...environmentRoutes('release', ['RELEASE_APP_KEY'], ['RELEASE_APP_CLIENT_ID'], [{ id: 1, name: 'main', type: 'branch' }]),
     ...environmentRoutes('admin', ['ADMIN_APP_KEY', 'RELEASE_APP_KEY'], ['ADMIN_APP_CLIENT_ID', 'RELEASE_APP_CLIENT_ID'], [{ id: 2, name: 'main', type: 'branch' }]),
     [`GET ${R}/labels?per_page=100`]: ok(desired.labels.map((label) => ({ id: 9, ...label }))),
-    [RULESET_LIST]: ok(rulesets.map(({ id, name }) => ({ id, name }))),
+    [RULESET_LIST]: ok(rulesets.map(({ id, name, target }) => ({ id, name, target }))),
     ...Object.fromEntries(rulesets.map((ruleset) => [`GET ${R}/rulesets/${ruleset.id}`, ok(ruleset)])),
   };
 }
@@ -550,7 +552,7 @@ test('readLiveState output feeds compareStates unchanged and matches the real de
 const SECTION_FAILURE_ROUTES = {
   repository: `GET ${R}`,
   teamAccess: `GET ${R}/teams?per_page=100`,
-  security: `GET ${R}/automated-security-fixes`,
+  security: `GET ${R}/private-vulnerability-reporting`,
   actions: `GET ${R}/actions/permissions/fork-pr-contributor-approval`,
   variables: `GET ${R}/actions/variables?per_page=100`,
   environments: `GET ${R}/environments/admin/secrets?per_page=100`,
@@ -619,6 +621,7 @@ test('readLiveState: team and user reviewers are encoded, and no required_review
       {
         name: 'admin',
         can_admins_bypass: false,
+        deployment_branch_policy: CUSTOM_POLICIES,
         protection_rules: [{
           type: 'required_reviewers',
           prevent_self_review: true,
@@ -638,7 +641,7 @@ test('readLiveState: team and user reviewers are encoded, and no required_review
 test('readLiveState: environment names are encoded in request paths', async () => {
   const calls = [];
   const routes = {
-    [`GET ${R}/environments?per_page=100`]: ok({ environments: [{ name: 'a b', can_admins_bypass: true, protection_rules: [] }] }),
+    [`GET ${R}/environments?per_page=100`]: ok({ environments: [{ name: 'a b', can_admins_bypass: true, deployment_branch_policy: CUSTOM_POLICIES, protection_rules: [] }] }),
     ...environmentRoutes('a%20b', [], [], []),
   };
   const client = createFixtureClient(routes, { onCall: (record) => calls.push(record.path) });
@@ -663,7 +666,7 @@ function signalRoutes({ rules = [{ type: 'code_scanning' }], setup = ok({ state:
   return {
     [KIT_ROUTE]: kit,
     [SETUP_ROUTE]: setup,
-    [RULESET_LIST]: ok([{ id: 1, name: 'other' }, { id: 2, name: 'main' }]),
+    [RULESET_LIST]: ok([{ id: 1, name: 'other', target: 'branch' }, { id: 2, name: 'main', target: 'branch' }]),
     [`GET ${R}/rulesets/2`]: ok({ id: 2, name: 'main', rules }),
     [`GET ${R}/rulesets/1`]: ok({ id: 1, name: 'other', rules: [{ type: 'code_scanning' }] }),
   };
@@ -691,7 +694,7 @@ test('readSignals: kit-version errors other than 404 throw', async () => {
 test('readSignals: pass2Ran is read from the ruleset named main only', async () => {
   assert.equal((await signals(signalRoutes({ rules: [{ type: 'deletion' }] }))).pass2Ran, false);
   const noMain = signalRoutes();
-  noMain[RULESET_LIST] = ok([{ id: 1, name: 'other' }]);
+  noMain[RULESET_LIST] = ok([{ id: 1, name: 'other', target: 'branch' }]);
   assert.equal((await signals(noMain)).pass2Ran, false);
 });
 
@@ -714,6 +717,83 @@ test('readSignals: other errors throw', async () => {
   const routes = signalRoutes();
   routes[RULESET_LIST] = failure(500);
   await assert.rejects(signals(routes), GitHubError);
+});
+
+test('readSignals: 404 gives null for default-setup, the ruleset list and rulesets/{id}', async () => {
+  assert.equal((await signals(signalRoutes({ setup: failure(404) }))).codeScanningConfigured, null);
+  const noList = signalRoutes();
+  noList[RULESET_LIST] = failure(404);
+  assert.equal((await signals(noList)).pass2Ran, null);
+  const noBody = signalRoutes();
+  noBody[`GET ${R}/rulesets/2`] = failure(404);
+  assert.equal((await signals(noBody)).pass2Ran, null);
+});
+
+test('readSignals: a tag ruleset named main does not count for pass2Ran', async () => {
+  const routes = signalRoutes();
+  routes[RULESET_LIST] = ok([{ id: 2, name: 'main', target: 'tag' }]);
+  assert.equal((await signals(routes)).pass2Ran, false);
+});
+
+test('readLiveState: an absent can_admins_bypass is not read as false and differs from desired false', async () => {
+  const desired = await resolvedDesiredState();
+  const live = await readLive({
+    [`GET ${R}/environments?per_page=100`]: ok({ total_count: 2, environments: [
+      { name: 'release', can_admins_bypass: true, deployment_branch_policy: CUSTOM_POLICIES, protection_rules: [] },
+      { name: 'admin', deployment_branch_policy: CUSTOM_POLICIES, protection_rules: [] },
+    ] }),
+  });
+  assert.equal(live.environments.value[1].can_admins_bypass, undefined);
+  const rows = compareStates(desired, live, { repoKind: 'control', config: CONFIG, signals: SIGNALS });
+  assert.equal(find(rows, 'environments', 'admin.can_admins_bypass').result, 'differ');
+});
+
+test('readLiveState: branch policies are read only for custom_branch_policies environments', async () => {
+  const desired = await resolvedDesiredState();
+  const calls = [];
+  const routes = {
+    ...liveRoutes(desired),
+    [`GET ${R}/environments?per_page=100`]: ok({ total_count: 3, environments: [
+      { name: 'release', can_admins_bypass: true, deployment_branch_policy: null, protection_rules: [] },
+      { name: 'admin', can_admins_bypass: false, deployment_branch_policy: { protected_branches: true, custom_branch_policies: false }, protection_rules: [] },
+      { name: 'extra', can_admins_bypass: false, protection_rules: [] },
+    ] }),
+    ...environmentRoutes('extra', [], [], []),
+  };
+  const client = createFixtureClient(routes, { onCall: (record) => calls.push(record.path) });
+  const live = await readLiveState(client, REPO, { sections: ['environments'] });
+  assert.ok(live.environments.value.every((entry) => entry.deployment_refs.length === 0));
+  assert.ok(!calls.some((entry) => entry.includes('deployment-branch-policies')));
+});
+
+test('readLiveState: environmentNames limits sub-requests and lists other environments by name only', async () => {
+  const desired = await resolvedDesiredState();
+  const calls = [];
+  const client = createFixtureClient(liveRoutes(desired), { onCall: (record) => calls.push(record.path) });
+  const live = await readLiveState(client, REPO, { sections: ['environments'], environmentNames: ['release'] });
+  assert.deepEqual(live.environments.value[1], { name: 'admin' });
+  assert.equal(live.environments.value[0].secrets[0], 'RELEASE_APP_KEY');
+  assert.ok(calls.every((entry) => !entry.includes('/environments/admin/')));
+});
+
+test('readLiveState: automated-security-fixes 404 is disabled, not unreadable', async () => {
+  const live = await readLive({ [`GET ${R}/automated-security-fixes`]: failure(404) });
+  assert.equal(live.security.readable, true);
+  assert.equal(live.security.value.automated_security_fixes, false);
+  await assert.rejects(readLive({ [`GET ${R}/automated-security-fixes`]: failure(500) }), GitHubError);
+});
+
+test('readLiveState: 403 and 404 on default-setup leave the rest of security readable with an empty setup', async () => {
+  const desired = await resolvedDesiredState();
+  for (const status of [403, 404]) {
+    const live = await readLive({ [SETUP_ROUTE]: failure(status) });
+    assert.equal(live.security.readable, true);
+    assert.deepEqual(live.security.value.code_scanning_default_setup, {});
+    assert.equal(live.security.value.vulnerability_alerts, true);
+    const rows = compareStates(desired, live, { repoKind: 'control', config: CONFIG, signals: SIGNALS });
+    assert.equal(find(rows, 'security', 'code_scanning_default_setup.state').result, 'missing');
+  }
+  await assert.rejects(readLive({ [SETUP_ROUTE]: failure(500) }), GitHubError);
 });
 
 test('readSignals output feeds compareStates: null signals make dependent rows unreadable', async () => {
