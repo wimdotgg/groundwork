@@ -25,9 +25,6 @@ for (const testCase of cases) {
     }
     const result = evaluate(await factsFor(testCase), config);
     assert.equal(result.conclusion, testCase.expected.conclusion);
-    for (const text of testCase.expected.errorsInclude) {
-      assert.ok(result.errors.some((error) => error.includes(text)), `no error includes ${text}: ${result.errors.join(' | ')}`);
-    }
     assert.deepEqual(result.errors, []);
     assert.deepEqual(result.actions, testCase.expected.actions);
   });
