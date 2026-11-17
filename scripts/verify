@@ -1,0 +1,46 @@
+#!/bin/sh
+# Syntax-checks every .mjs file and parses every JSON file under .github/groundwork.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
+exec node --input-type=module -e '
+import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+
+const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git", ".artifacts"]);
+const SKIPPED_PATHS = new Set([".claude/worktrees"]);
+const failures = [];
+let checked = 0;
+let jsonFound = 0;
+
+function walk(directory, visit) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = directory === "." ? entry.name : `${directory}/${entry.name}`;
+    if (!entry.isDirectory()) { visit(path); continue; }
+    if (SKIPPED_DIRECTORIES.has(entry.name) || SKIPPED_PATHS.has(path)) continue;
+    walk(path, visit);
+  }
+}
+
+walk(".", (path) => {
+  if (!path.endsWith(".mjs")) return;
+  checked++;
+  const result = spawnSync(process.execPath, ["--check", "--", path], { encoding: "utf8" });
+  if (result.status === 0) return;
+  const detail = (result.stderr ?? "").split("\n").find((line) => /Error/.test(line)) ?? result.error?.message ?? "node --check failed";
+  failures.push(`FAIL ${path}: ${detail}`);
+});
+
+walk(".github/groundwork", (path) => {
+  if (!path.endsWith(".json")) return;
+  checked++;
+  jsonFound++;
+  try { JSON.parse(readFileSync(path, "utf8")); }
+  catch (error) { failures.push(`FAIL ${path}: ${error.message}`); }
+});
+if (jsonFound === 0) failures.push("FAIL .github/groundwork: no JSON files found");
+
+for (const failure of failures) console.error(failure);
+console.log(`verify: ${checked} files checked, ${failures.length} failed`);
+process.exit(failures.length === 0 ? 0 : 1);
+'
