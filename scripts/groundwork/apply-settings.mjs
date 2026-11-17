@@ -17,7 +17,7 @@ export const TOKEN_SCOPE = 'target';
 export const PERMISSIONS = {
   administration: 'write',
   environments: 'write',
-  variables: 'write',
+  actions_variables: 'write',
   issues: 'write',
   contents: 'read',
   members: 'read',

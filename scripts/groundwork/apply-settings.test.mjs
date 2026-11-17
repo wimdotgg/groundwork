@@ -124,7 +124,7 @@ test('exports the admin op contract', () => {
   assert.equal(OP, 'apply-settings');
   assert.equal(TOKEN_SCOPE, 'target');
   assert.deepEqual(PERMISSIONS, {
-    administration: 'write', environments: 'write', variables: 'write', issues: 'write',
+    administration: 'write', environments: 'write', actions_variables: 'write', issues: 'write',
     contents: 'read', members: 'read', actions: 'read',
   });
 });

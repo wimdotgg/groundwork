@@ -750,6 +750,8 @@ Jobs:
 
 Ops available now: `apply-settings`, `check` and `create-issue-types`; `bootstrap`, `bootstrap-pass2`, `script` and `selftest` arrive in Phase 4.
 
+
+Access-token request keys are the snake_case names GitHub reports in `X-Accepted-GitHub-Permissions` (repository Variables is `actions_variables`; Issue types is `issue_types`).
 Labels are written through the Issues permission. The permission keys for the token request body come from the GitHub App permissions reference (V7 covers the Issue types key).
 
 Concurrency group `admin-${{ inputs.target_repo || 'org' }}`, never cancelled.
@@ -1198,3 +1200,4 @@ Folded in after Phase 0 (section 19 has the evidence) and the implementation-pla
 7. 12.1: available ops, `apply-settings` and `create-issue-types` behaviour, `issue_types` key.
 8. 13, 13.1: `request.mjs` ops; admin op module contract; `app-token.mjs` API.
 9. 19: V7 recorded as partial.
+10. 12.1: access-token permission keys follow `X-Accepted-GitHub-Permissions`; Variables is `actions_variables`, not `variables`.

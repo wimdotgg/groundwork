@@ -91,7 +91,7 @@ test('module contract: op name, target scope and read-only permissions', () => {
   assert.equal(OP, 'check');
   assert.equal(TOKEN_SCOPE, 'target');
   assert.deepEqual(PERMISSIONS, {
-    administration: 'read', contents: 'read', environments: 'read', variables: 'read',
+    administration: 'read', contents: 'read', environments: 'read', actions_variables: 'read',
     actions: 'read', issues: 'read', members: 'read',
   });
 });
