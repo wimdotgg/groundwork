@@ -1,0 +1,65 @@
+name: Chore
+description: Maintenance, dependencies, refactors without behavior change.
+type: Chore
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: "What is true when this is done."
+    validations:
+      required: true
+  - type: input
+    id: serves
+    attributes:
+      label: Serves
+      description: "Epic criteria advanced, e.g. E2."
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: "In / out."
+    validations:
+      required: true
+  - type: textarea
+    id: touches
+    attributes:
+      label: Touches
+      description: "Expected paths or modules; name hotspots explicitly."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: "- [ ] AC1 ... (observable), one per line."
+      value: "- [ ] AC1 "
+    validations:
+      required: true
+  - type: textarea
+    id: verification-plan
+    attributes:
+      label: Verification plan
+      description: "Commands, tests, visual evidence expected."
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk
+      description: "Rollback plan required if high."
+      options:
+        - low
+        - medium
+        - high
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: "Files, links, prior decisions."
+    validations:
+      required: false

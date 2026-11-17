@@ -1,0 +1,47 @@
+name: Epic
+description: A delegated goal with success criteria.
+type: Epic
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: "One paragraph: outcome and why."
+    validations:
+      required: true
+  - type: textarea
+    id: success-criteria
+    attributes:
+      label: Success criteria
+      description: "- [ ] E1 ... (observable, checkable), one per line."
+      value: "- [ ] E1 "
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: "Limits, non-goals, out of scope."
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: Plan
+      description: "Approach, lanes, risks. Planner-written before acceptance."
+    validations:
+      required: false
+  - type: textarea
+    id: decisions
+    attributes:
+      label: Decisions
+      description: "Dated, append-only."
+    validations:
+      required: false
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: "Anything unresolved."
+    validations:
+      required: false

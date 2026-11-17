@@ -1,0 +1,32 @@
+name: Spike
+description: Investigation that ends in a decision record.
+type: Spike
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: "What must be answered."
+    validations:
+      required: true
+  - type: input
+    id: serves
+    attributes:
+      label: Serves
+      description: "Epic criteria advanced, e.g. E2."
+    validations:
+      required: true
+  - type: input
+    id: timebox
+    attributes:
+      label: Timebox
+      description: "Maximum time to spend."
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: "What the decision record at docs/decisions/N-slug.md must answer."
+    validations:
+      required: true
