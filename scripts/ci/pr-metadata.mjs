@@ -20,19 +20,23 @@ import {
 /** @typedef {{ filename: string, previousFilename: string|null, status: string, additions: number, deletions: number, patch: string|null }} PrFile */
 /** @typedef {{ number: number, title: string, body: string, draft: boolean, author: string, headRef: string,
  *   headRepo: string, headSha: string, labels: string[], validLabels: string[] }} PrFacts   headRepo is owner/name */
-/** @typedef {{ eventName: string, repo: string, pr: PrFacts|null, closingRefs: Array<{ keyword: string, owner: string|null, repo: string|null, number: number }>,
+/** @typedef {{ eventName: string, action?: string|null, repo: string, pr: PrFacts|null, closingRefs: Array<{ keyword: string, owner: string|null, repo: string|null, number: number }>,
  *   issue: IssueFacts|null, noIssueLabeledAt: string|null, headArrivedAt: string|null, files: PrFile[], stateTemplate: string|null,
  *   commitAuthors: string[], renamedBy: string[] }} PrMetadataFacts
  *   repo is owner/name. issue: the single same-repository closing reference's issue, else null; files: only for Spike issues, else [];
- *   headArrivedAt: the later of the earliest run created_at for the head SHA on the head branch and the newest head_ref_force_pushed event,
- *   read only when no-issue is present on the PR; commitAuthors: one login per PR commit, read only for Dependabot PRs;
- *   renamedBy: actor of every `renamed` timeline event */
+ *   headArrivedAt: the newest arrival on the PR branch (repository activity timestamp; its SHA must be the head), or a later head_ref_force_pushed,
+ *   reopened, base_ref_changed or automatic_base_change_succeeded event, read only when no-issue is present on a PR from this repository; commitAuthors: one login per PR commit, read only for Dependabot PRs;
+ *   renamedBy: actor of every `renamed` timeline event; action: the payload action, absent in older facts */
 
 export const name = 'pr-metadata';
 
 const PULL_REQUEST_EVENT = 'pull_request';
 const MERGE_GROUP_EVENT = 'merge_group';
 const NO_ISSUE_LABEL = 'no-issue';
+const SYNCHRONIZE_ACTION = 'synchronize';
+const REOPENED_ACTION = 'reopened';
+// Actions that void no-issue: protected-labels removes the label on them, and the gate refuses it on their runs.
+const NO_ISSUE_VOIDING_ACTIONS = new Set([SYNCHRONIZE_ACTION, REOPENED_ACTION]);
 const DEPENDENCIES_LABEL = 'dependencies';
 const AUTOMATED_LABEL = 'automated';
 const NEEDS_FORMAT_LABEL = 'needs-format';
@@ -53,8 +57,15 @@ const PULL_PATH = '/repos/{owner}/{repo}/pulls/{number}';
 const TIMELINE_PATH = '/repos/{owner}/{repo}/issues/{number}/timeline';
 const FILES_PATH = '/repos/{owner}/{repo}/pulls/{number}/files';
 const COMMITS_PATH = '/repos/{owner}/{repo}/pulls/{number}/commits';
-const RUNS_PATH = '/repos/{owner}/{repo}/actions/runs';
+const ACTIVITY_PATH = '/repos/{owner}/{repo}/activity';
+// Repository activity types that put a commit on a branch; branch_deletion is the only other type.
+const ARRIVAL_ACTIVITY_TYPES = new Set(['push', 'force_push', 'branch_creation', 'pr_merge', 'merge_queue_merge']);
+// Timeline events that void an earlier label even when the head SHA is unchanged.
 const FORCE_PUSH_EVENT = 'head_ref_force_pushed';
+const REOPENED_EVENT = 'reopened';
+const BASE_CHANGED_EVENT = 'base_ref_changed';
+const AUTOMATIC_BASE_CHANGE_EVENT = 'automatic_base_change_succeeded';
+const VOIDING_TIMELINE_EVENTS = [FORCE_PUSH_EVENT, REOPENED_EVENT, BASE_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_EVENT];
 const RENAMED_EVENT = 'renamed';
 const NOREPLY_EMAIL = /^(?:\d+\+)?(.+)@users\.noreply\.github\.com$/i;
 const BRANCH_PATTERN = /^issue\/\d+$/;
@@ -78,6 +89,7 @@ const STATE_FIELD_LINE = /^[\s>*_~`+-]*([A-Za-z][A-Za-z ]*?)[\s*_~`]*:[\s*_~`]*(
 function emptyFacts(eventName) {
   return {
     eventName,
+    action: null,
     repo: '',
     pr: null,
     closingRefs: [],
@@ -126,14 +138,23 @@ function eventTimes(timeline, eventName) {
   return timeline.filter((item) => item.event === eventName).map((item) => new Date(item.created_at).getTime()).filter(Number.isFinite);
 }
 
-// Server-side arrival of the head: the earliest run for the head SHA on the PR's own branch (a run on another branch
-// could predate the PR), pushed later by the newest force push. Fast-forward pushes are covered by protected-labels
-// removing no-issue on every new commit.
-async function loadHeadArrival(ctx, { headSha, headRef }, timeline) {
-  const runs = await ctx.client.paginate(apiPath(RUNS_PATH, ctx.repo), { query: { head_sha: headSha }, itemsKey: 'workflow_runs' });
-  const runTimes = runs.filter((run) => run.head_branch === headRef).map((run) => new Date(run.created_at).getTime()).filter(Number.isFinite);
-  if (runTimes.length === 0) return null;
-  return new Date(Math.max(Math.min(...runTimes), ...eventTimes(timeline, FORCE_PUSH_EVENT))).toISOString();
+// Server-side arrival of the head in this PR: the newest arrival on the PR branch (repository activity, server time),
+// pushed later by a force push, a reopen or a base change. Stateless, so it holds on every event type. Activity is per
+// branch, not per PR, so the timeline events cover what a repeated SHA would hide. The newest entry must be the head: an
+// older entry for the same SHA would hide a push the listing has not caught up with, or a branch that moved on. The
+// run's own push is an activity entry, so none found means the data is wrong: throw rather than guess.
+async function loadHeadArrival(ctx, { number, headRef, headSha }, timeline) {
+  const activities = await ctx.client.paginate(apiPath(ACTIVITY_PATH, ctx.repo), { query: { ref: `refs/heads/${headRef}` } });
+  const arrivals = activities
+    .filter((activity) => ARRIVAL_ACTIVITY_TYPES.has(activity.activity_type))
+    .map((activity) => ({ after: activity.after, time: new Date(activity.timestamp).getTime() }))
+    .filter((arrival) => Number.isFinite(arrival.time));
+  if (arrivals.length === 0) throw new Error(`no push of head ${headSha} to ${headRef} found in the repository activity for PR #${number}`);
+  const newestTime = Math.max(...arrivals.map((arrival) => arrival.time));
+  const movedOn = arrivals.find((arrival) => arrival.time === newestTime && arrival.after !== headSha);
+  if (movedOn) throw new Error(`the newest arrival on ${headRef} is ${movedOn.after}, not head ${headSha} (listing lag or moved branch) for PR #${number}; re-run later`);
+  const voidingTimes = VOIDING_TIMELINE_EVENTS.flatMap((eventName) => eventTimes(timeline, eventName));
+  return new Date(Math.max(newestTime, ...voidingTimes)).toISOString();
 }
 
 function commitAuthorLogin(commit) {
@@ -202,12 +223,13 @@ export async function collect(ctx) {
   const hasNoIssue = hasLabel(labels, NO_ISSUE_LABEL);
   return {
     eventName: ctx.eventName,
+    action: ctx.payload.action ?? null,
     repo: `${ctx.repo.owner}/${ctx.repo.repo}`,
     pr,
     closingRefs,
     issue,
     noIssueLabeledAt: hasNoIssue ? latestLabeledEvent(timeline, NO_ISSUE_LABEL)?.createdAt ?? null : null,
-    headArrivedAt: hasNoIssue ? await loadHeadArrival(ctx, pr, timeline) : null,
+    headArrivedAt: hasNoIssue && sameLogin(pr.headRepo, `${ctx.repo.owner}/${ctx.repo.repo}`) ? await loadHeadArrival(ctx, pr, timeline) : null,
     files: issue?.type === SPIKE_TYPE ? await loadFiles(ctx, params) : [],
     stateTemplate: await readStateTemplate(ctx.root),
     commitAuthors: isDependabotAuthor(author, ctx.config) ? await loadCommitAuthors(ctx, params) : [],
@@ -283,9 +305,16 @@ function isLaterThan(later, earlier) {
   return new Date(later).getTime() > new Date(earlier).getTime();
 }
 
+// Activity is read from this repository by branch name, so a fork head with the same branch name proves nothing.
 function isFreshNoIssue(facts) {
   const { noIssueLabeledAt, headArrivedAt } = facts;
+  if (!sameLogin(facts.pr.headRepo, facts.repo)) return false;
   return noIssueLabeledAt !== null && headArrivedAt !== null && isLaterThan(noIssueLabeledAt, headArrivedAt);
+}
+
+// Early signal only: freshness is the gate, but a label that is still present on these runs is stale by definition.
+function isVoidedNoIssue(facts) {
+  return hasLabel(facts.pr.validLabels, NO_ISSUE_LABEL) && NO_ISSUE_VOIDING_ACTIONS.has(facts.action);
 }
 
 function isMinorDependabotUpdate(pr, config) {
@@ -311,13 +340,14 @@ function exemptionReason(facts, config) {
   if (hasLabel(valid, AUTOMATED_LABEL) && sameLogin(author, resolveActor(RELEASE_ACTOR, config))) {
     return 'release automation PR';
   }
-  if (hasLabel(valid, NO_ISSUE_LABEL) && isFreshNoIssue(facts)) return 'no-issue applied after the head commit arrived';
+  if (hasLabel(valid, NO_ISSUE_LABEL) && !isVoidedNoIssue(facts) && isFreshNoIssue(facts)) return 'no-issue applied after the head commit arrived';
   return null;
 }
 
 function staleNoIssueError(facts) {
+  if (isVoidedNoIssue(facts)) return ['`no-issue` must be re-applied after new commits or a reopen'];
   if (!hasLabel(facts.pr.validLabels, NO_ISSUE_LABEL) || isFreshNoIssue(facts)) return [];
-  if (facts.headArrivedAt === null) return ['no-issue cannot be honored: no workflow run was found for the head commit'];
+  if (!sameLogin(facts.pr.headRepo, facts.repo)) return ['no-issue does not apply to PRs from another repository'];
   return ['no-issue predates the head commit; the owner must re-apply it after the latest push'];
 }
 
