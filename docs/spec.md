@@ -1126,7 +1126,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 ## 19. Assumptions to verify before or during implementation
 
-Phase 0 ran on `wimdotgg/probe` (archived; links stay valid). Result values: verified, redesigned (the design changed to fit what GitHub does), pending.
+Phase 0 ran on `wimdotgg/probe` (archived; links stay valid). Result values: verified, redesigned (the design changed to fit what GitHub does), known gap (checked and not confirmed, with a Bug), pending.
 
 | # | Assumption | How to verify | Result |
 |---|---|---|---|
@@ -1146,6 +1146,9 @@ Phase 0 ran on `wimdotgg/probe` (archived; links stay valid). Result values: ver
 | V14 | `gh` on the agent machine supports `--type`, `--parent`, `--blocked-by` at the version named in D4; otherwise the scripts use `gh api` for those calls | `gh issue create --help` | Verified: `gh` 2.102 has all three. |
 | V15 | release-please `simple` with manifest `{}`, `initial-version` and `version.txt` `0.0.0` proposes `0.1.0` first | First release PR in `groundwork` | Verified: dry run proposes `chore(main): release 0.1.0`. |
 | V16 | The `issue-branches` ruleset (9.5) rejects non-fast-forward pushes to `issue/*` while fast-forward pushes, branch deletion and `delete_branch_on_merge` keep working | Throwaway repo test | Verified on `probe`. |
+| V17 | The `settings-plan` job reads environments with the PR `GITHUB_TOKEN` on a real PR that changes `.github/groundwork/` | Job summary of such a PR run | Known gap: [PR #71](https://github.com/wimdotgg/groundwork/pull/71) ran `settings-plan` ([job](https://github.com/wimdotgg/groundwork/actions/runs/44809025343/job/136540476210), success), but the plan goes only to the job summary, which `gh`, the job API and check-run `output.summary` do not return, so which sections were read is not shown. A 403 or 404 makes a section unreadable without failing the job. Bug [#110](https://github.com/wimdotgg/groundwork/issues/110). V4 stays as written. |
+| V18 | The `automatic_base_change_succeeded` event carries `created_at`, and `PR metadata` can read it | GitHub issue event types docs; live timeline | Known gap: [docs](https://docs.github.com/en/rest/using-the-rest-api/issue-event-types) confirm `created_at` (string, event time), but list the event for pull requests as supported in the REST API for issue events and not supported in the REST API for timeline events, the only endpoint `pr-metadata.mjs` reads (8.2, 13.1). No live PR here has the event. Bug [#109](https://github.com/wimdotgg/groundwork/issues/109). |
+| V19 | `failure-alert` opens an alert issue on failure, comments on a repeat, closes it on the next success | Failing release-please or deploy run | Known gap: untested. No alert issue exists; the recent `failure-alert` [runs](https://github.com/wimdotgg/groundwork/actions/workflows/failure-alert.yml) all concluded success on successful source runs. Exercising it needs a failing release or deploy run, which is not done on purpose. |
 
 ---
 
@@ -1164,6 +1167,10 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-20: Phase 2 live verification (#78)
+
+19: V17 to V19 added and the Result values gain `known gap`. `settings-plan` environment reads and the `failure-alert` cycle are unconfirmed; `automatic_base_change_succeeded` is documented as absent from the timeline endpoint `PR metadata` reads (bugs #110, #109).
 
 ### 2026-11-20: release App variable and apply-settings (#77)
 
