@@ -37,6 +37,7 @@ const INITIAL_STATE = {
   gotchas: 'none',
   open: 'none',
 };
+const CLOSING_KEYWORD_BEFORE_REF = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+(?=(?:[\w.-]+\/[\w.-]+)?#\d|https?:\/\/)/gi;
 const USAGE = 'usage: claim.mjs <issue number> --session <id> --agent <model>/<harness> [--json]';
 
 const repoParams = (repo, extra = {}) => ({ ...repo, ...extra });
@@ -62,28 +63,45 @@ function fillOwned(template, values) {
   return text;
 }
 
-/** @returns {Promise<{ number: number, session: string }|null>} the draft PR on another issue that this session holds */
-async function findHeldDraft(context) {
-  const { client, repo, config, number, session } = context;
-  const pulls = await client.paginate(apiPath(`${REPO_PATH}/pulls`, repoParams(repo)), { query: { state: 'open' } });
-  const held = pulls.find((pull) => pull.draft === true
-    && pull.head?.ref?.startsWith('issue/')
-    && pull.head.ref !== issueBranch(number)
-    && sameLogin(pull.user?.login, config.accounts.agent)
-    && footerSession(pull.body) === session);
-  return held ? { number: held.number, session } : null;
+function renderComment(templates, sectionName, values) {
+  const section = templateSection(templates.claimComment, sectionName);
+  if (section === null) throw new GitHubError(`claim: claim-comment.md has no "${sectionName}" section`);
+  const { text, unfilled } = fillTemplate(section, values);
+  if (unfilled.length > 0) throw new GitHubError(`claim: comment placeholders without a value: ${unfilled.join(' ')}`);
+  return text;
 }
 
-async function findOpenPull({ client, repo, number }) {
+const isOurPull = ({ repo, config }, pull) => sameLogin(pull.user?.login, config.accounts.agent)
+  && sameLogin(pull.head?.repo?.full_name, `${repo.owner}/${repo.repo}`);
+
+/** Closing keywords in an issue title would close another issue when the PR merges. */
+const stripClosingKeywords = (title) => title.replace(CLOSING_KEYWORD_BEFORE_REF, '');
+
+/** @returns {Promise<number[]>} the draft PRs on other issues that this session holds; a released draft is not held */
+async function findHeldDrafts(context) {
+  const { client, repo, number, session } = context;
+  const pulls = await client.paginate(apiPath(`${REPO_PATH}/pulls`, repoParams(repo)), { query: { state: 'open' } });
+  return pulls
+    .filter((pull) => pull.draft === true
+      && pull.head?.ref?.startsWith('issue/')
+      && pull.head.ref !== issueBranch(number)
+      && isOurPull(context, pull)
+      && !hasMarker(pull.body ?? '', 'released')
+      && footerSession(pull.body) === session)
+    .map((pull) => pull.number);
+}
+
+async function findOpenPull(context) {
+  const { client, repo, number } = context;
   const pulls = await client.paginate(apiPath(`${REPO_PATH}/pulls`, repoParams(repo)), {
     query: { head: `${repo.owner}:${issueBranch(number)}`, state: 'open' },
   });
-  return pulls.find((pull) => pull.head?.ref === issueBranch(number)) ?? null;
+  return pulls.find((pull) => pull.head?.ref === issueBranch(number) && isOurPull(context, pull)) ?? null;
 }
 
-async function hasAgentMarkerComment({ client, repo, config }, issueNumber) {
+async function hasAgentComment({ client, repo, config }, issueNumber, expectedBody) {
   const comments = await client.paginate(apiPath(`${REPO_PATH}/issues/{issueNumber}/comments`, repoParams(repo, { issueNumber })));
-  return comments.some((comment) => sameLogin(comment.user?.login, config.accounts.agent) && hasMarker(comment.body ?? '', 'claim'));
+  return comments.some((comment) => sameLogin(comment.user?.login, config.accounts.agent) && (comment.body ?? '').trim() === expectedBody);
 }
 
 /** @returns {Promise<{ exists: boolean, sha: string|null }>} */
@@ -102,7 +120,7 @@ async function headIsOwnClaimCommit(context, sha) {
 }
 
 async function branchBelongsToSession(context, sha, openPull) {
-  if (openPull && footerSession(openPull.body) === context.session) return true;
+  if (openPull) return footerSession(openPull.body) === context.session;
   return headIsOwnClaimCommit(context, sha);
 }
 
@@ -112,10 +130,10 @@ async function branchBelongsToSession(context, sha, openPull) {
  * @returns {Promise<boolean>} true when this call created the ref
  */
 async function createClaimRef({ client, repo, number, session }) {
-  const main = (await client.request('GET', apiPath(`${REPO_PATH}/git/ref/heads/{base}`, repoParams(repo, { base: BASE_BRANCH })))).data.object.sha;
-  const tree = (await client.request('GET', apiPath(`${REPO_PATH}/git/commits/{main}`, repoParams(repo, { main })))).data.tree.sha;
+  const mainSha = (await client.request('GET', apiPath(`${REPO_PATH}/git/ref/heads/{base}`, repoParams(repo, { base: BASE_BRANCH })))).data.object.sha;
+  const tree = (await client.request('GET', apiPath(`${REPO_PATH}/git/commits/{mainSha}`, repoParams(repo, { mainSha })))).data.tree.sha;
   const commit = await client.request('POST', apiPath(`${REPO_PATH}/git/commits`, repoParams(repo)), {
-    body: { message: claimCommitMessage({ number, session }), tree, parents: [main] },
+    body: { message: claimCommitMessage({ number, session }), tree, parents: [mainSha] },
   });
   try {
     const ref = await client.request('POST', apiPath(`${REPO_PATH}/git/refs`, repoParams(repo)), {
@@ -133,31 +151,39 @@ async function postComment({ client, repo }, issueNumber, body) {
   await client.request('POST', apiPath(`${REPO_PATH}/issues/{issueNumber}/comments`, repoParams(repo, { issueNumber })), { body: { body } });
 }
 
-async function createDraftPull(context) {
-  const { client, repo, number, session, agent, templates, now } = context;
-  const issue = (await client.request('GET', apiPath(`${REPO_PATH}/issues/{number}`, repoParams(repo, { number })))).data;
-  const prefix = titlePrefix(issue.type?.name);
-  if (!prefix) throw new GitHubError(`claim: #${number} is not a claimable issue type`);
-  const body = fillOwned(templates.pullRequest, { issue: number, ...INITIAL_STATE, time: formatTime(now), agent, session });
+/** Renders every text the claim posts, so a template problem refuses before the lock is taken. */
+function renderPosts(context, issue, prefix) {
+  const { number, session, agent, templates, now } = context;
+  const values = { issue: number, session };
+  return {
+    pointer: renderComment(templates, 'Issue pointer', values),
+    prClaim: renderComment(templates, 'PR claim', values),
+    prTitle: `${prefix}: ${stripClosingKeywords(issue.title)}`,
+    prBody: fillOwned(templates.pullRequest, { issue: number, ...INITIAL_STATE, time: formatTime(now), agent, session }),
+  };
+}
+
+async function createDraftPull({ client, repo, number }, { prTitle, prBody }) {
   const response = await client.request('POST', apiPath(`${REPO_PATH}/pulls`, repoParams(repo)), {
-    body: { title: `${prefix}: ${issue.title}`, head: issueBranch(number), base: BASE_BRANCH, body, draft: true },
+    body: { title: prTitle, head: issueBranch(number), base: BASE_BRANCH, body: prBody, draft: true },
   });
   return response.data.number;
 }
 
 /**
- * Completes whichever of pointer comment, draft PR and PR claim comment is missing, in that order.
+ * Posts the pointer comment, the draft PR and the PR claim comment, in that order. A fresh claim
+ * (`resume` null) posts everything, so the pointer's created_at is the new claim time. A rerun skips
+ * only what this session already posted.
+ * @param {{ pull: { number: number }|null }|null} resume
  * @returns {Promise<number>} the PR number
  */
-async function completeClaim(context, existingPull) {
-  const { number, session, templates } = context;
-  const values = { issue: number, session };
-  if (!await hasAgentMarkerComment(context, number)) {
-    await postComment(context, number, fillOwned(templateSection(templates.claimComment, 'Issue pointer'), values));
-  }
-  const prNumber = existingPull?.number ?? await createDraftPull(context);
-  if (existingPull && await hasAgentMarkerComment(context, prNumber)) return prNumber;
-  await postComment(context, prNumber, fillOwned(templateSection(templates.claimComment, 'PR claim'), values));
+async function completeClaim(context, posts, resume) {
+  const { pointer, prClaim } = posts;
+  const { number } = context;
+  if (!resume || !await hasAgentComment(context, number, pointer)) await postComment(context, number, pointer);
+  const prNumber = resume?.pull?.number ?? await createDraftPull(context, posts);
+  if (resume?.pull && await hasAgentComment(context, prNumber, prClaim)) return prNumber;
+  await postComment(context, prNumber, prClaim);
   return prNumber;
 }
 
@@ -168,10 +194,17 @@ async function completeClaim(context, existingPull) {
  * @returns {Promise<ClaimOutcome>}
  */
 export async function runClaim(context) {
-  const { number, session } = context;
-  if (await findHeldDraft(context)) {
-    return { exitCode: EXIT_ERROR, reason: `session ${session} already holds a draft PR; finish or release it first` };
+  const { client, repo, config, number, session } = context;
+  const held = await findHeldDrafts(context);
+  if (held.length >= config.limits.tasksPerWorker) {
+    return { exitCode: EXIT_ERROR, reason: `session ${session} already holds draft PR #${held[0]}; finish or release it first` };
   }
+  const issue = (await client.request('GET', apiPath(`${REPO_PATH}/issues/{number}`, repoParams(repo, { number })))).data;
+  const prefix = titlePrefix(issue.type?.name);
+  if (issue.pull_request || issue.state === 'closed' || !prefix) {
+    return { exitCode: EXIT_HELD, reason: `#${number} is not a claimable issue (a PR, closed, or without a claimable type)` };
+  }
+  const posts = renderPosts(context, issue, prefix);
   const branch = await readBranch(context);
   const openPull = branch.exists ? await findOpenPull(context) : null;
   if (branch.exists && !await branchBelongsToSession(context, branch.sha, openPull)) {
@@ -180,7 +213,8 @@ export async function runClaim(context) {
   if (!branch.exists && !await createClaimRef(context)) {
     return { exitCode: EXIT_HELD, reason: `${issueBranch(number)} is already claimed` };
   }
-  return { exitCode: EXIT_CLAIMED, pr: await completeClaim(context, openPull) };
+  const resume = branch.exists ? { pull: openPull } : null;
+  return { exitCode: EXIT_CLAIMED, pr: await completeClaim(context, posts, resume) };
 }
 
 function parseCli(argv, env) {

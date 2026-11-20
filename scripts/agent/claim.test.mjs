@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createFixtureClient } from '../lib/github.mjs';
+import { GitHubError, createFixtureClient } from '../lib/github.mjs';
 import { parseSections } from '../lib/markdown.mjs';
 import { EXIT_CLAIMED, EXIT_ERROR, EXIT_HELD, runClaim } from './claim.mjs';
 
@@ -9,14 +9,21 @@ const REPO = { owner: 'o', repo: 'r' };
 const SESSION = 'w85-a1';
 const AGENT = 'sonnet/claude-code';
 const AGENT_LOGIN = 'wimdotgg-agent[bot]';
-const CONFIG = { accounts: { agent: AGENT_LOGIN } };
+const CONFIG = { accounts: { agent: AGENT_LOGIN }, limits: { tasksPerWorker: 1 } };
 const NOW = new Date('2026-11-20T10:05:30Z');
 const templates = {
   claimComment: await readFile(new URL('../../.github/groundwork/templates/claim-comment.md', import.meta.url), 'utf8'),
   pullRequest: await readFile(new URL('../../.github/pull_request_template.md', import.meta.url), 'utf8'),
 };
 const FOOTER = `---\nAgent: ${AGENT} · session ${SESSION}`;
-const MARKED_COMMENT = [{ user: { login: AGENT_LOGIN }, body: 'x\n<!-- groundwork:claim -->' }];
+const comment = (body) => [{ user: { login: AGENT_LOGIN }, body }];
+const POINTER = comment('Claimed on `issue/7` by session w85-a1.\n<!-- groundwork:claim -->');
+const OTHER_POINTER = comment('Claimed on `issue/7` by session other.\n<!-- groundwork:claim -->');
+const PR_CLAIM = comment('Claim: #7, session w85-a1.\n<!-- groundwork:claim -->');
+const pullOf = (fields) => ({
+  number: 12, draft: true, head: { ref: 'issue/7', repo: { full_name: 'o/r' } }, user: { login: AGENT_LOGIN }, body: `body\n\n${FOOTER}\n`, ...fields,
+});
+const foreignFooter = '---\nAgent: a/b · session other';
 
 const ok = (data, status = 200) => ({ status, data, headers: {} });
 const OPEN_PULLS = 'GET /repos/o/r/pulls?per_page=100&state=open';
@@ -105,23 +112,115 @@ test('AC4: a rerun after a failed PR creation completes the missing steps with n
     [REF]: ok({ object: { sha: 'claim-sha' } }),
     [ISSUE_PULLS]: ok([]),
     'GET /repos/o/r/git/commits/claim-sha': ok({ message: 'chore(claim): #7 [session w85-a1]' }),
-    [ISSUE_COMMENTS]: ok(MARKED_COMMENT),
+    [ISSUE_COMMENTS]: ok(POINTER),
   });
   assert.deepEqual(await run(client), { exitCode: EXIT_CLAIMED, pr: 12 });
   assert.deepEqual(writeKeys(calls), [POST_PULL, POST_PR_COMMENT]);
 });
 
 test('AC4: a rerun with everything in place, head moved past the claim commit, writes nothing', async () => {
-  const pull = { number: 12, head: { ref: 'issue/7' }, body: `body\n\n${FOOTER}\n` };
   const { client, calls } = recordingClient({
     ...creationRoutes,
     [REF]: ok({ object: { sha: 'later-sha' } }),
-    [ISSUE_PULLS]: ok([pull]),
-    [ISSUE_COMMENTS]: ok(MARKED_COMMENT),
-    [PR_COMMENTS]: ok(MARKED_COMMENT),
+    [ISSUE_PULLS]: ok([pullOf()]),
+    [ISSUE_COMMENTS]: ok(POINTER),
+    [PR_COMMENTS]: ok(PR_CLAIM),
   });
   assert.deepEqual(await run(client), { exitCode: EXIT_CLAIMED, pr: 12 });
   assert.deepEqual(writeKeys(calls), []);
+});
+
+test('R5: a rerun where only the PR claim comment is missing posts just that', async () => {
+  const { client, calls } = recordingClient({
+    ...creationRoutes,
+    [REF]: ok({ object: { sha: 'later-sha' } }),
+    [ISSUE_PULLS]: ok([pullOf()]),
+    [ISSUE_COMMENTS]: ok(POINTER),
+    [PR_COMMENTS]: ok([]),
+  });
+  assert.deepEqual(await run(client), { exitCode: EXIT_CLAIMED, pr: 12 });
+  assert.deepEqual(writeKeys(calls), [POST_PR_COMMENT]);
+});
+
+test('R2: a fresh claim posts a new pointer even when an older claim left one', async () => {
+  const { client, calls } = recordingClient({ ...creationRoutes, [ISSUE_COMMENTS]: ok(POINTER) });
+  await run(client);
+  assert.deepEqual(writeKeys(calls), [POST_COMMIT, POST_REF, POST_ISSUE_COMMENT, POST_PULL, POST_PR_COMMENT]);
+});
+
+test('R2: a rerun posts the pointer unless it names this session', async () => {
+  const rerun = {
+    ...creationRoutes,
+    [REF]: ok({ object: { sha: 'claim-sha' } }),
+    [ISSUE_PULLS]: ok([]),
+    'GET /repos/o/r/git/commits/claim-sha': ok({ message: 'chore(claim): #7 [session w85-a1]' }),
+  };
+  const other = recordingClient({ ...rerun, [ISSUE_COMMENTS]: ok(OTHER_POINTER) });
+  await run(other.client);
+  assert.equal(writeKeys(other.calls)[0], POST_ISSUE_COMMENT);
+});
+
+test('R3: an Epic, an untyped issue, a closed issue or a PR number exits 3 before any write', async () => {
+  const targets = [{ type: { name: 'Epic' } }, { type: null }, { type: { name: 'Feature' }, state: 'closed' }, { type: { name: 'Feature' }, pull_request: {} }];
+  for (const fields of targets) {
+    const issue = { number: 7, title: 'T', ...fields };
+    const { client, calls } = recordingClient({ ...creationRoutes, 'GET /repos/o/r/issues/7': ok(issue) });
+    assert.equal((await run(client)).exitCode, EXIT_HELD);
+    assert.deepEqual(writeKeys(calls), []);
+  }
+});
+
+test('R4: a PR with this session\'s footer by another author or from another repo is not ours (exit 3)', async () => {
+  const spoofs = [pullOf({ user: { login: 'mallory' } }), pullOf({ head: { ref: 'issue/7', repo: { full_name: 'mallory/r' } } })];
+  for (const spoof of spoofs) {
+    const { client, calls } = recordingClient({
+      ...creationRoutes,
+      [REF]: ok({ object: { sha: 'other-sha' } }),
+      [ISSUE_PULLS]: ok([spoof]),
+      'GET /repos/o/r/git/commits/other-sha': ok({ message: 'chore(claim): #7 [session someone-else]' }),
+    });
+    assert.equal((await run(client)).exitCode, EXIT_HELD);
+    assert.deepEqual(writeKeys(calls), []);
+  }
+});
+
+test('R5: another session\'s footer over a moved head is held (exit 3)', async () => {
+  const { client, calls } = recordingClient({
+    ...creationRoutes,
+    [REF]: ok({ object: { sha: 'later-sha' } }),
+    [ISSUE_PULLS]: ok([pullOf({ body: `body\n\n${foreignFooter}\n` })]),
+  });
+  assert.equal((await run(client)).exitCode, EXIT_HELD);
+  assert.deepEqual(writeKeys(calls), []);
+});
+
+test('R5: a transport failure on the ref POST propagates (exit 1), with nothing written after it', async () => {
+  const { client, calls } = recordingClient(creationRoutes);
+  const failing = {
+    ...client,
+    request: (method, path, options) => (path.endsWith('/git/refs')
+      ? Promise.reject(new GitHubError('network down'))
+      : client.request(method, path, options)),
+  };
+  await assert.rejects(run(failing), GitHubError);
+  assert.deepEqual(writeKeys(calls), [POST_COMMIT]);
+});
+
+test('R6: a comment template with an unknown placeholder or a missing section refuses before any write', async () => {
+  const unknown = { ...templates, claimComment: templates.claimComment.replace('<session>.', '<session> <pr>.') };
+  const missing = { ...templates, claimComment: templates.claimComment.replace('## PR claim', '## Renamed') };
+  for (const broken of [unknown, missing]) {
+    const { client, calls } = recordingClient(creationRoutes);
+    await assert.rejects(runClaim({ client, repo: REPO, config: CONFIG, number: 7, session: SESSION, agent: AGENT, templates: broken, now: NOW }), GitHubError);
+    assert.deepEqual(writeKeys(calls), []);
+  }
+});
+
+test('R8: closing keywords are stripped from the issue title in the PR title', async () => {
+  const issue = { number: 7, title: 'Fix #45 and resolves wimdotgg/groundwork#3', type: { name: 'Bug' } };
+  const { client, calls } = recordingClient({ ...creationRoutes, 'GET /repos/o/r/issues/7': ok(issue) });
+  await run(client);
+  assert.equal(bodyOf(calls, POST_PULL).title, 'fix: #45 and wimdotgg/groundwork#3');
 });
 
 test('an existing ref claimed by another session is held (exit 3) with no write', async () => {
@@ -136,19 +235,33 @@ test('an existing ref claimed by another session is held (exit 3) with no write'
 });
 
 test('AC5: a session holding a draft PR on another issue is refused with exit 1 before any other call', async () => {
-  const held = { number: 20, draft: true, head: { ref: 'issue/9' }, user: { login: AGENT_LOGIN }, body: `x\n\n${FOOTER}\n` };
+  const held = pullOf({ number: 20, head: { ref: 'issue/9', repo: { full_name: 'o/r' } } });
   const { client, calls } = recordingClient({ [OPEN_PULLS]: ok([held]) });
   const outcome = await run(client);
   assert.equal(outcome.exitCode, EXIT_ERROR);
-  assert.match(outcome.reason, /already holds a draft PR/);
+  assert.match(outcome.reason, /already holds draft PR #20/);
   assert.deepEqual(calls, [], 'no request beyond the draft PR listing (paginate)');
 });
 
 test('AC5: another session\'s draft PR and this session\'s ready PR do not block the claim', async () => {
   const others = [
-    { number: 20, draft: true, head: { ref: 'issue/9' }, user: { login: AGENT_LOGIN }, body: 'x\n\n---\nAgent: a/b · session other\n' },
-    { number: 21, draft: false, head: { ref: 'issue/8' }, user: { login: AGENT_LOGIN }, body: `x\n\n${FOOTER}\n` },
+    pullOf({ number: 20, head: { ref: 'issue/9', repo: { full_name: 'o/r' } }, body: `x\n\n${foreignFooter}\n` }),
+    pullOf({ number: 21, draft: false, head: { ref: 'issue/8', repo: { full_name: 'o/r' } } }),
   ];
   const { client } = recordingClient({ ...creationRoutes, [OPEN_PULLS]: ok(others) });
   assert.equal((await run(client)).exitCode, EXIT_CLAIMED);
+});
+
+test('R1: a released draft with this session\'s footer does not block the claim', async () => {
+  const released = pullOf({ number: 20, head: { ref: 'issue/9', repo: { full_name: 'o/r' } }, body: `x\n<!-- groundwork:released -->\n\n${FOOTER}\n` });
+  const { client } = recordingClient({ ...creationRoutes, [OPEN_PULLS]: ok([released]) });
+  assert.equal((await run(client)).exitCode, EXIT_CLAIMED);
+});
+
+test('R7: the limit comes from config.limits.tasksPerWorker', async () => {
+  const held = pullOf({ number: 20, head: { ref: 'issue/9', repo: { full_name: 'o/r' } } });
+  const { client } = recordingClient({ ...creationRoutes, [OPEN_PULLS]: ok([held]) });
+  const roomy = { ...CONFIG, limits: { tasksPerWorker: 2 } };
+  const outcome = await runClaim({ client, repo: REPO, config: roomy, number: 7, session: SESSION, agent: AGENT, templates, now: NOW });
+  assert.equal(outcome.exitCode, EXIT_CLAIMED);
 });
