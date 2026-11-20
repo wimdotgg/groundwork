@@ -25,7 +25,7 @@ import {
  *   commitAuthors: string[], renamedBy: string[] }} PrMetadataFacts
  *   repo is owner/name. issue: the single same-repository closing reference's issue, else null; files: only for Spike issues, else [];
  *   headArrivedAt: the newest arrival on the PR branch (repository activity timestamp; its SHA must be the head), or a later head_ref_force_pushed,
- *   reopened, base_ref_changed or automatic_base_change_succeeded event, read only when no-issue is present on a PR from this repository; commitAuthors: one login per PR commit, read only for Dependabot PRs;
+ *   reopened, base_ref_changed or automatic_base_change_succeeded event (timeline and issue events), read only when no-issue is present on a PR from this repository; commitAuthors: one login per PR commit, read only for Dependabot PRs;
  *   renamedBy: actor of every `renamed` timeline event; action: the payload action, absent in older facts */
 
 export const name = 'pr-metadata';
@@ -55,17 +55,19 @@ const DEPENDABOT_REQUIRED_ISSUE_TYPE = 'Chore';
 const ISSUE_PATH = '/repos/{owner}/{repo}/issues/{number}';
 const PULL_PATH = '/repos/{owner}/{repo}/pulls/{number}';
 const TIMELINE_PATH = '/repos/{owner}/{repo}/issues/{number}/timeline';
+const ISSUE_EVENTS_PATH = '/repos/{owner}/{repo}/issues/{number}/events';
 const FILES_PATH = '/repos/{owner}/{repo}/pulls/{number}/files';
 const COMMITS_PATH = '/repos/{owner}/{repo}/pulls/{number}/commits';
 const ACTIVITY_PATH = '/repos/{owner}/{repo}/activity';
 // Repository activity types that put a commit on a branch; branch_deletion is the only other type.
 const ARRIVAL_ACTIVITY_TYPES = new Set(['push', 'force_push', 'branch_creation', 'pr_merge', 'merge_queue_merge']);
-// Timeline events that void an earlier label even when the head SHA is unchanged.
+// Events that void an earlier label even when the head SHA is unchanged. GitHub documents base_ref_changed and
+// automatic_base_change_succeeded as issue events only, so they are read from both endpoints.
 const FORCE_PUSH_EVENT = 'head_ref_force_pushed';
 const REOPENED_EVENT = 'reopened';
 const BASE_CHANGED_EVENT = 'base_ref_changed';
 const AUTOMATIC_BASE_CHANGE_EVENT = 'automatic_base_change_succeeded';
-const VOIDING_TIMELINE_EVENTS = [FORCE_PUSH_EVENT, REOPENED_EVENT, BASE_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_EVENT];
+const VOIDING_EVENTS = [FORCE_PUSH_EVENT, REOPENED_EVENT, BASE_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_EVENT];
 const RENAMED_EVENT = 'renamed';
 const NOREPLY_EMAIL = /^(?:\d+\+)?(.+)@users\.noreply\.github\.com$/i;
 const BRANCH_PATTERN = /^issue\/\d+$/;
@@ -134,8 +136,8 @@ async function loadClosedIssue(ctx, closingRefs) {
   }
 }
 
-function eventTimes(timeline, eventName) {
-  return timeline.filter((item) => item.event === eventName).map((item) => new Date(item.created_at).getTime()).filter(Number.isFinite);
+function eventTimes(events, eventName) {
+  return events.filter((item) => item.event === eventName).map((item) => new Date(item.created_at).getTime()).filter(Number.isFinite);
 }
 
 // Server-side arrival of the head in this PR: the newest arrival on the PR branch (repository activity, server time),
@@ -144,6 +146,7 @@ function eventTimes(timeline, eventName) {
 // older entry for the same SHA would hide a push the listing has not caught up with, or a branch that moved on. The
 // run's own push is an activity entry, so none found means the data is wrong: throw rather than guess.
 async function loadHeadArrival(ctx, { number, headRef, headSha }, timeline) {
+  const issueEvents = await ctx.client.paginate(apiPath(ISSUE_EVENTS_PATH, { ...ctx.repo, number }));
   const activities = await ctx.client.paginate(apiPath(ACTIVITY_PATH, ctx.repo), { query: { ref: `refs/heads/${headRef}` } });
   const arrivals = activities
     .filter((activity) => ARRIVAL_ACTIVITY_TYPES.has(activity.activity_type))
@@ -153,7 +156,7 @@ async function loadHeadArrival(ctx, { number, headRef, headSha }, timeline) {
   const newestTime = Math.max(...arrivals.map((arrival) => arrival.time));
   const movedOn = arrivals.find((arrival) => arrival.time === newestTime && arrival.after !== headSha);
   if (movedOn) throw new Error(`the newest arrival on ${headRef} is ${movedOn.after}, not head ${headSha} (listing lag or moved branch) for PR #${number}; re-run later`);
-  const voidingTimes = VOIDING_TIMELINE_EVENTS.flatMap((eventName) => eventTimes(timeline, eventName));
+  const voidingTimes = VOIDING_EVENTS.flatMap((eventName) => [...eventTimes(timeline, eventName), ...eventTimes(issueEvents, eventName)]);
   return new Date(Math.max(newestTime, ...voidingTimes)).toISOString();
 }
 
