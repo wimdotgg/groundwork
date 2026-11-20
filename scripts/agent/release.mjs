@@ -7,9 +7,7 @@ import {
   addMarker, fillTemplate, findFooterBreak, hasMarker, parseSections, parseStateSection, replaceSection, templateSection,
 } from '../lib/markdown.mjs';
 import { sameLogin } from '../lib/trust.mjs';
-import { assertNode24 } from './token.mjs';
-
-assertNode24(import.meta);
+import './token.mjs'; // exits on an unsupported Node before the script runs
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ client: GitHubClient, repo: { owner: string, repo: string }, config: { accounts: { agent: string } }, handoverTemplate: string }} ReleaseContext */

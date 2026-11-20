@@ -5,9 +5,7 @@ import {
 } from '../lib/issue-model.mjs';
 import { parseSections } from '../lib/markdown.mjs';
 import { isTrustedAuthor, normalizeLabel, validLabels } from '../lib/trust.mjs';
-import { assertNode24 } from './token.mjs';
-
-assertNode24(import.meta);
+import './token.mjs'; // exits on an unsupported Node before the script runs
 
 /** @typedef {import('../lib/issue-model.mjs').IssueFacts} IssueFacts */
 /** @typedef {{ kind: 'takeover'|'fresh', number: number, pr: number|null, epic: number|null, title: string, reason: string }} Pick */
@@ -112,6 +110,12 @@ function takeoverReason(facts, { config, now }) {
 
 const withoutClaim = (facts) => ({ ...facts, branch: { exists: false, sha: null }, pr: null });
 
+/** A takeover must still meet everything except the claim itself. */
+function unmetWithoutClaim(facts, context) {
+  const { status, reason } = deriveStatus(withoutClaim(facts), context);
+  return status === 'ready' ? null : { code: status, reason };
+}
+
 /**
  * The Definition of Ready for an unclaimed task, shared with `claim`.
  * @param {IssueFacts} facts
@@ -139,12 +143,8 @@ export function classify({ facts, epic, position, epicRank }, context) {
   if (epic === null && !hotfix) return skip('proposed', 'p0 Bug with a parent outside an open epic');
   const { status, reason } = deriveStatus(facts, context);
   const takeover = status === 'claimed' ? takeoverReason(facts, context) : null;
-  if (status !== 'ready' && !takeover) return skip(status, reason);
-  // A takeover must still meet everything except the claim itself.
-  const unclaimed = takeover ? deriveStatus(withoutClaim(facts), context) : { status: 'ready' };
-  if (unclaimed.status !== 'ready') return skip(unclaimed.status, unclaimed.reason);
-  const unready = takeover ? null : skipReasonForFresh(facts);
-  if (unready) return skip(unready.code, unready.reason);
+  const unmet = takeover ? unmetWithoutClaim(facts, context) : unmetReadiness(facts, context);
+  if (unmet) return skip(unmet.code, unmet.reason);
   const pick = {
     kind: takeover ? 'takeover' : 'fresh', number: facts.number, pr: facts.pr?.number ?? null, epic, title: facts.title,
     reason: takeover ?? reason,

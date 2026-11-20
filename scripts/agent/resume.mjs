@@ -4,9 +4,7 @@ import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { deriveStatus, isValidSessionId, loadIssueFacts, parseFooter } from '../lib/issue-model.mjs';
 import { hasMarker, parseSections, parseStateSection, removeMarker } from '../lib/markdown.mjs';
 import { isTrustedAuthor, sameLogin, untrustedBlock } from '../lib/trust.mjs';
-import { assertNode24 } from './token.mjs';
-
-assertNode24(import.meta);
+import './token.mjs'; // exits on an unsupported Node before the script runs
 
 /** @typedef {{ title: string, blocks: Array<{ text: string, author: string|null }> }} Section   author is set when the text is fenced as untrusted */
 

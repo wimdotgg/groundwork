@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createVerify, generateKeyPairSync } from 'node:crypto';
 import { createFixtureClient } from '../lib/github.mjs';
 import {
-  assertNode24, buildChildEnv, createAppJwt, credentialOutput, fetchBotUserId, mintInstallationToken,
+  buildChildEnv, createAppJwt, credentialOutput, fetchBotUserId, mintInstallationToken, nodeVersionError,
   resolveClientId, resolvePrivateKey,
 } from './token.mjs';
 
@@ -91,11 +91,8 @@ test('fetchBotUserId: reads the bot user id', async () => {
   assert.equal(await fetchBotUserId(client, 'demo-agent[bot]'), 42);
 });
 
-test('assertNode24: import.meta.main undefined (Node below 24) throws a message naming Node 24', () => {
-  assert.throws(() => assertNode24({ url: 'file:///x.mjs' }), /Node 24/);
-});
-
-test('assertNode24: a defined import.meta.main passes, whether this module is the entry point or not', () => {
-  assert.doesNotThrow(() => assertNode24({ main: true }));
-  assert.doesNotThrow(() => assertNode24({ main: false }));
+test('nodeVersionError: names Node 24 for an older major, null from 24 on', () => {
+  assert.match(nodeVersionError('22.23.4'), /Node 24 or newer \(running 22\.23\.4\)/);
+  assert.equal(nodeVersionError('24.0.0'), null);
+  assert.equal(nodeVersionError('26.13.1'), null);
 });

@@ -9,9 +9,7 @@ import {
 } from '../lib/issue-model.mjs';
 import { unmetReadiness } from './next.mjs';
 import { fillTemplate, findClosingRefs, hasMarker, removeMarker, templateSection } from '../lib/markdown.mjs';
-import { assertNode24 } from './token.mjs';
-
-assertNode24(import.meta);
+import './token.mjs'; // exits on an unsupported Node before the script runs
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ claimComment: string, pullRequest: string }} Templates */

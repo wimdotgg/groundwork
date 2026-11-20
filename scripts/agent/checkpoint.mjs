@@ -10,9 +10,7 @@ import { isValidSessionId, parseFooter } from '../lib/issue-model.mjs';
 import {
   fillTemplate, parseSections, parseStateSection, replaceSection, templatePlaceholders,
 } from '../lib/markdown.mjs';
-import { assertNode24 } from './token.mjs';
-
-assertNode24(import.meta);
+import './token.mjs'; // exits on an unsupported Node before the script runs
 
 const EXIT_ERROR = 1;
 const EXIT_HELD = 3;
