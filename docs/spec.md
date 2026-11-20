@@ -24,14 +24,14 @@ Its purpose: a solo human orchestrates, AI agents do the work (plan, implement, 
 | D6 | Status is derived, never stored in labels | Label writes by `GITHUB_TOKEN` do not trigger workflows; a label state machine fails silently. |
 | D7 | No stacked PRs | Merge queue only serves `main`; contract-first planning plus `blocked-by` replaces stacks. |
 | D8 | Context lives in issue (intent), PR `## State` (current state), PR comments (journal) | No committed plan or state files. |
-| D9 | Agents act through a machine account with Write role | Your admin credentials are never stored on the agent machine. |
+| D9 | Agents act through an org-owned GitHub App (`wimdotgg-agent`) | Your admin credentials are never stored on the agent machine, and an App cannot be spam-flagged like a machine user was. |
 | D10 | Admin work runs through approval-gated tiers | Agents request, you approve with one click, GitHub runs it with a short-lived scoped token. |
 | D11 | Agents may edit workflows; all secrets live in protected environments | CODEOWNERS gates the merge; PR runs cannot reach environment secrets. |
 | D12 | Reviewer agent is advisory | Deterministic checks and your CODEOWNERS approval are the blockers. |
 | D13 | Versions stay `0.x.x` by default | `feat` and breaking bump minor, `fix` bumps patch; `1.0.0` only by your explicit config change. |
 | D14 | Scripts are Node (ESM, no dependencies) | Cross-platform; you work on Windows. |
 | D15 | Agent runtime (how workers are launched, which models) is out of scope for v1 | The template defines the protocol; a recommended setup is documented. |
-| D16 | Agents act only on content written by you or the agent account | Public repos let anyone open issues and comment; that text is untrusted data. |
+| D16 | Agents act only on content written by you or the agent App | Public repos let anyone open issues and comment; that text is untrusted data. |
 | D17 | Workers never force-push; `issue/*` branches only move forward and are updated from `main` by merge | Takeover is a plain push that fails as non-fast-forward for the race loser; the `issue-branches` ruleset enforces it server-side (9.5, V16). |
 | D18 | A project may declare `"deploy": "none"` in `config.json` | Not every project ships a deployable; pass 2 then skips `DEPLOY_ENABLED` and deploy secrets. |
 
@@ -44,28 +44,22 @@ Its purpose: a solo human orchestrates, AI agents do the work (plan, implement, 
 | Identity | Kind | Role | Credentials on the agent machine |
 |---|---|---|---|
 | `wianvdm` | Your user | Org owner | **None.** You act in the browser or GitHub mobile app. Bootstrap and admin work go through tier 2 (section 12). |
-| `wianvdm-agent` (user id 357302967) | Machine user (GitHub ToS allows one free machine account per person) | Org member, Write on `groundwork` and every project repo via team `agents` | Fine-grained PAT, stored by `gh` and Git Credential Manager. |
+| `wimdotgg-agent` | GitHub App (App ID 5853598, client ID `Iv23lic380KcYz17cWxi`) | Installed on all org repos, permissions in 2.2 | Key encrypted on the agent machine (2.2); installation tokens minted per command. |
 | `wimdotgg-release` | GitHub App | Installed on all org repos | None. Key only in each repo's `release` environment. |
 | `wimdotgg-admin` | GitHub App (App ID 5782869, client ID `Iv23lipUuaiDCWGAKcYI`) | Installed on all org repos | None. Key only in the control repo's `admin` environment. |
 
-App slugs live only in `.github/groundwork/config.json` (`apps.admin`, `apps.release`); scripts and rulesets never hardcode them. Bot logins are `<slug>[bot]`. Both Apps are owned by the organization (created at `https://github.com/organizations/<org>/settings/apps/new`, "Only on this account" = the org) and installed on the org with "All repositories" so new project repos are covered without a manual step. `GET /apps/{slug}` for a private org App returns 404 to the agent PAT.
+App slugs live only in `.github/groundwork/config.json` (`apps.admin`, `apps.agent`, `apps.release`); scripts and rulesets never hardcode them. Bot logins are `<slug>[bot]`. All three Apps are owned by the organization (created at `https://github.com/organizations/<org>/settings/apps/new`, "Only on this account" = the org) and installed on the org with "All repositories" so new project repos are covered without a manual step. `GET /apps/{slug}` for a private org App returns 404 to the agent App.
 GitHub reports the owner login as `WianVDM`. Logins are compared case-insensitively everywhere; `config.json` stores them lower-case.
 
-### 2.2 Agent PAT (fine-grained, resource owner = the org, repository access "All repositories")
+### 2.2 Agent App
 
-| Repository permission | Access | Why |
-|---|---|---|
-| Contents | Read and write | Branches, commits, claim refs |
-| Pull requests | Read and write | Draft PRs, reviews (comment only), enqueue |
-| Issues | Read and write | Create epics and tasks, comments, labels, issue type, sub-issues, dependencies |
-| Workflows | Read and write | Agents may change workflow files via PR (D11) |
-| Actions | Read and write | Read runs, re-run failed jobs, dispatch `admin-run` in `groundwork` |
-| Commit statuses | Read | Read CI results |
-| Metadata | Read | Required (also covers reading rulesets) |
-| Administration, Secrets, Variables, Environments | **None** | Admin work goes through tier 2 |
+`wimdotgg-agent` (App ID 5853598, client ID `Iv23lic380KcYz17cWxi`, bot `wimdotgg-agent[bot]`, user id 359293167) is org-owned and installed on the org with "All repositories". Repository permissions: Contents RW, Pull requests RW, Issues RW, Workflows RW, Actions RW, Commit statuses R, Metadata R. No Checks permission (check runs on public repos are readable without it, V5), no Administration, Secrets, Variables or Environments, no organization permissions.
 
-No organization permissions. Fine-grained PATs offer no Checks permission; check runs on public repos are readable without it (V5).
-Expiry 90 days; rotation is a tier 3 task with a reminder issue.
+Key storage: the private key stays on the agent machine, never in a repo or environment. On Windows it is encrypted with DPAPI for the current user at `%APPDATA%\groundwork\wimdotgg-agent.pem.dpapi`, with `appId`, `slug` and `clientId` in `wimdotgg-agent.json` beside it. Elsewhere `GROUNDWORK_AGENT_KEY_FILE` (PEM path) and `GROUNDWORK_AGENT_CLIENT_ID` supply them.
+
+`scripts/agent/token.mjs` is the only way agents write. `exec -- <command>` mints an installation token (App JWT, `GET /orgs/{org}/installation`, `POST /app/installations/{id}/access_tokens`) and runs the command with `GH_TOKEN`, the bot's commit name and noreply email, and a git credential helper that calls `token.mjs credential`. Tokens last one hour and are never stored.
+
+Why not a machine user: GitHub flagged `wianvdm-agent` as spam and hid its content from everyone else. An org-owned App cannot be flagged that way, needs no seat or PAT rotation, and its writes are attributed to `[bot]`.
 
 ### 2.3 `wimdotgg-release` App
 
@@ -85,8 +79,7 @@ One exception, for the generate call (the target repo does not exist yet, so the
 
 - Two-factor authentication required.
 - Base repository permission: Read. Members cannot create repositories (bootstrap creates them).
-- Fine-grained PAT policy: allowed, approval required (you approve the agent PAT once).
-- Team `agents` containing `wianvdm-agent`. You grant it Write on `groundwork` once (14.1); bootstrap grants it Write on each project repo.
+- Team `agents` holds no agent identity now (the agent App needs no team grant). Its Write grant on Write on `groundwork` once (14.1); bootstrap grants it Write on each project repo.
 - Issue types are not set by hand: `admin-run op=create-issue-types` creates Epic, Feature, Bug, Chore, Spike and deletes the default Task.
 - Actions: require actions pinned to a full-length commit SHA (the policy does not cover reusable workflows, which stay referenced by tag); "Require approval for all external contributors" for fork PR workflows; "Allow GitHub Actions to create and approve pull requests" off. `apply-settings` also sets all three per repository (10, V12).
 
@@ -135,7 +128,7 @@ admin-ops/                        [control] reviewed one-off admin scripts
 scripts/
   verify                          [project] contract entry point (sh + .cmd shim); groundwork's own is real, bootstrap swaps in the stub
   deploy  smoke  rollback         [project] written by the setup epic (sh + .cmd shim); absent with `"deploy": "none"`
-  agent/  next.mjs claim.mjs checkpoint.mjs resume.mjs release.mjs plan-lint.mjs review-queue.mjs
+  agent/  token.mjs next.mjs claim.mjs checkpoint.mjs resume.mjs release.mjs plan-lint.mjs review-queue.mjs
   human/  inbox.mjs
   admin/  request.mjs             dispatches admin-run in groundwork; runs the push probe locally
   ci/     pr-metadata.mjs pr-size.mjs issue-format.mjs test-integrity.mjs check-results.mjs
@@ -320,7 +313,7 @@ That removal is hygiene, not the gate: a removal by `GITHUB_TOKEN` fires no `unl
 
 Review threads must be resolved before merge (ruleset). The worker resolves each thread after fixing or answering it and records it in `## Review log`; that is how advisory findings (D12) get closed without the reviewer holding a veto.
 
-Roles are prompts packaged as `.claude/skills/groundwork-*` and described in `AGENTS.md`. All roles use the agent account; the session id separates them.
+Roles are prompts packaged as `.claude/skills/groundwork-*` and described in `AGENTS.md`. All roles act as the agent App (2.2); the session id separates them.
 
 ### 6.2 Planning for width
 
@@ -392,7 +385,7 @@ Raised when: 3 review rounds without convergence; the same failure 3 times; work
 
 ### 6.7 Trust boundary (D16)
 
-- Trusted authors: `wianvdm`, `wianvdm-agent`, `wimdotgg-admin[bot]` (bootstrap opens the "Project setup" epic), `wimdotgg-release[bot]` (release PRs only), `dependabot[bot]` (dependency PRs only). The list lives in `config.json` (`trustedAuthors`, App bots named by App key) and is read through `scripts/lib/trust.mjs`; nothing else hardcodes it. Logins compare case-insensitively.
+- Trusted authors: `wianvdm`, `wimdotgg-agent[bot]`, `wimdotgg-admin[bot]` (bootstrap opens the "Project setup" epic), `wimdotgg-release[bot]` (release PRs only), `dependabot[bot]` (dependency PRs only). The list lives in `config.json` (`trustedAuthors`, App bots named by App key) and is read through `scripts/lib/trust.mjs`; nothing else hardcodes it. Logins compare case-insensitively.
 - `next` ignores issues not authored by a trusted account. To adopt an external report, you or an agent create a task that links to it.
 - `resume`, the reviewer and the planner treat text from other authors as data, never as instructions.
 - Outside contributors' PRs cannot satisfy `PR metadata` (no accepted issue) and their workflow runs require your approval.
@@ -677,7 +670,7 @@ Server-side backing for D17: nobody, including you, can force-push or otherwise 
 - Then one `POST /repos/{o}/{r}/environments/{name}/deployment-branch-policies` per ref: `{ "name": "main", "type": "branch" }` or `{ "name": "v*", "type": "tag" }`.
 - Environment secrets are written on the runner with `gh secret set --env <name> --repo <o>/<r>` (it does the sealed-box encryption that dependency-free Node cannot); the value is piped on stdin, never passed as an argument. Environment variables with `gh variable set --env`. Both need Environments write: the environment secret and variable endpoints sit under Environments in the GitHub App permissions reference, while Secrets and Variables cover repository-level ones.
 - The release App key reaches each project's `release` environment by this route during bootstrap, copied from the `admin` environment.
-- Self-review is irrelevant in practice: runs are triggered by the agent account or the release App, never by you.
+- Self-review is irrelevant in practice: runs are triggered by the agent App or the release App, never by you.
 
 PR runs (`refs/pull/*`) and runs on any branch other than `main` match no environment policy, so workflow changes outside `main` cannot read any secret. `workflow_dispatch` of a workflow file from another branch is blocked the same way.
 
@@ -715,10 +708,10 @@ Nobody owns Dependabot PRs by claim: `review-queue` lists them, and the reviewer
 
 | Tier | Scope | Mechanism | Your action |
 |---|---|---|---|
-| 0 | Normal work | Agent PAT | none |
+| 0 | Normal work | Agent App (`token.mjs exec`) | none |
 | 1 | Settings as code: `settings.json`, `labels.json`, `rulesets/*.json` | Agent opens a PR; the `settings-plan` job writes a plan to its job summary (desired vs. live where readable, otherwise file diff); after merge the agent runs `scripts/admin/request.mjs apply-settings --repo <r> --ref <sha>`; the run ends with `check` | CODEOWNERS approval on the PR, then approve the `admin` run |
 | 2 | One-off admin work: bootstrap, new repo, issue types, cleanup | `scripts/admin/request.mjs <op>` dispatches `admin-run` in `groundwork` | Read the run summary, approve the `admin` environment |
-| 3 | Owner-only: create Apps, billing, org ownership, secret values, PAT rotation | You, in the browser | everything |
+| 3 | Owner-only: create Apps, billing, org ownership, secret values, agent App key rotation | You, in the browser | everything |
 
 ### 12.1 `admin-run.yml`
 
@@ -766,6 +759,7 @@ Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent mac
 
 | Script | Inputs | Output and effects |
 |---|---|---|
+| `agent/token.mjs` | `exec -- <command>` or `credential <get\|store\|erase>` | Mints an installation token for `apps.agent` (2.2), runs the command with it as `GH_TOKEN` plus the bot commit identity and a git credential helper; `credential` is that helper. Every agent write goes through it. |
 | `agent/next.mjs` | `--json` | Next eligible task or takeover candidate, or "nothing ready" with reasons per skipped candidate |
 | `agent/claim.mjs` | `N`, `--session <id>` | Claim per 6.3, or takeover per 6.4 when `issue/N` exists and is a takeover candidate; exit code 0 claimed, 3 held by someone else, 1 error |
 | `agent/checkpoint.mjs` | `--auto` (hook mode: no-op unless on `issue/N` with a draft PR) | Push, rewrite `## State`, journal comment |
@@ -784,7 +778,7 @@ Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent mac
 | `groundwork/app-token.mjs` | client ID, key, repositories, permissions | Installation token (2.4) |
 | `groundwork/apply-settings.mjs`, `groundwork/create-issue-types.mjs`, `groundwork/admin-run.mjs` | | Admin ops (12.1); `admin-run.mjs` is the dispatcher |
 
-Push probe (the agent identity is the one the rule must stop, so it runs on the agent machine with the PAT, not in `admin-run`): create a dangling empty commit on top of `main` with `POST /git/commits`, then `PATCH /git/refs/heads/main` to it without `force`. Expected: rejected with a rule violation (422 or 409). An accepted update means protection is broken; `request.mjs` reports failure and leaves the empty commit `chore(check): probe` on `main` as evidence. Tag rules are checked by ruleset comparison only: a probe tag could never be deleted (9.3).
+Push probe (the agent identity is the one the rule must stop, so it runs on the agent machine through `token.mjs exec`, not in `admin-run`): create a dangling empty commit on top of `main` with `POST /git/commits`, then `PATCH /git/refs/heads/main` to it without `force`. Expected: rejected with a rule violation (422 or 409). An accepted update means protection is broken; `request.mjs` reports failure and leaves the empty commit `chore(check): probe` on `main` as evidence. Tag rules are checked by ruleset comparison only: a probe tag could never be deleted (9.3).
 
 Configuration lives in `.github/groundwork/config.json` (org, control repo, accounts, App slugs, trusted authors, label actors, deploy mode, limits from section 16, size-exclusion and generated-file globs, test-integrity patterns) and `hotspots.json`; scripts read both through `scripts/lib/config.mjs`.
 
@@ -1007,7 +1001,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 1. Create the free organization; enable 2FA requirement and the settings in 2.5.
 2. Transfer `wianvdm/groundwork` into the organization (done: `wimdotgg/groundwork`); mark it as a template repository. Its `main` must already contain `admin-run.yml`: nothing below works before that.
-3. Create `wianvdm-agent`, invite it to the org, add to team `agents`, give the team Write on `groundwork`, create its fine-grained PAT (2.2), approve it, and log `gh` and git in with it on the agent machine. Remove your own `gh` and Git Credential Manager login for github.com from that machine.
+3. Create `wimdotgg-agent` as an organization-owned App (2.2; `docs/setup.md`), install it on the org with All repositories, and store its key on the agent machine. Remove your own `gh` and Git Credential Manager login for github.com from that machine.
 4. Create `wimdotgg-admin` and `wimdotgg-release` as organization-owned Apps (no manifests; `docs/setup.md` gives the manual form) and install both on the org with All repositories. The slugs are recorded in `config.json`.
 5. In `groundwork`, create environment `admin` (reviewer you, deployment branch `main`, selected-branches policy, "Allow administrators to bypass" off) and store both App keys and client IDs there.
 6. Approve `admin-run op=create-issue-types`, then `admin-run op=apply-settings --repo groundwork --ref <main sha>`. The second run creates groundwork's `release` environment with its key, sets `GROUNDWORK_READY`, applies the rulesets and ends with `check`. From here `main` is protected; the agent runs `request.mjs probe --repo groundwork` to confirm.
@@ -1038,6 +1032,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 - `.claude/settings.json`:
   - Hooks: `Stop` and `PreCompact` run `node scripts/agent/checkpoint.mjs --auto`. They are added to `.claude/settings.json` in Phase 3, when `scripts/agent/checkpoint.mjs` exists.
   - Deny rules: `git push` with `-f`, any `--force` flag (including its lease variant) or a `+` refspec; `git rebase`; `git push` to `main`; `--no-verify`; `gh pr merge --admin`; `gh api` calls with `-X DELETE` or `-X PUT` against `rulesets`, `environments`, `secrets`.
+  - Agents write only through `node scripts/agent/token.mjs exec -- <command>`; `AGENTS.md` also caps write pace (5 issue creations and 10 comments per minute).
   - Allow rules for `node scripts/agent/*`, `node scripts/human/*`, read-only `gh`.
 - Codex and other harnesses: the same rules in `AGENTS.md`; no hook enforcement.
 - Recommended runtime (documented, not built): one planner session per epic, up to 4 worker sessions each in its own git worktree, one reviewer session; reviewer on a different model from the workers.
@@ -1068,7 +1063,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 ## 17. Security model
 
-- **Credentials on the agent machine:** only the agent PAT. It cannot change settings, rulesets, environments or secrets.
+- **Credentials on the agent machine:** only the agent App key (DPAPI-encrypted on Windows). The tokens it mints cannot change settings, rulesets, environments or secrets.
 - **Secrets:** only in environments restricted to `main`, `v*` tags, and (for `admin`, `production`) your approval. PR runs reach none of them.
 - **Required checks:** pinned to the GitHub Actions app; the agent cannot post fake results (no Checks or Statuses write). A workflow that fakes a check name must be in the PR's own head commit, which puts it under `.github/` and behind your approval.
 - **Rules the PR is judged by:** validators run from the base commit; workflow changes need your CODEOWNERS approval.
@@ -1076,7 +1071,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 - **Admin runs:** `admin-run.yml` and built-in ops always execute from `main`; the code they run (`.github/`, `scripts/groundwork/`, `scripts/lib/`, `admin-ops/`) reaches `main` only with your CODEOWNERS approval (9.4); `ref` inputs must be reachable from `main`; you see the script and its hash before approving.
 - **Untrusted text:** D16, 6.7.
 - **Supply chain:** actions pinned by SHA (repo-enforced); Dependabot with cooldown; osv-scanner, dependency review, gitleaks, CodeQL, push protection.
-- **Accepted residual risks:** an agent running as your OS user could in principle read browser session data; one machine account means agents are distinguished only by session id; `pull_request` workflow YAML comes from the PR (gated by CODEOWNERS at merge, not at run); the agent PAT has Contents write, so an agent can delete another worker's `issue/*` branch (deletion stays allowed for `delete_branch_on_merge` and orphan cleanup; history is recoverable from the PR; overwriting is blocked by the `issue-branches` ruleset, 9.5); the release App key sits in every project's `release` environment without a reviewer, protected only by the `main`-only policy and CODEOWNERS on `.github/`.
+- **Accepted residual risks:** an agent running as your OS user could in principle read browser session data; one App identity means agents are distinguished only by session id; `pull_request` workflow YAML comes from the PR (gated by CODEOWNERS at merge, not at run); the agent App has Contents write, so an agent can delete another worker's `issue/*` branch (deletion stays allowed for `delete_branch_on_merge` and orphan cleanup; history is recoverable from the PR; overwriting is blocked by the `issue-branches` ruleset, 9.5); the release App key sits in every project's `release` environment without a reviewer, protected only by the `main`-only policy and CODEOWNERS on `.github/`.
 
 ---
 
@@ -1128,6 +1123,14 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-20: agent App identity
+
+GitHub hid the machine user `wianvdm-agent` (spam flag), so its content was invisible to others. Agents now act as the org-owned App `wimdotgg-agent`.
+1. D9, 2.1, 2.2: machine user and fine-grained PAT replaced by the agent App; permissions as installed, key storage and `token.mjs` described.
+2. 6.1, 6.7, 12, 13, 14.1, 15, 17: agent account wording becomes the App; trusted author is `wimdotgg-agent[bot]`; `agent/token.mjs` added; agent write pacing added to `AGENTS.md`.
+3. `config.json`: `accounts.agent` is `wimdotgg-agent[bot]`, `apps.agent` is `wimdotgg-agent`.
+Earlier entries below and sections 19 and 21 keep the machine-user wording as history.
 
 Corrections made in the 2026-11-16 review. Verified against docs.github.com REST and Actions references, the `actions/create-github-app-token` source and the release-please schema and source on that date.
 

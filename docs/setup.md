@@ -2,7 +2,7 @@
 
 Owner guide. Part 1 runs once per organization (about 20 minutes, all in the browser). Part 2 runs for each project. Rules and contracts live in [spec.md](spec.md): identities and Apps in section 2, environments in 10.1, admin runs in 12, this path in 14.
 
-Values below use the current org `wimdotgg`, owner `wianvdm` and agent `wianvdm-agent`. They match `.github/groundwork/config.json`; change them there if you fork.
+Values below use the current org `wimdotgg`, owner `wianvdm` and agent App `wimdotgg-agent`. They match `.github/groundwork/config.json`; change them there if you fork.
 
 ## Part 1: once per organization
 
@@ -22,29 +22,15 @@ Verify: each page shows the value you set after a reload.
 2. Open the repo Settings and tick "Template repository".
 3. Check that `main` contains `.github/workflows/admin-run.yml`. Nothing in steps 5 to 7 works without it.
 
-### 3. Agent account
+### 3. Agent App
 
-1. Create the machine user `wianvdm-agent` (GitHub allows one free machine account per person). Invite it at https://github.com/orgs/wimdotgg/people and accept as the agent.
-2. Create the team `agents` at https://github.com/orgs/wimdotgg/teams, add `wianvdm-agent`.
-3. Open https://github.com/wimdotgg/groundwork/settings/access, add team `agents` with the Write role.
-4. As the agent, open https://github.com/settings/personal-access-tokens/new. Resource owner `wimdotgg`, expiry 90 days, repository access "All repositories". Repository permissions:
+1. Open https://github.com/organizations/wimdotgg/settings/apps/new and create `wimdotgg-agent` with the common fields from section 4. Repository permissions: Contents RW, Pull requests RW, Issues RW, Workflows RW, Actions RW, Commit statuses R, Metadata R. No organization permissions.
+2. Install it on the org with "All repositories".
+3. Generate a private key and note the App ID and client ID.
+4. Store the key on the agent machine. On Windows, encrypt it for the current user with DPAPI at `%APPDATA%\groundwork\wimdotgg-agent.pem.dpapi` (`ConvertFrom-SecureString` output) and put `appId`, `slug` and `clientId` in `%APPDATA%\groundwork\wimdotgg-agent.json`. Elsewhere, keep the PEM outside any repo and export `GROUNDWORK_AGENT_KEY_FILE` (its path) and `GROUNDWORK_AGENT_CLIENT_ID`. Delete the downloaded `.pem`.
+5. Agents write only through `node scripts/agent/token.mjs exec -- <command>`. Keep your own `gh` login off the agent machine's write path.
 
-   | Permission | Access |
-   |---|---|
-   | Contents | Read and write |
-   | Pull requests | Read and write |
-   | Issues | Read and write |
-   | Workflows | Read and write |
-   | Actions | Read and write |
-   | Commit statuses | Read |
-   | Metadata | Read |
-
-   Leave Administration, Secrets, Variables and Environments at none. No organization permissions.
-5. As owner, approve the token at https://github.com/organizations/wimdotgg/settings/personal-access-tokens/active (pending requests tab).
-6. On the agent machine, log `gh` and Git Credential Manager in with the PAT: `gh auth login --with-token`, and let Git Credential Manager store it on first push.
-7. Remove your own login from that machine: `gh auth logout`, then delete the `github.com` entries for `wianvdm` in Windows Credential Manager. The agent machine must hold only the agent PAT.
-
-Verify: `gh auth status` lists only `wianvdm-agent`; `gh api repos/wimdotgg/groundwork --jq .permissions.push` prints `true`.
+Verify: `node scripts/agent/token.mjs exec -- gh api repos/wimdotgg/groundwork --jq .full_name` prints `wimdotgg/groundwork`.
 
 ### 4. GitHub Apps
 

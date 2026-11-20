@@ -4,10 +4,11 @@
   "controlRepo": "groundwork",
   "accounts": {
     "owner": "wianvdm",
-    "agent": "wianvdm-agent"
+    "agent": "wimdotgg-agent[bot]"
   },
   "apps": {
     "admin": "wimdotgg-admin",
+    "agent": "wimdotgg-agent",
     "release": "wimdotgg-release"
   },
   "trustedAuthors": [
