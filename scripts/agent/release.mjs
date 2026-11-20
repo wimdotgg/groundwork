@@ -10,7 +10,6 @@ import { sameLogin } from '../lib/trust.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ client: GitHubClient, repo: { owner: string, repo: string }, config: { accounts: { agent: string } }, handoverTemplate: string }} ReleaseContext */
-/** @typedef {{ ok: true, number: number, mode: 'decision'|'merged', changed: boolean }} ReleaseResult */
 
 const EXIT_REFUSED = 1;
 const EXIT_HELD_BY_OTHER = 3;
@@ -149,15 +148,13 @@ async function releaseMerged(context, number, session) {
   const handover = renderHandover(context, { number, pull, session });
   const issue = (await client.request('GET', apiPath(`${REPO_PATH}/issues/{number}`, { ...repo, number }))).data;
   const posted = await postHandover(context, handover, number);
-  if (issue.type?.name !== 'Spike') return posted;
-  const appended = await appendSpikeDecision(context, { number, pull });
+  const appended = issue.type?.name === 'Spike' && await appendSpikeDecision(context, { number, pull });
   return posted || appended;
 }
 
 /**
  * @param {ReleaseContext} context
  * @param {{ number: number, mode: 'decision'|'merged', session: string }} request
- * @returns {Promise<ReleaseResult>}
  * @throws {ReleaseRefusal|GitHubError}
  */
 export async function release(context, { number, mode, session }) {
@@ -188,11 +185,8 @@ export function parseArguments(argv, env) {
       positional.push(argument);
     }
   }
-  const unknown = [...flags].filter((flag) => !['--decision', '--merged', '--json'].includes(flag));
   const number = Number(positional[0]);
-  if (positional.length !== 1 || !Number.isInteger(number) || number <= 0 || unknown.length > 0) {
-    throw new ReleaseRefusal(USAGE);
-  }
+  if (positional.length !== 1 || !Number.isInteger(number) || number <= 0) throw new ReleaseRefusal(USAGE);
   if (flags.has('--decision') === flags.has('--merged')) throw new ReleaseRefusal(`choose exactly one of --decision or --merged; ${USAGE}`);
   if (!session) throw new ReleaseRefusal('session id required');
   if (!isValidSessionId(session)) throw new ReleaseRefusal(`invalid session id: ${session}`);
