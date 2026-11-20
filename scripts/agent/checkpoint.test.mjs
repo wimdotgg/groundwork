@@ -18,13 +18,13 @@ const FIELDS = {
 };
 const NOW = () => new Date('2026-11-20T12:34:56Z');
 
-function setup({ branch = 'issue/87', pr = { number: 5, draft: true, body: PR_BODY }, pushCode = 0 } = {}) {
+function setup({ branch = 'issue/87', pr = { number: 5, draft: true, body: PR_BODY }, pushCode = 0, commentStatus = 201 } = {}) {
   const calls = [];
   const gitCalls = [];
   const routes = {
     'GET /repos/o/r/pulls?head=o%3Aissue%2F87&state=open': { status: 200, data: pr ? [pr] : [], headers: {} },
     'PATCH /repos/o/r/pulls/5': { status: 200, data: {}, headers: {} },
-    'POST /repos/o/r/issues/5/comments': { status: 201, data: {}, headers: {} },
+    'POST /repos/o/r/issues/5/comments': { status: commentStatus, data: {}, headers: {} },
   };
   const bodies = [];
   const client = createFixtureClient(routes, { onCall: (record) => calls.push(`${record.method} ${record.path}`) });
@@ -91,6 +91,9 @@ test('AC2: placeholders and over-limit text are refused before any write', async
     ['State over limit', { fields: { ...FIELDS, Done: Array.from({ length: 40 }, () => 'x').join('\n') }, journal: 'ok' }, /State is over 40/],
     ['journal over limit', { fields: FIELDS, journal: Array.from({ length: 11 }, () => 'x').join('\n') }, /journal is over 10/],
     ['empty field', { fields: { ...FIELDS, Open: ' ' }, journal: 'ok' }, /Open/],
+    ['footer-like line', { fields: { ...FIELDS, Gotchas: 'a\n---\nb' }, journal: 'ok' }, /split.*Gotchas/],
+    ['heading line', { fields: { ...FIELDS, Gotchas: 'a\n## Review log' }, journal: 'ok' }, /split.*Gotchas/],
+    ['null input', 'null', /JSON object/],
   ];
   for (const [name, input, reason] of cases) {
     const env = setup();
@@ -172,4 +175,48 @@ test('invalid JSON input is refused', async () => {
 
 test('session id is required', async () => {
   await assert.rejects(run(setup(), options('x', { session: '' })), /session id required/);
+});
+
+test('a State at exactly stateLines is accepted', async () => {
+  const input = { fields: { ...FIELDS, Done: Array.from({ length: 32 }, () => 'x').join('\n') }, journal: 'ok' };
+  await withInput(input, async (file) => {
+    assert.equal((await run(setup(), options(file))).checkpoint, 3);
+  });
+});
+
+test('a missing or malformed footer is refused before any push', async () => {
+  for (const body of [PR_BODY.replace(FOOTER, ''), PR_BODY.replace('session w87-a1\n', 'session\n')]) {
+    const env = setup({ pr: { number: 5, draft: true, body } });
+    await withInput(valid, async (file) => {
+      await assert.rejects(run(env, options(file)), (error) => error.exitCode === 1 && /no Agent footer/.test(error.message));
+      assert.equal(env.gitCalls.some((call) => call.startsWith('push')), false);
+    });
+  }
+});
+
+test('a missing or non-numeric State checkpoint is refused, not read as 0', async () => {
+  for (const header of ['## State', '## State  (checkpoint abc · t · a/b · session w87-a1)']) {
+    const env = setup({ pr: { number: 5, draft: true, body: PR_BODY.replace(/## State.*\n/, `${header}\n`) } });
+    await withInput(valid, async (file) => {
+      await assert.rejects(run(env, options(file)), /no State checkpoint number/);
+      assert.equal(env.gitCalls.some((call) => call.startsWith('push')), false);
+    });
+  }
+});
+
+test('--auto with an input file runs the full checkpoint', async () => {
+  const env = setup();
+  await withInput(valid, async (file) => {
+    assert.deepEqual(await run(env, options(file, { auto: true })), { ok: true, number: 87, pr: 5, checkpoint: 3 });
+    assert.equal(env.bodies.length, 2);
+    assert.equal(existsSync(file), false);
+  });
+});
+
+test('a failed journal post throws and keeps the input file', async () => {
+  const env = setup({ commentStatus: 500 });
+  await withInput(valid, async (file) => {
+    await assert.rejects(run(env, options(file)), /500|POST/);
+    assert.equal(existsSync(file), true);
+  });
 });

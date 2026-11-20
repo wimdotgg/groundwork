@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { CONFIG_DIR, loadConfig, repoRoot } from '../lib/config.mjs';
+import { CONFIG_DIR, ConfigError, loadConfig, repoRoot } from '../lib/config.mjs';
 import { apiPath, currentRepo, createClient, GitHubError } from '../lib/github.mjs';
 import { isValidSessionId } from '../lib/issue-model.mjs';
 import {
@@ -46,20 +46,25 @@ function parseInput(text) {
   } catch {
     throw new CheckpointError('input file is not valid JSON');
   }
-  const fields = input?.fields ?? {};
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    throw new CheckpointError('input file must hold a JSON object');
+  }
+  const fields = input.fields ?? {};
   const missing = STATE_FIELDS.filter((name) => typeof fields[name] !== 'string' || fields[name].trim() === '');
   if (missing.length > 0) throw new CheckpointError(`input fields missing or empty: ${missing.join(', ')}`);
   if (typeof input.journal !== 'string' || input.journal.trim() === '') {
     throw new CheckpointError('input journal missing or empty');
   }
+  const splitters = STATE_FIELDS.filter((name) => fields[name].split(/\r?\n/).some((line) => line === FOOTER_BREAK || line.startsWith('## ')));
+  if (splitters.length > 0) throw new CheckpointError(`input fields would split the State section: ${splitters.join(', ')}`);
   return { fields, journal: input.journal.trim() };
 }
 
 function currentCheckpointNumber(body) {
   const state = parseSections(body).sections.find((section) => section.name === 'State');
-  const current = Number(state ? parseStateSection(state).header.checkpoint : Number.NaN);
-  if (!Number.isInteger(current)) throw new CheckpointError('PR body has no State checkpoint number');
-  return current;
+  const raw = state ? parseStateSection(state).header.checkpoint : null;
+  if (!/^\d+$/.test(raw ?? '')) throw new CheckpointError('PR body has no State checkpoint number');
+  return Number(raw);
 }
 
 const lineCount = (text) => text.trimEnd().split('\n').length;
@@ -104,8 +109,22 @@ async function readInput(file) {
   }
 }
 
+async function removeInput(file) {
+  try {
+    await rm(file);
+  } catch (error) {
+    throw new CheckpointError(`journal posted but cannot delete ${file}: ${error.code}`);
+  }
+}
+
 async function loadTemplates(root) {
-  const read = (name) => readFile(path.join(root, CONFIG_DIR, 'templates', name), 'utf8');
+  const read = async (name) => {
+    try {
+      return await readFile(path.join(root, CONFIG_DIR, 'templates', name), 'utf8');
+    } catch (error) {
+      throw new CheckpointError(`cannot read template ${name}: ${error.code}`);
+    }
+  };
   return { state: await read('state-section.md'), comment: await read('checkpoint-comment.md') };
 }
 
@@ -127,7 +146,8 @@ async function postJournal({ client, repo, pr, comment }) {
  */
 export async function runCheckpoint({ options, root, client, repo, git, now = () => new Date() }) {
   const { session, auto } = options;
-  if (!isValidSessionId(session)) throw new CheckpointError('session id required');  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+  if (!isValidSessionId(session)) throw new CheckpointError('session id required');
+  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
   const number = Number(BRANCH_PATTERN.exec(branch)?.[1]);
   if (!Number.isInteger(number)) {
     if (auto) return { ok: true, skipped: 'not on an issue/N branch' };
@@ -145,12 +165,13 @@ export async function runCheckpoint({ options, root, client, repo, git, now = ()
   }
   const inputText = await readInput(path.resolve(root, options.input));
   if (inputText === null && !auto) throw new CheckpointError(`input file ${options.input} not found`);
+  const current = currentCheckpointNumber(pr.body);
   if (inputText === null) {
     await push({ git, branch });
-    return { ok: true, number, pr: pr.number, checkpoint: currentCheckpointNumber(pr.body) };
+    return { ok: true, number, pr: pr.number, checkpoint: current };
   }
 
-  const checkpoint = currentCheckpointNumber(pr.body) + 1;
+  const checkpoint = current + 1;
   const header = {
     checkpoint, time: now().toISOString().slice(0, 16).replace('T', ' '), agent: footer.agent, session,
   };
@@ -161,13 +182,13 @@ export async function runCheckpoint({ options, root, client, repo, git, now = ()
   await push({ git, branch });
   await postState({ client, repo, pr, body: pr.body, state: rendered.state });
   await postJournal({ client, repo, pr, comment: rendered.comment });
-  await rm(path.resolve(root, options.input));
+  await removeInput(path.resolve(root, options.input));
   return { ok: true, number, pr: pr.number, checkpoint };
 }
 
-function runGit(args) {
+const gitIn = (cwd) => (args) => {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
@@ -175,7 +196,7 @@ function runGit(args) {
     child.on('error', (error) => reject(new CheckpointError(`cannot run git: ${error.code ?? 'spawn failed'}`)));
     child.on('close', (code) => resolve({ code: code ?? EXIT_ERROR, stdout, stderr }));
   });
-}
+};
 
 function parseOptions(argv, env) {
   const flags = { session: { type: 'string' }, input: { type: 'string' }, auto: { type: 'boolean' }, json: { type: 'boolean' } };
@@ -198,7 +219,7 @@ async function main(argv, env) {
   const options = parseOptions(argv, env);
   const root = repoRoot(import.meta.url);
   const result = await runCheckpoint({
-    options, root, client: createClient({ env }), repo: await currentRepo(), git: runGit,
+    options, root, client: createClient({ env }), repo: await currentRepo(), git: gitIn(root),
   });
   process.stdout.write(report(result, options.json));
   return 0;
@@ -209,7 +230,7 @@ if (import.meta.main) {
   try {
     process.exitCode = await main(process.argv.slice(2), process.env);
   } catch (error) {
-    const known = error instanceof CheckpointError || error instanceof GitHubError;
+    const known = [CheckpointError, GitHubError, ConfigError].some((type) => error instanceof type);
     const reason = known || String(error.code).startsWith('ERR_PARSE_ARGS')
       ? error.message.split(/\r?\n/)[0] : 'checkpoint: failed';
     process.exitCode = error.exitCode ?? EXIT_ERROR;
