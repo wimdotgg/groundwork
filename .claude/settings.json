@@ -69,7 +69,77 @@
       "Bash(gh api -X DELETE *secrets*)",
       "Bash(gh api -X PUT *secrets*)",
       "Bash(gh api --method DELETE *secrets*)",
-      "Bash(gh api --method PUT *secrets*)"
+      "Bash(gh api --method PUT *secrets*)",
+      "Bash(git push*)",
+      "Bash(git -C * push*)",
+      "Bash(gh pr create*)",
+      "Bash(gh pr merge*)",
+      "Bash(gh pr ready*)",
+      "Bash(gh pr edit*)",
+      "Bash(gh pr comment*)",
+      "Bash(gh pr review*)",
+      "Bash(gh issue create*)",
+      "Bash(gh issue edit*)",
+      "Bash(gh issue comment*)",
+      "Bash(gh api -X *)",
+      "Bash(gh api -XPOST*)",
+      "Bash(gh api -XPATCH*)",
+      "Bash(gh api -XPUT*)",
+      "Bash(gh api -XDELETE*)",
+      "Bash(gh api --method *)",
+      "Bash(gh api --method=*)",
+      "Bash(gh api * -X *)",
+      "Bash(gh api * --method *)",
+      "Bash(gh api * --method=*)",
+      "Bash(gh api * -f *)",
+      "Bash(gh api * -F *)",
+      "Bash(gh api * --field *)",
+      "Bash(gh api * --raw-field *)",
+      "Bash(gh api * --input *)",
+      "Bash(node scripts/agent/token.mjs exec -- git push --force*)",
+      "Bash(node scripts/agent/token.mjs exec -- git push -f*)",
+      "Bash(node scripts/agent/token.mjs exec -- git push * --force*)",
+      "Bash(node scripts/agent/token.mjs exec -- git push * -f*)",
+      "Bash(node scripts/agent/token.mjs exec -- git push origin main*)",
+      "Bash(node scripts/agent/token.mjs exec -- git push * main)",
+      "Bash(node scripts/agent/token.mjs exec -- git push * +*)",
+      "Bash(node scripts/agent/token.mjs exec -- git push *:main*)",
+      "Bash(node scripts/agent/token.mjs exec -- git push *refs/heads/main*)",
+      "Bash(node scripts/agent/token.mjs exec -- git rebase*)",
+      "Bash(node scripts/agent/token.mjs exec -- git pull --rebase*)",
+      "Bash(node scripts/agent/token.mjs exec -- git pull * --rebase*)",
+      "Bash(node scripts/agent/token.mjs exec -- git * --no-verify*)",
+      "Bash(node scripts/agent/token.mjs exec -- git commit -n*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh pr merge * --admin*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh pr merge --admin*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api *rulesets* -X *)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api *rulesets* --method *)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api *environments* -X *)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api *environments* --method *)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api *secrets* -X *)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api *secrets* --method *)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/agent/checkpoint.mjs --auto"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/agent/checkpoint.mjs --auto"
+          }
+        ]
+      }
     ]
   }
 }
