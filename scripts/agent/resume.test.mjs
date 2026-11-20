@@ -138,6 +138,11 @@ test('AC4: a PR footer naming another session exits 3', async () => {
   assert.equal((await run(noFooter, { ...TARGET, session: 'other' })).exitCode, 0);
 });
 
+test('AC4: an Agent line without a --- break names no session', async () => {
+  const unbroken = { [`GET ${REPO}/pulls/7`]: found({ number: 7, user: { login: 'agent-bot[bot]' }, body: 'Closes #5\nAgent: a/b · session s1\n', head: { sha: 'headsha' } }) };
+  assert.equal((await run(unbroken, { ...TARGET, session: 'other' })).exitCode, 0);
+});
+
 test('AC4: a released PR still names its session', async () => {
   const released = { [`GET ${REPO}/pulls/7`]: found({ number: 7, user: { login: 'agent-bot[bot]' }, body: `${STATE_BODY}\n\n<!-- groundwork:released -->\n`, head: { sha: 'headsha' } }) };
   assert.equal((await run(released, { ...TARGET, session: 'other' })).exitCode, 3);
