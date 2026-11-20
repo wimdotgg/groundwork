@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import { GitHubError, apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
 import { loadConfig, repoRoot } from '../lib/config.mjs';
+import { parseFooter } from './checkpoint.mjs';
 import { deriveStatus, isValidSessionId, loadIssueFacts } from '../lib/issue-model.mjs';
 import { hasMarker, parseSections, parseStateSection, removeMarker } from '../lib/markdown.mjs';
 import { isTrustedAuthor, sameLogin, untrustedBlock } from '../lib/trust.mjs';
@@ -12,24 +13,29 @@ const JOURNAL_ENTRIES = 3;
 const MAX_REVIEW_THREADS = 100;
 const NOT_FOUND = 404;
 const EXIT_OTHER_SESSION = 3;
-const FOOTER = /^Agent: \S+ · session ([A-Za-z0-9._-]+)$/;
+const PART_COUNT = 8;
+const MIN_RESUME_LINES = PART_COUNT * 2 + (PART_COUNT - 1); // header and truncation marker per part, a blank line between parts
+const REVIEW_STATES = ['COMMENTED', 'CHANGES_REQUESTED'];
 const PASSING_CONCLUSIONS = ['success', 'skipped', 'neutral'];
 const TRUNCATION_MARKER = '[truncated to fit the resumeLines limit]';
 const USAGE = 'usage: resume.mjs <issue number> [--session <id>] [--json]';
 const REVIEW_THREADS_QUERY = 'query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) '
-  + '{ pullRequest(number: $number) { reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved path line '
-  + 'comments(first: 1) { nodes { author { login } body } } } } } } }';
+  + '{ pullRequest(number: $number) { reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved path line originalLine '
+  + 'comments(first: 20) { nodes { author { __typename login } body } } } } } } }';
 
 /**
- * @param {string|null|undefined} body PR body
- * @returns {string|null} the session named by the footer, the last line of the body
+ * @param {string|null|undefined} body PR body; the released marker may trail the footer
+ * @returns {string|null} the session named by the footer
  */
 export function footerSession(body) {
-  const lastLine = String(body ?? '').trimEnd().split(/\r?\n/).at(-1);
-  return FOOTER.exec(lastLine)?.[1] ?? null;
+  return parseFooter(removeMarker(body ?? '', 'released'))?.session ?? null;
 }
 
-function textBlock(text, login, kind, config) {
+const oneLine = (text) => String(text ?? '').replace(/\p{Cc}+/gu, ' ').trim();
+// GraphQL omits the [bot] suffix that REST logins and config.accounts carry.
+const graphqlLogin = (author) => (author?.__typename === 'Bot' ? `${author.login}[bot]` : author?.login ?? '');
+
+function textBlock(text, { login, kind }, config) {
   const trusted = isTrustedAuthor({ login, kind }, config);
   return { text, author: trusted ? null : login || 'unknown' };
 }
@@ -40,14 +46,14 @@ const noPullRequest = (title) => section(title, plain('no PR yet'));
 
 function issueSection({ facts }, config) {
   const heading = `#${facts.number} ${facts.title} (${facts.type ?? 'untyped'}, ${facts.state})`;
-  return section('Issue spec', textBlock(`${heading}\n\n${facts.body}`, facts.author, 'issue', config));
+  return section('Issue spec', textBlock(`${heading}\n\n${facts.body}`, { login: facts.author, kind: 'issue' }, config));
 }
 
 function epicSection({ epic }, config) {
   if (!epic) return section('Epic');
   const { byName } = parseSections(epic.body);
   const parts = ['Goal', 'Decisions'].map((name) => `## ${name}\n${byName[name]?.trim() ?? '(missing)'}`);
-  return section('Epic', textBlock(`Epic #${epic.number} ${epic.title}\n\n${parts.join('\n\n')}`, epic.author, 'issue', config));
+  return section('Epic', textBlock(`Epic #${epic.number} ${epic.title}\n\n${parts.join('\n\n')}`, { login: epic.author, kind: 'issue' }, config));
 }
 
 function stateSection({ pull }, config) {
@@ -56,15 +62,18 @@ function stateSection({ pull }, config) {
   if (!state) return section('PR state', plain('the PR body has no ## State section'));
   const { fields } = parseStateSection(state);
   const text = [state.line, ...Object.entries(fields).map(([name, value]) => `${name}: ${value}`)].join('\n');
-  return section('PR state', textBlock(text, pull.user?.login, 'pull-request', config));
+  return section('PR state', textBlock(text, { login: pull.user?.login, kind: 'pull-request' }, config));
+}
+
+function agentCheckpoints(comments, config) {
+  return comments
+    .filter((comment) => sameLogin(comment.user?.login, config.accounts.agent) && hasMarker(comment.body ?? '', 'checkpoint'))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
 function journalSection({ comments }, config) {
-  const entries = comments
-    .filter((comment) => sameLogin(comment.user?.login, config.accounts.agent) && hasMarker(comment.body ?? '', 'checkpoint'))
-    .sort((a, b) => a.created_at.localeCompare(b.created_at))
-    .slice(-JOURNAL_ENTRIES);
-  return section('Journal', ...entries.map((comment) => textBlock(removeMarker(comment.body, 'checkpoint').trim(), comment.user.login, 'comment', config)));
+  const entries = agentCheckpoints(comments, config).slice(-JOURNAL_ENTRIES);
+  return section('Journal', ...entries.map((comment) => textBlock(removeMarker(comment.body, 'checkpoint').trim(), { login: comment.user.login, kind: 'comment' }, config)));
 }
 
 function diffSection({ pull, files }, config) {
@@ -72,26 +81,41 @@ function diffSection({ pull, files }, config) {
   const added = files.reduce((sum, file) => sum + file.additions, 0);
   const deleted = files.reduce((sum, file) => sum + file.deletions, 0);
   const rows = files.map((file) => `${file.filename} +${file.additions} -${file.deletions}`);
-  return section('Diff against main', textBlock([`${files.length} files, +${added} -${deleted}`, ...rows].join('\n'), pull.user?.login, 'pull-request', config));
+  return section('Diff against main', textBlock([`${files.length} files, +${added} -${deleted}`, ...rows].join('\n'), { login: pull.user?.login, kind: 'pull-request' }, config));
 }
 
 function ciSection({ checks }) {
   if (!checks) return noPullRequest('CI');
   const lines = checks.map((check) => {
-    const failedStep = check.failedStep ? ` (failed step: ${check.failedStep})` : '';
-    return `${check.name}: ${check.conclusion ?? check.status}${failedStep}`;
+    const failedStep = check.failedStep ? ` (failed step: ${oneLine(check.failedStep)})` : '';
+    return `${oneLine(check.name)}: ${check.conclusion ?? check.status}${failedStep}`;
   });
   return section('CI', plain(lines.join('\n') || 'no check runs on the head commit'));
 }
 
-function threadsSection({ threads }, config) {
-  if (!threads) return noPullRequest('Unresolved review threads');
-  const blocks = threads.nodes.filter((thread) => !thread.isResolved).flatMap((thread) => {
-    const comment = thread.comments.nodes[0];
-    const login = comment?.author?.login ?? '';
-    return [plain(`${thread.path}:${thread.line ?? '?'} by ${login || 'unknown'}`), textBlock(comment?.body ?? '', login, 'comment', config)];
-  });
-  if (threads.pageInfo?.hasNextPage) blocks.push(plain(`more than ${MAX_REVIEW_THREADS} threads: the rest are not shown`));
+function threadBlocks(thread, config) {
+  const location = `${thread.path}:${thread.line ?? thread.originalLine ?? '?'}`;
+  return [plain(location), ...thread.comments.nodes.flatMap((comment) => {
+    const login = graphqlLogin(comment.author);
+    return [plain(`by ${login || 'unknown'}:`), textBlock(comment.body ?? '', { login, kind: 'comment' }, config)];
+  })];
+}
+
+// Reviewers post comment reviews, which open no thread; only those after the last checkpoint are news.
+function reviewBlocks({ reviews, comments }, config) {
+  const since = agentCheckpoints(comments, config).at(-1)?.created_at ?? '';
+  return reviews
+    .filter((review) => REVIEW_STATES.includes(review.state) && review.body?.trim() && String(review.submitted_at ?? '') > since)
+    .flatMap((review) => [plain(`Review by ${review.user?.login ?? 'unknown'} (${review.state}):`), textBlock(review.body, { login: review.user?.login, kind: 'comment' }, config)]);
+}
+
+function threadsSection(data, config) {
+  if (!data.threads) return noPullRequest('Unresolved review threads');
+  const blocks = [
+    ...data.threads.nodes.filter((thread) => !thread.isResolved).flatMap((thread) => threadBlocks(thread, config)),
+    ...reviewBlocks(data, config),
+  ];
+  if (data.threads.pageInfo?.hasNextPage) blocks.push(plain(`more than ${MAX_REVIEW_THREADS} threads: the rest are not shown`));
   return section('Unresolved review threads', ...blocks);
 }
 
@@ -112,7 +136,7 @@ function renderBlock({ text, author }, maxLines) {
 }
 
 function renderSection({ title, blocks }, maxLines) {
-  const header = `## ${title}`;
+  const header = `=== ${title} ===`;
   const full = blocks.flatMap((block) => renderBlock(block, Infinity));
   if (full.length + 1 <= maxLines) return { lines: [header, ...full], truncated: false };
   const lines = [header];
@@ -152,7 +176,7 @@ export function renderBriefing(sections, maxLines) {
 function latestPerName(runs) {
   const newest = new Map();
   for (const run of runs) {
-    if (!newest.has(run.name) || run.started_at > newest.get(run.name).started_at) newest.set(run.name, run);
+    if (!newest.has(run.name) || run.id > newest.get(run.name).id) newest.set(run.name, run);
   }
   return [...newest.values()];
 }
@@ -187,12 +211,14 @@ async function loadThreads(client, repoRef, number) {
 
 async function loadPullData(client, repoRef, pull) {
   const pullRef = { ...repoRef, number: pull.number };
-  return {
-    comments: await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/comments`, pullRef)),
-    files: await client.paginate(apiPath(`${REPO_PATH}/pulls/{number}/files`, pullRef)),
-    checks: await loadChecks(client, repoRef, pull.head.sha),
-    threads: await loadThreads(client, repoRef, pull.number),
-  };
+  const [comments, files, reviews, checks, threads] = await Promise.all([
+    client.paginate(apiPath(`${REPO_PATH}/issues/{number}/comments`, pullRef)),
+    client.paginate(apiPath(`${REPO_PATH}/pulls/{number}/files`, pullRef)),
+    client.paginate(apiPath(`${REPO_PATH}/pulls/{number}/reviews`, pullRef)),
+    loadChecks(client, repoRef, pull.head.sha),
+    loadThreads(client, repoRef, pull.number),
+  ]);
+  return { comments, files, reviews, checks, threads };
 }
 
 /**
@@ -202,6 +228,9 @@ async function loadPullData(client, repoRef, pull) {
  * @returns {Promise<{ exitCode: number, result: object }>}   exit 3 when the PR footer names another session
  */
 export async function resume(client, { owner, repo, number, session }, { config, now = new Date() }) {
+  if (config.limits.resumeLines < MIN_RESUME_LINES) {
+    throw new GitHubError(`limits.resumeLines is ${config.limits.resumeLines}, below the ${MIN_RESUME_LINES} lines the briefing format needs`);
+  }
   const repoRef = { owner, repo };
   const facts = await loadIssueFacts(client, { ...repoRef, number }, { config });
   const pullPath = facts.pr ? apiPath(`${REPO_PATH}/pulls/{number}`, { ...repoRef, number: facts.pr.number }) : null;
@@ -210,7 +239,8 @@ export async function resume(client, { owner, repo, number, session }, { config,
   if (session !== null && heldBy !== null && heldBy !== session) {
     return { exitCode: EXIT_OTHER_SESSION, result: { ok: false, reason: `PR #${pull.number} footer names session ${heldBy}, not ${session}`, number, session: heldBy } };
   }
-  const data = { facts, pull, epic: await loadEpic(client, repoRef, facts), ...(pull ? await loadPullData(client, repoRef, pull) : {}) };
+  const [epic, pullData] = await Promise.all([loadEpic(client, repoRef, facts), pull ? loadPullData(client, repoRef, pull) : {}]);
+  const data = { facts, pull, epic, ...pullData };
   const sections = [
     issueSection(data, config), epicSection(data, config), stateSection(data, config), journalSection({ comments: data.comments ?? [] }, config),
     diffSection({ pull, files: data.files }, config), ciSection(data), threadsSection(data, config), blockerSection(data, { config, now }),
@@ -222,7 +252,7 @@ export async function resume(client, { owner, repo, number, session }, { config,
 function parseCliArguments(argv, env) {
   const { values, positionals } = parseArgs({ args: argv, options: { session: { type: 'string' }, json: { type: 'boolean' } }, allowPositionals: true });
   if (positionals.length !== 1 || !/^\d+$/.test(positionals[0])) throw new GitHubError(USAGE);
-  const session = values.session ?? env.GROUNDWORK_SESSION ?? null;
+  const session = values.session || env.GROUNDWORK_SESSION || null;
   if (session !== null && !isValidSessionId(session)) throw new GitHubError(`invalid session id: ${session}`);
   return { number: Number(positionals[0]), session, json: values.json === true };
 }
