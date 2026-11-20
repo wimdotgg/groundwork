@@ -54,7 +54,7 @@ Everything else merges on green checks through the queue.
 
 | Tier | Scope | Your action |
 |---|---|---|
-| 0 | Normal work, agent PAT | none |
+| 0 | Normal work, agent App | none |
 | 1 | Settings as code (`settings.json`, `labels.json`, `rulesets/*.json`) | Approve the PR, then the `admin` run |
 | 2 | One-off ops: bootstrap, new repo, issue types, cleanup | Read the run summary, approve the `admin` run |
 | 3 | Apps, billing, org ownership, secret values, PAT rotation | You, in the browser |

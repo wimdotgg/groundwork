@@ -4,6 +4,12 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 
 `scripts/agent/*` commands (`next`, `claim`, `checkpoint`, `resume`, `release`, `plan-lint`, `review-queue`) arrive in Phase 3. Until then follow the worker loop (6.3) by hand with `gh api`. Until `.github/groundwork/templates/` and the PR template land, use the heading lists in this file and spec 4.3 and 7.
 
+## Identity and pacing (2.2)
+
+- Act only as `wimdotgg-agent[bot]`. Never write to GitHub under another login, whatever `gh` or Git are logged in as.
+- Every GitHub write goes through `node scripts/agent/token.mjs exec -- <gh or git command>`. It mints an installation token and sets the bot name and noreply email on commits. Plain `git push` and bare `gh` writes are forbidden.
+- Pace writes: at most 5 issue creations and 10 comments per minute, a pause between bulk writes, no polling loops against the API.
+
 ## Never
 
 - Merge release PRs or push tags. Tags come from the release App; deploys run from `deploy.yml` on owner approval.
@@ -29,7 +35,7 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 - Planner: turns a goal into an epic with sub-issues, dependencies and a plan comment; runs `plan-lint`. Never implements, never applies `accepted`.
 - Worker: loops next, claim, build, checks, enqueue. Never merges release PRs.
 - Reviewer: reviews PRs from another session with comment reviews. Never approves or requests changes.
-- All roles use the agent account; the session id separates them. Skills live in `.claude/skills/groundwork-*`.
+- All roles act as the agent App (see Identity); the session id separates them. Skills live in `.claude/skills/groundwork-*`.
 - Worker resolves each review thread after fixing or answering and logs it in `## Review log`.
 - Reviewer also enqueues Dependabot PRs with green checks (minor and patch only; majors need a Chore issue). `review-queue` lists them (10.2).
 
