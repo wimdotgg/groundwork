@@ -126,7 +126,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/agent/checkpoint.mjs --auto"
+            "command": "node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --auto"
           }
         ]
       }
@@ -136,7 +136,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/agent/checkpoint.mjs --auto"
+            "command": "node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --auto"
           }
         ]
       }
