@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/wimdotgg/groundwork/compare/v0.1.0...v0.2.0) (2026-11-20)
+
+
+### Features
+
+* **agent:** act as the wimdotgg-agent GitHub App ([#71](https://github.com/wimdotgg/groundwork/issues/71)) ([1c5556d](https://github.com/wimdotgg/groundwork/commit/1c5556d22dba78c6586c40354814028c80b65186))
+
 ## 0.1.0 (2026-11-17)
 
 
