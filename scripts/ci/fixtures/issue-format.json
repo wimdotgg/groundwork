@@ -7,7 +7,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -32,7 +32,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": [
@@ -59,7 +59,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
         "labels": []
@@ -90,7 +90,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
         "labels": [
@@ -123,7 +123,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": null,
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -154,7 +154,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "### Outcome\nDo it.\n\n### Serves\nE1\n\n### Scope\nSmall.\n\n### Touches\nscripts/\n\n### Acceptance criteria\n- [ ] AC1: works\n\n### Verification plan\nRun tests.\n\n### Risk\nLow.\n\n### Context\n_No response_\n",
         "labels": []
@@ -179,7 +179,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\r\nDo it.\r\n\r\n## Serves\r\nE1\r\n\r\n## Scope\r\nSmall.\r\n\r\n## Touches\r\nscripts/\r\n\r\n## Acceptance criteria\r\n- [ ] AC1: works\r\n\r\n## Verification plan\r\nRun tests.\r\n\r\n## Risk\r\nLow.\r\n\r\n## Context\r\nNone.\r\n",
         "labels": []
@@ -204,7 +204,7 @@
       "markerCommentExists": true,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": [
@@ -237,7 +237,7 @@
       "markerCommentExists": true,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -287,7 +287,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
         "labels": []
@@ -306,7 +306,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
         "labels": []
@@ -325,7 +325,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -344,7 +344,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
         "labels": []
@@ -375,7 +375,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
         "labels": []
@@ -406,7 +406,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
         "labels": []
@@ -437,7 +437,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Context\nNone.\n",
         "labels": []
@@ -468,7 +468,7 @@
       "issue": {
         "number": 5,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "type": {
           "name": "Feature"
@@ -532,7 +532,7 @@
       "issue": {
         "number": 5,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "type": {
           "name": "Feature"
@@ -600,7 +600,7 @@
       "issue": {
         "number": 5,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "type": {
           "name": "Feature"
@@ -665,7 +665,7 @@
       "issue": {
         "number": 5,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "type": {
           "name": "Feature"
@@ -689,7 +689,7 @@
       "issue": {
         "number": 5,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "type": null,
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
@@ -728,7 +728,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\n@org/everyone <img src=x> [click](http://evil.example) #1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -759,7 +759,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1 `x`\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -790,7 +790,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: a\n- [ ] AC1: b\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -821,7 +821,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Task",
         "body": "## Outcome\nDo it.\n\n## Serves\nE1\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -852,7 +852,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Epic",
         "body": "## Goal\nx\n\n## Success criteria\n- [ ] E1: done\n\n## Constraints\nx\n\n## Plan\nx\n\n## Decisions\nx\n\n## Open questions\nx\n",
         "labels": []
@@ -877,7 +877,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Spike",
         "body": "## Question\nx\n\n## Serves\nE1\n\n## Timebox\nx\n\n## Output\nx\n",
         "labels": []
@@ -902,7 +902,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Bug",
         "body": "## Outcome\nDo it.\n\n## Serves\n\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n\n## Reproduction\nSteps.\n\n## Expected vs actual\nDiffers.\n",
         "labels": []
@@ -946,7 +946,7 @@
       "markerCommentExists": false,
       "issue": {
         "number": 5,
-        "author": "wianvdm-agent",
+        "author": "wimdotgg-agent[bot]",
         "type": "Feature",
         "body": "## Outcome\nDo it.\n\n## Serves\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n## Scope\nSmall.\n\n## Touches\nscripts/\n\n## Acceptance criteria\n- [ ] AC1: works\n\n## Verification plan\nRun tests.\n\n## Risk\nLow.\n\n## Context\nNone.\n",
         "labels": []
@@ -977,7 +977,7 @@
       "issue": {
         "number": 5,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "type": {
           "name": "Feature"
@@ -1016,7 +1016,7 @@
       "issue": {
         "number": 5,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "type": {
           "name": "Feature"

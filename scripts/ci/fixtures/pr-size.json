@@ -3,7 +3,7 @@
     "description": "under limits -> pass",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -34,7 +34,7 @@
     "description": "exactly at limits -> pass",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -209,7 +209,7 @@
     "description": "lines over limit -> fail",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -234,7 +234,7 @@
     "description": "files over limit -> fail",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -419,7 +419,7 @@
     "description": "lockfile excluded -> pass",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -458,7 +458,7 @@
     "description": "snapshot files excluded -> pass",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -497,7 +497,7 @@
     "description": "generatedGlobs excluded -> pass",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -528,7 +528,7 @@
     "description": "excluded files do not count toward file limit -> pass",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -783,7 +783,7 @@
     "description": "non-excluded file beside excluded still counts -> fail",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -816,7 +816,7 @@
     "description": "valid size-exception over limit -> pass with warning",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [
         "size-exception"
       ],
@@ -844,7 +844,7 @@
     "description": "size-exception not valid (applied by agent) -> fail",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -869,7 +869,7 @@
     "description": "valid size-exception under limit -> pass without warning",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [
         "size-exception"
       ],
@@ -944,7 +944,7 @@
     "description": "dependencies label without dependabot author -> not exempt",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [
         "dependencies"
       ],
@@ -996,7 +996,7 @@
     "description": "automated label without release bot author -> not exempt",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [
         "automated"
       ],
@@ -1050,7 +1050,7 @@
     "description": "rename where both names match exclusion -> excluded, pass",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -1081,7 +1081,7 @@
     "description": "rename from source to lockfile name -> counted, fail",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -1106,7 +1106,7 @@
     "description": "rename from lockfile to source name -> counted, fail",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -1131,7 +1131,7 @@
     "description": "dot-directory file does not match ** globs -> counted, fail",
     "facts": {
       "eventName": "pull_request",
-      "author": "wianvdm-agent",
+      "author": "wimdotgg-agent[bot]",
       "validLabels": [],
       "files": [
         {
@@ -1173,7 +1173,7 @@
       "pull_request": {
         "number": 7,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "changed_files": 102
       }
@@ -1824,7 +1824,7 @@
               "name": "size-exception"
             },
             "actor": {
-              "login": "wianvdm-agent"
+              "login": "wimdotgg-agent[bot]"
             },
             "created_at": "2026-01-01T00:00:00Z"
           }
@@ -1846,7 +1846,7 @@
       "pull_request": {
         "number": 7,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "changed_files": 102
       }
@@ -2626,7 +2626,7 @@
               "name": "dependencies"
             },
             "actor": {
-              "login": "wianvdm-agent"
+              "login": "wimdotgg-agent[bot]"
             },
             "created_at": "2026-01-01T00:00:00Z"
           }
@@ -2648,7 +2648,7 @@
       "pull_request": {
         "number": 7,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "changed_files": 1
       }
@@ -2703,7 +2703,7 @@
       "pull_request": {
         "number": 7,
         "user": {
-          "login": "wianvdm-agent"
+          "login": "wimdotgg-agent[bot]"
         },
         "changed_files": 3001
       }

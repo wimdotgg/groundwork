@@ -96,12 +96,12 @@ test('loadConfig loads a fixture config', async () => {
 
 test('loadConfig lower-cases mixed-case logins, slugs and literal actors', async () => {
   const config = await realConfigJson();
-  config.accounts = { owner: 'WianVDM', agent: 'WianVDM-Agent' };
+  config.accounts = { owner: 'WianVDM', agent: 'Wimdotgg-Agent[bot]' };
   config.apps = { admin: 'Wimdotgg-Admin', release: 'wimdotgg-release' };
   config.trustedAuthors.push({ actor: 'Dependabot[bot]', scope: 'any' });
   await withTempRoot({ 'config.json': config }, async (root) => {
     const loaded = await loadConfig({ root });
-    assert.deepEqual(loaded.accounts, { owner: 'wianvdm', agent: 'wianvdm-agent' });
+    assert.deepEqual(loaded.accounts, { owner: 'wianvdm', agent: 'wimdotgg-agent[bot]' });
     assert.equal(loaded.apps.admin, 'wimdotgg-admin');
     assert.equal(loaded.trustedAuthors.at(-1).actor, 'dependabot[bot]');
   });
