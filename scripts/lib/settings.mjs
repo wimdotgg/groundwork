@@ -346,12 +346,14 @@ function compareTeamAccess(settings, live) {
 /**
  * Whether a variable with this `assertWhen` is asserted now, deferred until its signal appears, or undecidable.
  * @returns {'hold'|'deferred'|'unreadable'}
+ * @throws {SettingsError} for an unknown `assertWhen`, so a bad value never reads as asserted
  */
 export function assertionState(assertWhen, { config, signals }) {
   if (assertWhen === 'kitInstalled') {
     if (typeof signals.kitInstalled !== 'boolean') return 'unreadable';
     return signals.kitInstalled ? 'hold' : 'deferred';
   }
+  if (assertWhen !== 'deployReady') throw new SettingsError(`settings.json: unknown assertWhen "${assertWhen}"`);
   if (config.deploy === 'none') return 'deferred';
   if (signals.pass2Ran === true || signals.codeScanningConfigured === true) return 'hold';
   if (signals.pass2Ran === false && signals.codeScanningConfigured === false) return 'deferred';

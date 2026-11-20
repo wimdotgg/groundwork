@@ -231,15 +231,25 @@ function requireReleaseValues(env) {
   if (missing) throw new SettingsError(`${missing.name} is not set in the environment`);
 }
 
+/** Records the call even when the spawn itself fails (gh missing), with a null status. */
+async function spawnRecorded(context, invocation) {
+  const call = { method: 'gh', path: invocation.args.join(' ') };
+  try {
+    const result = await context.dependencies.spawnGh(invocation);
+    context.recordCall?.({ ...call, status: result.code });
+    return result;
+  } catch (error) {
+    context.recordCall?.({ ...call, status: null });
+    throw error;
+  }
+}
+
 async function applyReleaseEnvironment(context) {
   requireReleaseValues(context.env);
   const target = `${context.org}/${context.repoRef.repo}`;
   for (const { command, name } of RELEASE_WRITES) {
     const args = [command, 'set', name, '--env', RELEASE_ENVIRONMENT, '--repo', target];
-    const { code, stderr } = await context.dependencies.spawnGh({
-      args, stdin: context.env[name], env: ghEnvironment(context),
-    });
-    context.recordCall?.({ method: 'gh', path: args.join(' '), status: code });
+    const { code, stderr } = await spawnRecorded(context, { args, stdin: context.env[name], env: ghEnvironment(context) });
     if (code !== 0) throw new GitHubError(`gh ${command} set ${name} failed: ${firstLine(stderr)}`);
   }
   return `${RELEASE_WRITES.map(({ name }) => name).join(', ')} written to ${RELEASE_ENVIRONMENT}`;

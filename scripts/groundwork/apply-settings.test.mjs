@@ -450,6 +450,20 @@ test('recordCall gets one row per gh write, with the exit status and no value', 
   for (const value of Object.values(RELEASE_ENV)) assert.ok(!JSON.stringify(rows).includes(value));
 });
 
+test('recordCall gets a null-status row when the gh spawn itself fails, then rethrows', async () => {
+  const root = await makeRoot();
+  const rows = [];
+  const context = {
+    client: createFixtureClient(readRoutes(CONTROL)), token: TOKEN, org: 'wimdotgg', repo: CONTROL,
+    settingsRoot: root, config: CONFIG, env: RELEASE_ENV, log: () => {}, recordCall: (row) => rows.push(row),
+  };
+  const spawnGh = async () => { throw new Error('spawn gh ENOENT'); };
+  await assert.rejects(run(context, { spawnGh }), /ENOENT/);
+  assert.deepEqual(rows, [
+    { method: 'gh', path: `secret set RELEASE_APP_KEY --env release --repo wimdotgg/${CONTROL}`, status: null },
+  ]);
+});
+
 test('no log line or summary holds a secret value', async () => {
   const root = await makeShippedRoot(SMALL_LABELS);
   const base = repoPath(CONTROL);

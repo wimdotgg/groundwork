@@ -217,6 +217,10 @@ test('assertionState: deployReady follows deploy mode and the pass 2 signals', (
   assert.equal(state({ pass2Ran: true, codeScanningConfigured: true }, 'none'), 'deferred');
 });
 
+test('assertionState throws on an unknown assertWhen', () => {
+  assert.throws(() => assertionState('always', { config: CONFIG, signals: { kitInstalled: true, pass2Ran: true } }), SettingsError);
+});
+
 test('compareStates: everything matching yields only match rows, tolerant of OrganizationAdmin null id', () => {
   const rows = compare(liveState());
   assert.ok(rows.length > 10);
