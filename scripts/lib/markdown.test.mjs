@@ -20,6 +20,13 @@ test('stripCommentsAndFences: unclosed fence runs to the end', () => {
   assert.equal(stripCommentsAndFences('a\n```\nb\nc'), 'a\n');
 });
 
+test('parseSections ends a section at a --- line but not inside a fence', () => {
+  const body = '## State\nDone: x\nOpen: y\n\n---\nAgent: a/b · session s1\n\n## Next\nz\n```\n---\n```\n';
+  const { sections } = parseSections(body);
+  assert.equal(sections[0].content, 'Done: x\nOpen: y');
+  assert.equal(sections[1].content, 'z');
+});
+
 test('parseSections strips the trailing group, reports duplicates, ignores fenced headings', () => {
   const body = [
     '## Goal', 'one', '',

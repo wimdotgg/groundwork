@@ -6,7 +6,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { CONFIG_DIR, ConfigError, loadConfig, repoRoot } from '../lib/config.mjs';
 import { apiPath, currentRepo, createClient, GitHubError } from '../lib/github.mjs';
-import { isValidSessionId } from '../lib/issue-model.mjs';
+import { isValidSessionId, parseFooter } from '../lib/issue-model.mjs';
 import {
   fillTemplate, parseSections, parseStateSection, replaceSection, templatePlaceholders,
 } from '../lib/markdown.mjs';
@@ -15,7 +15,6 @@ const EXIT_ERROR = 1;
 const EXIT_HELD = 3;
 const DEFAULT_INPUT = '.artifacts/checkpoint.json';
 const BRANCH_PATTERN = /^issue\/(\d+)$/;
-const FOOTER_PATTERN = /^Agent: (\S+) · session (\S+)$/;
 const FOOTER_BREAK = '---';
 const STATE_FIELDS = ['Done', 'In progress', 'Next', 'Proven', 'Unproven', 'Rejected', 'Gotchas', 'Open'];
 
@@ -24,19 +23,6 @@ export class CheckpointError extends Error {
     super(message);
     this.exitCode = exitCode;
   }
-}
-
-/**
- * Last line of the PR body, after the final `---`: `Agent: <agent> · session <session>`.
- * @param {string} body
- * @returns {{ agent: string, session: string } | null}
- */
-export function parseFooter(body) {
-  const lines = body.replace(/\r\n?/g, '\n').trimEnd().split('\n');
-  const breakIndex = lines.lastIndexOf(FOOTER_BREAK);
-  if (breakIndex === -1) return null;
-  const match = FOOTER_PATTERN.exec(lines.at(-1));
-  return match === null ? null : { agent: match[1], session: match[2] };
 }
 
 function parseInput(text) {
@@ -198,6 +184,27 @@ const gitIn = (cwd) => (args) => {
   });
 };
 
+/**
+ * Claude Code hooks pass a JSON object on stdin; `session_id` names the session.
+ * @param {string} text
+ * @returns {string} the session id, or '' when the text holds none
+ */
+export function sessionFromHookInput(text) {
+  try {
+    const sessionId = JSON.parse(text)?.session_id;
+    return isValidSessionId(sessionId) ? sessionId : '';
+  } catch {
+    return '';
+  }
+}
+
+async function readStdin() {
+  if (process.stdin.isTTY) return '';
+  let text = '';
+  for await (const chunk of process.stdin.setEncoding('utf8')) text += chunk;
+  return text;
+}
+
 function parseOptions(argv, env) {
   const flags = { session: { type: 'string' }, input: { type: 'string' }, auto: { type: 'boolean' }, json: { type: 'boolean' } };
   const { values } = parseArgs({ args: argv, options: flags, strict: true });
@@ -217,6 +224,11 @@ function report(result, json) {
 
 async function main(argv, env) {
   const options = parseOptions(argv, env);
+  if (options.session === '' && options.auto) options.session = sessionFromHookInput(await readStdin());
+  if (options.session === '' && options.auto) {
+    process.stdout.write(report({ ok: true, skipped: 'no session id' }, options.json));
+    return 0;
+  }
   const root = repoRoot(import.meta.url);
   const result = await runCheckpoint({
     options, root, client: createClient({ env }), repo: await currentRepo(), git: gitIn(root),

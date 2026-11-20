@@ -96,7 +96,7 @@ export function stripCommentsAndFences(text) {
 
 /**
  * Level-2 sections outside comments and fences. `content` is the text between
- * the heading and the next level-2 heading, trimmed. `byName` keeps the first
+ * the heading and the next level-2 heading or a line that is exactly `---`, trimmed. `byName` keeps the first
  * occurrence of a repeated name; `duplicates` lists each repeated name once.
  * @param {string} body
  * @returns {{ sections: Array<{ name: string, line: string, content: string }>, byName: Record<string, string>, duplicates: string[] }}
@@ -104,13 +104,16 @@ export function stripCommentsAndFences(text) {
 export function parseSections(body) {
   const lines = stripCommentsAndFences(body).split('\n');
   const sections = [];
+  let open = false;
   for (const line of lines) {
     const heading = SECTION_HEADING.exec(line);
     if (heading) {
       sections.push({ name: heading[1].replace(TRAILING_GROUP, '').trim(), line: line.trimEnd(), content: [] });
+      open = true;
       continue;
     }
-    if (sections.length > 0) sections[sections.length - 1].content.push(line);
+    if (line === SECTION_BREAK) open = false;
+    if (open) sections[sections.length - 1].content.push(line);
   }
   const result = sections.map((section) => ({ ...section, content: section.content.join('\n').trim() }));
   const firstByName = new Map();

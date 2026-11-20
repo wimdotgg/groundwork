@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFixtureClient } from '../lib/github.mjs';
-import { footerSession, resume } from './resume.mjs';
+import { resume } from './resume.mjs';
 
 const REPO = '/repos/acme/app';
 const TARGET = { owner: 'acme', repo: 'app', number: 5, session: null };
@@ -136,13 +136,6 @@ test('AC4: a PR footer naming another session exits 3', async () => {
   assert.equal((await run()).exitCode, 0);
   const noFooter = { [`GET ${REPO}/pulls/7`]: found({ number: 7, user: { login: 'agent-bot[bot]' }, body: 'Closes #5', head: { sha: 'headsha' } }) };
   assert.equal((await run(noFooter, { ...TARGET, session: 'other' })).exitCode, 0);
-});
-
-test('footerSession: reads the footer, also when the released marker trails it', () => {
-  assert.equal(footerSession('x\n\n---\nAgent: sonnet/claude-code · session w88-a1\n'), 'w88-a1');
-  assert.equal(footerSession('x\n---\nAgent: a/b · session s1\n\n<!-- groundwork:released -->\n'), 's1');
-  assert.equal(footerSession('Agent: a/b · session s1\nmore text'), null);
-  assert.equal(footerSession(null), null);
 });
 
 test('AC4: a released PR still names its session', async () => {

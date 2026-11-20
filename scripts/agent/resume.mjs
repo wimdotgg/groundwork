@@ -1,8 +1,7 @@
 import { parseArgs } from 'node:util';
 import { GitHubError, apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
 import { loadConfig, repoRoot } from '../lib/config.mjs';
-import { parseFooter } from './checkpoint.mjs';
-import { deriveStatus, isValidSessionId, loadIssueFacts } from '../lib/issue-model.mjs';
+import { deriveStatus, isValidSessionId, loadIssueFacts, parseFooter } from '../lib/issue-model.mjs';
 import { hasMarker, parseSections, parseStateSection, removeMarker } from '../lib/markdown.mjs';
 import { isTrustedAuthor, sameLogin, untrustedBlock } from '../lib/trust.mjs';
 
@@ -22,14 +21,6 @@ const USAGE = 'usage: resume.mjs <issue number> [--session <id>] [--json]';
 const REVIEW_THREADS_QUERY = 'query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) '
   + '{ pullRequest(number: $number) { reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved path line originalLine '
   + 'comments(first: 20) { nodes { author { __typename login } body } } } } } } }';
-
-/**
- * @param {string|null|undefined} body PR body; the released marker may trail the footer
- * @returns {string|null} the session named by the footer
- */
-export function footerSession(body) {
-  return parseFooter(removeMarker(body ?? '', 'released'))?.session ?? null;
-}
 
 const oneLine = (text) => String(text ?? '').replace(/\p{Cc}+/gu, ' ').trim();
 // GraphQL omits the [bot] suffix that REST logins and config.accounts carry.
@@ -235,7 +226,7 @@ export async function resume(client, { owner, repo, number, session }, { config,
   const facts = await loadIssueFacts(client, { ...repoRef, number }, { config });
   const pullPath = facts.pr ? apiPath(`${REPO_PATH}/pulls/{number}`, { ...repoRef, number: facts.pr.number }) : null;
   const pull = pullPath ? (await client.request('GET', pullPath)).data : null;
-  const heldBy = pull ? footerSession(pull.body) : null;
+  const heldBy = parseFooter(pull?.body)?.session ?? null;
   if (session !== null && heldBy !== null && heldBy !== session) {
     return { exitCode: EXIT_OTHER_SESSION, result: { ok: false, reason: `PR #${pull.number} footer names session ${heldBy}, not ${session}`, number, session: heldBy } };
   }

@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 import { GitHubError, apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
 import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { sameLogin } from '../lib/trust.mjs';
-import { TITLE_TYPES, claimCommitMessage, isValidAgent, isValidSessionId, leaseState, parseClaimCommit } from '../lib/issue-model.mjs';
+import { TITLE_TYPES, claimCommitMessage, isValidAgent, isValidSessionId, leaseState, parseClaimCommit, parseFooter } from '../lib/issue-model.mjs';
 import { fillTemplate, findClosingRefs, hasMarker, removeMarker, templateSection } from '../lib/markdown.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
@@ -25,7 +25,6 @@ const NEEDS_DECISION_LABEL = 'needs-decision';
 const UNKNOWN_SESSION = 'unknown';
 const MS_PER_MINUTE = 60_000;
 const REPO_PATH = '/repos/{owner}/{repo}';
-const FOOTER_SESSION = /^Agent: \S+ · session (\S+)$/;
 const OWNED_PLACEHOLDERS = [
   'issue', 'checkpoint', 'time', 'agent', 'session',
   'done', 'in progress', 'next', 'proven', 'unproven', 'rejected', 'gotchas', 'open',
@@ -47,10 +46,7 @@ const repoParams = (repo, extra = {}) => ({ ...repo, ...extra });
 const issueBranch = (number) => `issue/${number}`;
 const formatTime = (now) => now.toISOString().slice(0, 16).replace('T', ' ');
 
-function footerSession(body) {
-  const lastLine = String(body ?? '').trimEnd().split(/\r?\n/).at(-1);
-  return FOOTER_SESSION.exec(lastLine)?.[1] ?? null;
-}
+const footerSession = (body) => parseFooter(body)?.session ?? null;
 
 function titlePrefix(issueType) {
   const mapping = TITLE_TYPES[issueType];

@@ -15,6 +15,7 @@ import {
   loadIssueFacts,
   parseClaimCommit,
   parseConventionalTitle,
+  parseFooter,
   validateIssueBody,
 } from './issue-model.mjs';
 
@@ -635,4 +636,19 @@ test('loadIssueFacts: a takeover commit head sets claimCommitAt', async () => {
     }),
   });
   assert.equal(facts.claimCommitAt, '2026-01-01T11:00:00Z');
+});
+
+test('parseFooter reads the last line under the last ---, also with the released marker trailing', () => {
+  const footer = { agent: 'sonnet/claude-code', session: 'w87-a1' };
+  assert.deepEqual(parseFooter('x\n\n---\nAgent: sonnet/claude-code · session w87-a1\n'), footer);
+  assert.deepEqual(parseFooter('x\r\n---\r\nAgent: sonnet/claude-code · session w87-a1\r\n'), footer);
+  assert.deepEqual(parseFooter('x\n---\nAgent: sonnet/claude-code · session w87-a1\n\n<!-- groundwork:released -->\n'), footer);
+});
+
+test('parseFooter rejects a missing break, a trailing line, a bad agent and no body', () => {
+  assert.equal(parseFooter('Agent: a/b · session s1'), null);
+  assert.equal(parseFooter('x\n---\nAgent: a/b · session s1\nmore text'), null);
+  assert.equal(parseFooter('x\n---\nAgent: codex · session s1'), null);
+  assert.equal(parseFooter('x\n---\nAgent: a/b · session'), null);
+  assert.equal(parseFooter(null), null);
 });

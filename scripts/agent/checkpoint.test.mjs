@@ -7,7 +7,9 @@ import path from 'node:path';
 import { repoRoot } from '../lib/config.mjs';
 import { createFixtureClient } from '../lib/github.mjs';
 import { parseSections, parseStateSection } from '../lib/markdown.mjs';
-import { CheckpointError, parseFooter, runCheckpoint } from './checkpoint.mjs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { CheckpointError, runCheckpoint, sessionFromHookInput } from './checkpoint.mjs';
 
 const root = repoRoot(import.meta.url);
 const repo = { owner: 'o', repo: 'r' };
@@ -56,9 +58,24 @@ const options = (input, extra = {}) => ({ session: 'w87-a1', input, auto: false,
 const run = (env, opts) => runCheckpoint({ options: opts, root, client: env.client, repo, git: env.git, now: NOW });
 const valid = { fields: FIELDS, journal: 'Built the push step.\nNo blockers.' };
 
-test('parseFooter reads the last line after ---', () => {
-  assert.deepEqual(parseFooter(PR_BODY), { agent: 'sonnet/claude-code', session: 'w87-a1' });
-  assert.equal(parseFooter('no footer here'), null);
+test('AC3: --auto takes the session from the hook stdin JSON', () => {
+  assert.equal(sessionFromHookInput('{"session_id":"abc-123","hook_event_name":"Stop"}'), 'abc-123');
+  for (const text of ['', 'not json', '{}', '{"session_id":"a b"}', '[]', 'null']) assert.equal(sessionFromHookInput(text), '', text);
+});
+
+const SCRIPT = fileURLToPath(new URL('./checkpoint.mjs', import.meta.url));
+const runScript = (input, session) => {
+  const env = { ...process.env, GROUNDWORK_SESSION: session };
+  if (session === undefined) delete env.GROUNDWORK_SESSION;
+  return spawnSync(process.execPath, [SCRIPT, '--auto', '--json'], { input, env, encoding: 'utf8' });
+};
+
+test('AC3: --auto with no session in env or stdin exits 0 and writes nothing', () => {
+  for (const input of ['', '{}', 'not json']) {
+    const result = runScript(input);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { ok: true, skipped: 'no session id' });
+  }
 });
 
 test('AC1: pushes, rewrites State with the next checkpoint number, keeps the footer, posts the journal, deletes input', async () => {

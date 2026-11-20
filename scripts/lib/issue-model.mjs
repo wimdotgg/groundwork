@@ -1,5 +1,5 @@
 import { GitHubError, apiPath } from './github.mjs';
-import { criterionIds, hasMarker, parseSections } from './markdown.mjs';
+import { criterionIds, hasMarker, parseSections, removeMarker } from './markdown.mjs';
 import { normalizeLabel, sameLogin, validLabels } from './trust.mjs';
 
 /** @typedef {'Epic'|'Feature'|'Bug'|'Chore'|'Spike'} IssueType */
@@ -115,6 +115,8 @@ const hasLabel = (labels, name) => labels.some((label) => normalizeLabel(label) 
 
 const SESSION_ID = /^[A-Za-z0-9._-]+$/;
 const AGENT_ID = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const FOOTER_BREAK = '---';
+const FOOTER_LINE = /^Agent: (\S+) · session (\S+)$/;
 const CLAIM_COMMIT = /^chore\(claim\): #(\d+)( takeover)? \[session ([A-Za-z0-9._-]+)\]$/;
 
 /**
@@ -134,6 +136,20 @@ export function isValidSessionId(session) {
  */
 export function isValidAgent(agent) {
   return AGENT_ID.test(String(agent ?? ''));
+}
+
+/**
+ * The `Agent: <agent> · session <session>` line that ends a PR body, under the last `---` line. A trailing
+ * released marker is ignored. Null when there is no `---` before it or the agent is not `<model>/<harness>`.
+ * @param {string|null|undefined} body
+ * @returns {{ agent: string, session: string } | null}
+ */
+export function parseFooter(body) {
+  const lines = removeMarker(String(body ?? ''), 'released').replace(/\r\n?/g, '\n').trimEnd().split('\n');
+  if (lines.lastIndexOf(FOOTER_BREAK) === -1) return null;
+  const match = FOOTER_LINE.exec(lines.at(-1));
+  if (match === null || !isValidAgent(match[1])) return null;
+  return { agent: match[1], session: match[2] };
 }
 
 /**
