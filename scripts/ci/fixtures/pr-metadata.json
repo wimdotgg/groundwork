@@ -1165,5 +1165,37 @@
     "env": {},
     "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"},{"event":"automatic_base_change_succeeded","created_at":"2026-01-01T10:08:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wimdotgg-agent[bot]"}}],"headers":{}}},
     "expected": {"conclusion":"fail","errorsInclude":["predates the head commit"],"actions":[]}
+  },
+  {
+    "description": "end-to-end: automatic_base_change_succeeded only in issue events, after the label -> fail",
+    "eventName": "pull_request",
+    "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wimdotgg-agent[bot]"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wimdotgg-agent[bot]"}}],"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/events?per_page=100":{"status":200,"data":[{"event":"automatic_base_change_succeeded","created_at":"2026-01-01T10:08:00Z"}],"headers":{}}},
+    "expected": {"conclusion":"fail","errorsInclude":["predates the head commit"],"actions":[]}
+  },
+  {
+    "description": "end-to-end: base_ref_changed only in issue events, after the label -> fail",
+    "eventName": "pull_request",
+    "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wimdotgg-agent[bot]"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wimdotgg-agent[bot]"}}],"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/events?per_page=100":{"status":200,"data":[{"event":"base_ref_changed","created_at":"2026-01-01T10:08:00Z"}],"headers":{}}},
+    "expected": {"conclusion":"fail","errorsInclude":["predates the head commit"],"actions":[]}
+  },
+  {
+    "description": "end-to-end: automatic_base_change_succeeded only in issue events, before the label -> pass",
+    "eventName": "pull_request",
+    "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wimdotgg-agent[bot]"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wimdotgg-agent[bot]"}}],"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/events?per_page=100":{"status":200,"data":[{"event":"automatic_base_change_succeeded","created_at":"2026-01-01T10:03:00Z"}],"headers":{}}},
+    "expected": {"conclusion":"pass","errorsInclude":[],"actions":[]}
+  },
+  {
+    "description": "end-to-end: automatic_base_change_succeeded on page 2 of issue events, after the label -> fail",
+    "eventName": "pull_request",
+    "payload": {"pull_request":{"number":7,"draft":false,"user":{"login":"wimdotgg-agent[bot]"},"head":{"ref":"feature/x","sha":"a1b2c3","repo":{"full_name":"wimdotgg/groundwork"}}}},
+    "env": {},
+    "routes": {"GET /repos/wimdotgg/groundwork/pulls/7":{"status":200,"data":{"draft":false,"head":{"sha":"a1b2c3"}},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7":{"status":200,"data":{"title":"chore: tweak","body":"No issue here","labels":[{"name":"no-issue"}]},"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/timeline?per_page=100":{"status":200,"data":[{"event":"labeled","label":{"name":"no-issue"},"actor":{"login":"wianvdm"},"created_at":"2026-01-01T10:05:00Z"}],"headers":{}},"GET /repos/wimdotgg/groundwork/activity?per_page=100&ref=refs%2Fheads%2Ffeature%2Fx":{"status":200,"data":[{"id":1,"before":"0000000","after":"a1b2c3","ref":"refs/heads/feature/x","timestamp":"2026-01-01T10:00:00Z","activity_type":"push","actor":{"login":"wimdotgg-agent[bot]"}}],"headers":{}},"GET /repos/wimdotgg/groundwork/issues/7/events?per_page=100":{"status":200,"data":[{"event":"labeled","created_at":"2026-01-01T10:01:00Z"}],"headers":{"link":"<https://api.github.com/repos/wimdotgg/groundwork/issues/7/events?page=2&per_page=100>; rel=\"next\""}},"GET /repos/wimdotgg/groundwork/issues/7/events?page=2&per_page=100":{"status":200,"data":[{"event":"automatic_base_change_succeeded","created_at":"2026-01-01T10:08:00Z"}],"headers":{}}},
+    "expected": {"conclusion":"fail","errorsInclude":["predates the head commit"],"actions":[]}
   }
 ]
