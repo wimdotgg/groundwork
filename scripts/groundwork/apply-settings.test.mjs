@@ -141,7 +141,6 @@ test('control repo: full apply in spec order with rulesets last and controlRepos
   const base = repoPath(CONTROL);
   const expected = [
     `PATCH ${base}`,
-    `PUT /orgs/wimdotgg/teams/agents/repos/wimdotgg/${CONTROL}`,
     `PUT ${base}/private-vulnerability-reporting`,
     `PUT ${base}/vulnerability-alerts`,
     `PUT ${base}/automated-security-fixes`,
@@ -184,7 +183,6 @@ test('project repo: no controlRepository fields and project environments only', 
   const base = repoPath(PROJECT);
   const expected = [
     `PATCH ${base}`,
-    `PUT /orgs/wimdotgg/teams/agents/repos/wimdotgg/${PROJECT}`,
     `PUT ${base}/private-vulnerability-reporting`,
     `PUT ${base}/vulnerability-alerts`,
     `PUT ${base}/automated-security-fixes`,
@@ -372,14 +370,14 @@ test('deployment refs: missing refs are added, then extras deleted by id', async
 test('the first failed call stops the run and the error names the step', async () => {
   const root = await makeShippedRoot(SMALL_LABELS);
   const base = repoPath(CONTROL);
-  const failing = `PUT /orgs/wimdotgg/teams/agents/repos/wimdotgg/${CONTROL}`;
+  const failing = `PUT ${base}/private-vulnerability-reporting`;
   const writes = { ...okWrites([`PATCH ${base}`]), [failing]: { status: 403, data: { message: 'Forbidden' } } };
   const outcome = await runOp({ root, reads: readRoutes(CONTROL), writes });
   assert.ok(outcome.error instanceof GitHubError);
   assert.equal(outcome.error.status, 403);
-  assert.match(outcome.error.message, /^step 2\/9 teamAccess: PUT .* 403 Forbidden$/);
+  assert.match(outcome.error.message, /^step 3\/9 security: PUT .* 403 Forbidden$/);
   assert.deepEqual(outcome.events.map((event) => event.line), [`PATCH ${base}`, failing]);
-  assert.equal(outcome.logs.at(-1), 'step 2/9 teamAccess');
+  assert.equal(outcome.logs.at(-1), 'step 3/9 security');
 });
 
 test('a missing release value throws before any step runs', async () => {
@@ -468,7 +466,7 @@ test('no log line or summary holds a secret value', async () => {
   const root = await makeShippedRoot(SMALL_LABELS);
   const base = repoPath(CONTROL);
   const writes = okWrites([
-    `PATCH ${base}`, `PUT /orgs/wimdotgg/teams/agents/repos/wimdotgg/${CONTROL}`,
+    `PATCH ${base}`,
     `PUT ${base}/private-vulnerability-reporting`, `PUT ${base}/vulnerability-alerts`, `PUT ${base}/automated-security-fixes`,
     `PUT ${base}/actions/permissions`, `PUT ${base}/actions/permissions/workflow`, `PUT ${base}/actions/permissions/fork-pr-contributor-approval`,
     `POST ${base}/actions/variables`,

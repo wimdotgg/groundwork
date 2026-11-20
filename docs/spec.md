@@ -80,7 +80,7 @@ One exception, for the generate call (the target repo does not exist yet, so the
 
 - Two-factor authentication required.
 - Base repository permission: Read. Members cannot create repositories (bootstrap creates them).
-- Team `agents` holds no agent identity now (the agent App needs no team grant). Its Write grant on Write on `groundwork` once (14.1); bootstrap grants it Write on each project repo.
+- Team `agents` is empty and holds no repository grant: the agent is an App and needs none. `settings.json` `teamAccess` is `[]`, so `apply-settings` and `check` touch no team. Deleting the team is yours, in the browser.
 - Issue types are not set by hand: `admin-run op=create-issue-types` creates Epic, Feature, Bug, Chore, Spike and deletes the default Task.
 - Actions: require actions pinned to a full-length commit SHA (the policy does not cover reusable workflows, which stay referenced by tag); "Require approval for all external contributors" for fork PR workflows; "Allow GitHub Actions to create and approve pull requests" off. `apply-settings` also sets all three per repository (10, V12).
 
@@ -658,10 +658,10 @@ Server-side backing for D17: nobody, including you, can force-push or otherwise 
 `settings.json` has one top-level key per endpoint group; `apply-settings` maps each onto these endpoints (all need repository Administration write unless noted). Body values are stored in the API's own field names so they are sent as written.
 
 - `repository` → `PATCH /repos/{o}/{r}`: visibility public; `has_issues` on; `has_projects`, `has_wiki`, `has_discussions` off; `allow_squash_merge` on, `allow_merge_commit` and `allow_rebase_merge` off; `squash_merge_commit_title: PR_TITLE`, `squash_merge_commit_message: BLANK`; `allow_auto_merge`, `delete_branch_on_merge`, `allow_update_branch` on; `security_and_analysis` with `secret_scanning` and `secret_scanning_push_protection` `enabled`. `controlRepository` holds `is_template: true`, sent on `groundwork` only.
-- `teamAccess` → team `agents`: `push` (Write) through the team-repo endpoint (2.4).
+- `teamAccess` → one `{ team, permission }` entry per team granted access, applied through the team-repo endpoint (2.4). It is `[]` now (2.5); an empty or absent key loads and compares cleanly, and `check` ignores live teams not listed.
 - `security` → `PUT /private-vulnerability-reporting`, `PUT /vulnerability-alerts`, `PUT /automated-security-fixes`; `PATCH /code-scanning/default-setup` with `state: configured` in pass 2 only: `apply-settings` never sends it. Before pass 2 `check` reports a live state other than `configured` as `deferred`; after pass 2 (live `main` ruleset has the `code_scanning` rule) it is a mismatch, fixed by re-running `bootstrap-pass2`.
 - `actions` → `PUT /actions/permissions` (`enabled: true`, `allowed_actions: all`, `sha_pinning_required: true`); `PUT /actions/permissions/workflow` (`default_workflow_permissions: read`, `can_approve_pull_request_reviews: false`); `PUT /actions/permissions/fork-pr-contributor-approval` (`approval_policy: all_external_contributors`). All three verified (V12).
-- `variables` → repository variables (Variables write). Each carries `assertWhen`, a signal read from the live repo (`settings.readSignals`, 13.1); `apply-settings` and `check` assert the variable only while its signal holds, otherwise `apply-settings` leaves it alone and `check` reports it `deferred`. `kitInstalled`: the repo contains `.github/groundwork/kit-version.txt` on its default branch, or is the control repo; it gates `GROUNDWORK_READY`, first set at the end of bootstrap pass 1 (14.2) and on `groundwork` by its first `apply-settings` (14.1). `deployReady`: `config.json` `deploy` is not `none`, and CodeQL default setup is `configured` or pass 2 has run (live `main` ruleset has the `code_scanning` rule); it gates `DEPLOY_ENABLED`, first set by `bootstrap-pass2`. After pass 2, `DEPLOY_ENABLED` unset while `deploy` is not `none` is therefore a mismatch, never `deferred`.
+- `variables` → repository variables (Variables write). Each carries `assertWhen`, a signal read from the live repo (`settings.readSignals`, 13.1); `apply-settings` and `check` assert the variable only while its signal holds, otherwise `apply-settings` leaves it alone and `check` reports it `deferred`. `kitInstalled`: the repo contains `.github/groundwork/kit-version.txt` on its default branch, or is the control repo; it gates `GROUNDWORK_READY`, first set at the end of bootstrap pass 1 (14.2) and on `groundwork` by its first `apply-settings` (14.1). `deployReady`: `config.json` `deploy` is not `none` (`groundwork` declares `"deploy": "none"`, so `DEPLOY_ENABLED` is `deferred` here and the `settings-plan` summary shows no expectation for it), and CodeQL default setup is `configured` or pass 2 has run (live `main` ruleset has the `code_scanning` rule); it gates `DEPLOY_ENABLED`, first set by `bootstrap-pass2`. After pass 2, `DEPLOY_ENABLED` unset while `deploy` is not `none` is therefore a mismatch, never `deferred`.
 - `environments` → 10.1.
 
 `apply-settings` is idempotent, applies rulesets last, and stops at the first failed call with the list of what was and was not applied; re-running is the recovery path.
@@ -1179,6 +1179,10 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ### 2026-11-20: Phase 3a contract (#82)
 
 13, 13.1: agent script flags, exit codes, `--json` shapes and the session id rule fixed; comment formats and markers (`takeover`, `checkpoint`, `handover`) added; `fillTemplate`, `templateSection`, `claimCommitMessage`, `parseClaimCommit` and `isValidSessionId` added. `claimCommitAt` now also accepts a takeover commit, and session ids are limited to `[A-Za-z0-9._-]+`. Review round 1: one placeholder key per meaning across the comment templates, `state-section.md` and `pull_request_template.md` (section 7 shows the same template); initial PR body, handover inputs, footer checks, exit 1 for `tasksPerWorker`, author-and-marker matching, `--auto` push and `isValidAgent` added.
+
+### 2026-11-20: no deploy and no team grant (#80)
+
+2.5, 10: `groundwork` declares `"deploy": "none"` and `settings.json` `teamAccess` is `[]`; team `agents` is empty. Earlier entries keep the team-grant wording as history.
 
 ### 2026-11-20: agent App identity
 
