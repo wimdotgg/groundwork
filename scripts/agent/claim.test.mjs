@@ -9,7 +9,7 @@ const REPO = { owner: 'o', repo: 'r' };
 const SESSION = 'w85-a1';
 const AGENT = 'sonnet/claude-code';
 const AGENT_LOGIN = 'wimdotgg-agent[bot]';
-const CONFIG = { accounts: { agent: AGENT_LOGIN }, limits: { tasksPerWorker: 1 } };
+const CONFIG = { accounts: { agent: AGENT_LOGIN }, limits: { tasksPerWorker: 1, draftLeaseMinutes: 240 } };
 const NOW = new Date('2026-11-20T10:05:30Z');
 const templates = {
   claimComment: await readFile(new URL('../../.github/groundwork/templates/claim-comment.md', import.meta.url), 'utf8'),
@@ -21,7 +21,7 @@ const POINTER = comment('Claimed on `issue/7` by session w85-a1.\n<!-- groundwor
 const OTHER_POINTER = comment('Claimed on `issue/7` by session other.\n<!-- groundwork:claim -->');
 const PR_CLAIM = comment('Claim: #7, session w85-a1.\n<!-- groundwork:claim -->');
 const pullOf = (fields) => ({
-  number: 12, draft: true, head: { ref: 'issue/7', repo: { full_name: 'o/r' } }, user: { login: AGENT_LOGIN }, body: `body\n\n${FOOTER}\n`, ...fields,
+  number: 12, draft: true, created_at: '2026-11-20T09:00:00Z', head: { ref: 'issue/7', repo: { full_name: 'o/r' } }, user: { login: AGENT_LOGIN }, body: `body\n\n${FOOTER}\n`, ...fields,
 });
 const foreignFooter = '---\nAgent: a/b · session other';
 
@@ -189,6 +189,7 @@ test('another session\'s footer over a moved head is held (exit 3)', async () =>
     ...creationRoutes,
     [REF]: ok({ object: { sha: 'later-sha' } }),
     [ISSUE_PULLS]: ok([pullOf({ body: `body\n\n${foreignFooter}\n` })]),
+    [PR_COMMENTS]: ok([]),
   });
   assert.equal((await run(client)).exitCode, EXIT_HELD);
   assert.deepEqual(writeKeys(calls), []);
@@ -221,13 +222,6 @@ test('an issue title with a closing reference becomes a fixed PR summary', async
   const { client, calls } = recordingClient({ ...creationRoutes, 'GET /repos/o/r/issues/7': ok(issue) });
   await run(client);
   assert.equal(bodyOf(calls, POST_PULL).title, 'fix: work on #7');
-});
-
-test('an open released PR with this session\'s footer is not ours (exit 3)', async () => {
-  const released = pullOf({ body: `body\n<!-- groundwork:released -->\n\n${FOOTER}\n` });
-  const { client, calls } = recordingClient({ ...creationRoutes, [REF]: ok({ object: { sha: 'later-sha' } }), [ISSUE_PULLS]: ok([released]) });
-  assert.equal((await run(client)).exitCode, EXIT_HELD);
-  assert.deepEqual(writeKeys(calls), []);
 });
 
 test('an existing ref claimed by another session is held (exit 3) with no write', async () => {
@@ -271,4 +265,116 @@ test('the limit comes from config.limits.tasksPerWorker', async () => {
   const roomy = { ...CONFIG, limits: { tasksPerWorker: 2 } };
   const outcome = await runClaim({ client, repo: REPO, config: roomy, number: 7, session: SESSION, agent: AGENT, templates, now: NOW });
   assert.equal(outcome.exitCode, EXIT_CLAIMED);
+});
+
+const PATCH_REF = 'PATCH /repos/o/r/git/refs/heads/issue/7';
+const PATCH_PULL = 'PATCH /repos/o/r/pulls/12';
+const OLD_FOOTER = '---\nAgent: a/b · session old-1';
+const STALE_PULL = pullOf({ created_at: '2026-11-20T05:00:00Z', body: `body\n\n${OLD_FOOTER}\n` });
+const mutationKeys = (calls) => calls.filter((call) => !call.key.startsWith('GET ')).map((call) => call.key);
+
+const takeoverRoutes = {
+  [OPEN_PULLS]: ok([]),
+  'GET /repos/o/r/issues/7': ok({ number: 7, title: 'Build the thing', type: { name: 'Feature' } }),
+  [REF]: ok({ object: { sha: 'head-sha' } }),
+  [ISSUE_PULLS]: ok([STALE_PULL]),
+  [PR_COMMENTS]: ok([{ user: { login: AGENT_LOGIN }, created_at: '2026-11-20T05:10:00Z', body: 'Claim: #7, session old-1.' }]),
+  'GET /repos/o/r/git/commits/head-sha': ok({ tree: { sha: 'head-tree' } }),
+  [POST_COMMIT]: ok({ sha: 'takeover-sha' }, 201),
+  [PATCH_REF]: ok({}, 200),
+  [PATCH_PULL]: ok({}, 200),
+  [POST_PR_COMMENT]: ok({}, 201),
+};
+
+test('AC1: an expired draft is taken over: commit on the observed head, then the ref update, body and comment', async () => {
+  const { client, calls } = recordingClient(takeoverRoutes);
+  assert.deepEqual(await run(client), { exitCode: EXIT_CLAIMED, pr: 12, mode: 'takeover' });
+  assert.deepEqual(mutationKeys(calls), [POST_COMMIT, PATCH_REF, PATCH_PULL, POST_PR_COMMENT]);
+  assert.deepEqual(bodyOf(calls, POST_COMMIT), { message: 'chore(claim): #7 takeover [session w85-a1]', tree: 'head-tree', parents: ['head-sha'] });
+  assert.deepEqual(bodyOf(calls, PATCH_REF), { sha: 'takeover-sha', force: false });
+});
+
+test('AC1: a draft with the released marker is taken over although its lease is fresh', async () => {
+  const released = pullOf({ body: `body\n<!-- groundwork:released -->\n\n${OLD_FOOTER}\n` });
+  const { client } = recordingClient({ ...takeoverRoutes, [ISSUE_PULLS]: ok([released]), [PR_COMMENTS]: ok([]) });
+  assert.equal((await run(client)).mode, 'takeover');
+});
+
+test('AC1: a released PR carrying this session\'s own footer is still taken over', async () => {
+  const released = pullOf({ body: `body\n<!-- groundwork:released -->\n\n${FOOTER}\n` });
+  const { client } = recordingClient({ ...takeoverRoutes, [ISSUE_PULLS]: ok([released]), [PR_COMMENTS]: ok([]) });
+  assert.equal((await run(client)).mode, 'takeover');
+});
+
+test('AC1: a non-candidate exits 3 with no write', async () => {
+  const freshAgentComment = [{ user: { login: AGENT_LOGIN }, created_at: '2026-11-20T09:30:00Z', body: 'Checkpoint 1' }];
+  const outsiderComment = [{ user: { login: 'mallory' }, created_at: '2026-11-20T10:00:00Z', body: 'bump' }];
+  const releasedBody = `x\n<!-- groundwork:released -->\n\n${OLD_FOOTER}\n`;
+  const cases = {
+    'ready PR': { pulls: [{ ...STALE_PULL, draft: false }] },
+    'needs-decision label': { pulls: [{ ...STALE_PULL, labels: [{ name: 'needs-decision' }] }] },
+    'released but needs-decision': { pulls: [{ ...STALE_PULL, body: releasedBody, labels: [{ name: 'needs-decision' }] }] },
+    'fresh lease from a recent agent comment': { pulls: [STALE_PULL], comments: freshAgentComment },
+    'no PR on the branch': { pulls: [] },
+  };
+  for (const [name, { pulls, comments }] of Object.entries(cases)) {
+    const { client, calls } = recordingClient({ ...takeoverRoutes, [ISSUE_PULLS]: ok(pulls), ...(comments && { [PR_COMMENTS]: ok(comments) }) });
+    assert.equal((await run(client)).exitCode, EXIT_HELD, name);
+    assert.deepEqual(mutationKeys(calls), [], name);
+  }
+  const outsider = recordingClient({ ...takeoverRoutes, [PR_COMMENTS]: ok(outsiderComment) });
+  assert.equal((await run(outsider.client)).mode, 'takeover', 'a comment by another author does not renew the lease');
+});
+
+test('AC2: a rejected ref update (422, 403 or a non-200 success) exits 3, posts nothing and changes no PR', async () => {
+  for (const response of [ok({ message: 'Update is not a fast forward' }, 422), ok({ message: 'forbidden' }, 403), ok({}, 201)]) {
+    const { client, calls } = recordingClient({ ...takeoverRoutes, [PATCH_REF]: response });
+    assert.equal((await run(client)).exitCode, EXIT_HELD, String(response.status));
+    assert.deepEqual(mutationKeys(calls), [POST_COMMIT, PATCH_REF], String(response.status));
+  }
+});
+
+test('AC2: a transport failure on the ref update propagates (exit 1) with nothing posted', async () => {
+  const { client, calls } = recordingClient(takeoverRoutes);
+  const failing = {
+    ...client,
+    request: (method, path, options) => (method === 'PATCH' && path.includes('/git/refs/')
+      ? Promise.reject(new GitHubError('network down'))
+      : client.request(method, path, options)),
+  };
+  await assert.rejects(run(failing), GitHubError);
+  assert.deepEqual(mutationKeys(calls), [POST_COMMIT]);
+});
+
+test('AC3: the winner drops the released marker, owns the footer as the last line and posts the takeover comment', async () => {
+  const released = pullOf({ body: `Closes #7\n\n## State\nDone: x\n<!-- groundwork:released -->\n\n${OLD_FOOTER}\n` });
+  const { client, calls } = recordingClient({ ...takeoverRoutes, [ISSUE_PULLS]: ok([released]), [PR_COMMENTS]: ok([]) });
+  await run(client);
+  const { body } = bodyOf(calls, PATCH_PULL);
+  assert.equal(body.includes('groundwork:released'), false);
+  assert.equal(body, `Closes #7\n\n## State\nDone: x\n\n---\nAgent: ${AGENT} · session ${SESSION}\n`);
+  assert.equal(bodyOf(calls, POST_PR_COMMENT).body, 'Takeover: #7, session w85-a1, previous session old-1.\n<!-- groundwork:takeover -->');
+});
+
+test('AC3: a body without a footer gets one appended, and an unreadable previous session reads as unknown', async () => {
+  const bare = pullOf({ created_at: '2026-11-20T05:00:00Z', body: 'Closes #7' });
+  const { client, calls } = recordingClient({ ...takeoverRoutes, [ISSUE_PULLS]: ok([bare]), [PR_COMMENTS]: ok([]) });
+  await run(client);
+  assert.equal(bodyOf(calls, PATCH_PULL).body, `Closes #7\n\n${FOOTER}\n`);
+  assert.match(bodyOf(calls, POST_PR_COMMENT).body, /previous session unknown\./);
+});
+
+test('AC4: no request in the takeover path sends force true, and the ref update sends force false', async () => {
+  const { client, calls } = recordingClient(takeoverRoutes);
+  await run(client);
+  for (const call of calls) assert.equal(JSON.stringify(call.body ?? {}).includes('"force":true'), false, call.key);
+  assert.equal(calls.filter((call) => call.body && 'force' in call.body).length, 1);
+  assert.equal(bodyOf(calls, PATCH_REF).force, false);
+});
+
+test('a takeover comment template without its section refuses before the lock is taken', async () => {
+  const broken = { ...templates, claimComment: templates.claimComment.replace('## PR takeover', '## Renamed') };
+  const { client, calls } = recordingClient(takeoverRoutes);
+  await assert.rejects(runClaim({ client, repo: REPO, config: CONFIG, number: 7, session: SESSION, agent: AGENT, templates: broken, now: NOW }), GitHubError);
+  assert.deepEqual(mutationKeys(calls), []);
 });
