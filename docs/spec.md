@@ -760,11 +760,11 @@ Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent mac
 | Script | Inputs | Output and effects |
 |---|---|---|
 | `agent/token.mjs` | `exec -- <command>` or `credential <get\|store\|erase>` | Mints an installation token for `apps.agent` (2.2), runs the command with it as `GH_TOKEN` plus the bot commit identity and a git credential helper; `credential` is that helper. Every agent write goes through it. |
-| `agent/next.mjs` | `--json` | Next eligible task or takeover candidate, or "nothing ready" with reasons per skipped candidate |
-| `agent/claim.mjs` | `N`, `--session <id>` | Claim per 6.3, or takeover per 6.4 when `issue/N` exists and is a takeover candidate; exit code 0 claimed, 3 held by someone else, 1 error |
-| `agent/checkpoint.mjs` | `--auto` (hook mode: no-op unless on `issue/N` with a draft PR) | Push, rewrite `## State`, journal comment |
-| `agent/resume.mjs` | `N` | Bounded briefing (6.5) |
-| `agent/release.mjs` | `N`, `--decision` or `--merged` | Releases claim or posts handover |
+| `agent/next.mjs` | `--json` | Next eligible task or takeover candidate, or "nothing ready" with reasons per skipped candidate. Exit 0 whenever it answers, including "nothing ready"; 1 error |
+| `agent/claim.mjs` | `N`, `--session <id>`, `--agent <model>/<harness>`, `--json` | Claim per 6.3, or takeover per 6.4 when `issue/N` exists and is a takeover candidate. Exit 0 claimed (a rerun by the same session completes missing steps), 3 held by someone else or not claimable, 1 error |
+| `agent/checkpoint.mjs` | `--session <id>`, `--input <path>`, `--auto` (hook mode: no-op unless on `issue/N` with a draft PR and an input file), `--json` | Push, rewrite `## State`, journal comment. Exit 0 done or `--auto` no-op, 1 refused or error |
+| `agent/resume.mjs` | `N`, `--session <id>` (optional), `--json` | Bounded briefing (6.5), no writes. Exit 0, 3 the PR footer names another session, 1 error |
+| `agent/release.mjs` | `N`, `--decision` or `--merged`, `--session <id>`, `--json` | Releases claim or posts handover; a rerun changes nothing. Exit 0, 1 refused (`--merged` on an unmerged PR, or neither or both modes) or error |
 | `agent/plan-lint.mjs` | epic number, `--close` | Lint report; exit non-zero on failure |
 | `agent/review-queue.mjs` | | PRs ready for review without a review from another session |
 | `human/inbox.mjs` | | Proposed epics, `needs-decision`, protected-path PRs awaiting you, release PR, pending `production` and `admin` approvals, alert issues, orphaned claims. Run by an agent with the PAT; it prints links you open in the browser. |
@@ -779,6 +779,28 @@ Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent mac
 | `groundwork/apply-settings.mjs`, `groundwork/create-issue-types.mjs`, `groundwork/admin-run.mjs` | | Admin ops (12.1); `admin-run.mjs` is the dispatcher |
 
 Push probe (the agent identity is the one the rule must stop, so it runs on the agent machine through `token.mjs exec`, not in `admin-run`): create a dangling empty commit on top of `main` with `POST /git/commits`, then `PATCH /git/refs/heads/main` to it without `force`. Expected: rejected with a rule violation (422 or 409). An accepted update means protection is broken; `request.mjs` reports failure and leaves the empty commit `chore(check): probe` on `main` as evidence. Tag rules are checked by ruleset comparison only: a probe tag could never be deleted (9.3).
+
+Agent script contract (the five scripts above; 3a lanes build against this text):
+
+- Session id: `--session <id>`, else env `GROUNDWORK_SESSION`, else exit 1 with `session id required`. `claim`, `checkpoint` and `release` need one; `resume` checks the PR footer only when one is given; `next` takes none. An id matches `[A-Za-z0-9._-]+` (`isValidSessionId`), because it sits in commit subjects, the State header and the PR footer. `claim` also needs the agent, `--agent <model>/<harness>` else env `GROUNDWORK_AGENT`, else exit 1; `checkpoint` reads it from the PR footer.
+- Exit codes: 0 success, 1 error or refusal, 3 held or not claimable (`claim`, `resume` only). Usage errors exit 1. A failure writes one line to stderr.
+- `--json`: one JSON object on stdout, always with `ok`. On a non-zero exit it is `{ "ok": false, "reason": "<one line>" }`, plus the fields the row names. Without `--json`, stdout is for humans and has no format guarantee.
+- `next` success: `{ "ok": true, "next": { "kind": "takeover"|"fresh", "number": N, "pr": number|null, "epic": number|null, "title": "...", "reason": "..." }|null, "skipped": [{ "number": N, "code": "...", "reason": "..." }] }`. `next` is null for "nothing ready". `code` is a 4.4 status (`proposed`, `blocked`, `claimed`, `in-review`, `queued`, `needs-decision`, `orphaned`, `done`) or one of `needs-format`, `size` (missing or `size:L`), `untrusted-author`, `epic`, `hotspot`.
+- `claim` success: `{ "ok": true, "number": N, "mode": "claim"|"takeover", "branch": "issue/N", "pr": number }`; exit 3 adds `number`.
+- `checkpoint`: `--input <path>` (default `.artifacts/checkpoint.json`, git-ignored) holds `{ "fields": { "Done", "In progress", "Next", "Proven", "Unproven", "Rejected", "Gotchas", "Open" }, "journal": "<text>" }`, all eight fields non-empty. The script writes the header itself: next checkpoint number (`claim` writes the initial State as checkpoint 0), UTC `YYYY-MM-DD HH:MM`, the agent from the PR footer, the session. It refuses before any write when the State or journal still has a placeholder or exceeds `limits.stateLines` or `limits.journalLines`, and deletes the input file after the journal posts, so a hook runs `--auto` without repeating a journal. `--auto` with no input file is a no-op. Success: `{ "ok": true, "number": N, "pr": number, "checkpoint": number }`; a no-op: `{ "ok": true, "skipped": "<reason>" }`.
+- `resume` success: `{ "ok": true, "number": N, "pr": number|null, "session": "<footer session>"|null, "truncated": boolean, "briefing": "<text>" }`; exit 3 carries `session`.
+- `release` success: `{ "ok": true, "number": N, "mode": "decision"|"merged", "changed": boolean }`; `changed` is false on a rerun.
+- PR footer: `Agent: <model>/<harness> · session <id>`, the last line of the PR body after `---`. A takeover rewrites it to the new agent and session.
+
+Comment formats (`.github/groundwork/templates/`, filled with `fillTemplate`; placeholder keys are the text between the angle brackets). Every comment ends with its marker so a rerun can find it (`hasMarker`).
+
+| File | Comment | Posted by | Marker |
+|---|---|---|---|
+| `claim-comment.md` `## Issue pointer` | ``Claimed on `issue/<n>` by session <session id>.`` on the issue | `claim` | `claim` |
+| `claim-comment.md` `## PR claim` | `Claim: #<n>, session <session id>.` on the PR | `claim` | `claim` |
+| `claim-comment.md` `## PR takeover` | `Takeover: #<n>, session <session id>, previous session <previous session id>.` on the PR | `claim` | `takeover` |
+| `checkpoint-comment.md` | Header line (`Checkpoint <n> · <date time> · <agent> · session <session id>`) then `<journal>`, on the PR | `checkpoint` | `checkpoint` |
+| `handover-comment.md` | `Handover: #<n> merged in PR #<pr number>.` with Done, Follow-ups, Gotchas and Session lines, on the issue | `release --merged` | `handover` |
 
 Configuration lives in `.github/groundwork/config.json` (org, control repo, accounts, App slugs, trusted authors, label actors, deploy mode, limits from section 16, size-exclusion and generated-file globs, test-integrity patterns) and `hotspots.json`; scripts read both through `scripts/lib/config.mjs`.
 
@@ -880,8 +902,10 @@ Behaviour shared by all transports: `request` rejects a path that does not start
 | `parseTable(content) → Array<Record<string, string>>` | First GFM table in the content; header cells are the keys, cells trimmed. |
 | `parseStateSection(section) → { header: { checkpoint, at, agent, session }, fields: Record<string, string> }` | 6.5 format; missing header parts are `null`. `section` is the `{ line, content }` entry from `parseSections` or a full string that starts with the `## State` heading. |
 | `templatePlaceholders(templateText) → string[]` | The `<...>` tokens of a template (`state-section.md`); a body still containing one is unfilled. |
+| `fillTemplate(template, values) → { text, unfilled: string[] }` | Replaces every `<name>` placeholder outside comments and fences with `values[name]` (the key is the text between the brackets), in one pass, so a value is never filled again. A placeholder without a value stays in `text` and is listed once in `unfilled` (brackets included); callers refuse to post when `unfilled` is not empty. |
+| `templateSection(templateText, name) → string \| null` | Raw text of level-2 section `name` in a template file that holds several comments (`claim-comment.md`), markers kept; `null` when absent. |
 | `replaceSection(body, name, content) → string` | Replaces the named section's content, or appends the section. A section ends at the next heading or at a line that is exactly `---` (the PR footer survives); the body always ends with one newline. |
-| `hasMarker(body, name)`, `addMarker(body, name)`, `removeMarker(body, name)` | Marker `<!-- groundwork:<name> -->` (`released`, `claim`, `issue-format`, `alert:<workflow path>`). |
+| `hasMarker(body, name)`, `addMarker(body, name)`, `removeMarker(body, name)` | Marker `<!-- groundwork:<name> -->` (`released`, `claim`, `takeover`, `checkpoint`, `handover`, `issue-format`, `alert:<workflow path>`). |
 | `formFieldLabels(yamlText) → string[]` | `label:` values of an issue form by regex (4.3); the form/twin unit test compares these with `parseSections` of the twin. |
 
 #### `lib/issue-model.mjs`
@@ -897,7 +921,7 @@ Behaviour shared by all transports: `request` rejects a path that does not start
  *   blockedBy: Array<{ number: number, state: 'open'|'closed' }>,
  *   branch: { exists: boolean, sha: string|null }, claimCommentAt: string|null, claimCommitAt: string|null, pr: PullFacts|null }} IssueFacts
  *   claimCommentAt: server created_at of the newest issue comment by the agent account carrying marker `claim` (6.3)
- *   claimCommitAt: committer date of the ref head when its message matches the claim commit format `chore(claim): #N [session <id>]`, else null */
+ *   claimCommitAt: committer date of the ref head when `parseClaimCommit` accepts its message for this issue (claim or takeover commit), else null */
 ```
 
 | Export | Contract |
@@ -907,6 +931,9 @@ Behaviour shared by all transports: `request` rejects a path that does not start
 | `parseConventionalTitle(title) → { type, scope, breaking, summary } \| null` | `null` when the title is not a Conventional Commit with a section 7 type. |
 | `validateIssueBody({ type, body }) → { ok: boolean, errors: string[] }` | Type present and known; each required heading exactly once; criterion IDs unique; Epic has at least one `E` ID; Feature, Bug, Chore have at least one `AC` ID; `## Serves` lists only `E<n>` IDs. |
 | `loadIssueFacts(client, { owner, repo, number }, { config }) → Promise<IssueFacts>` | Reads the issue, its timeline (label validity), its parent chain (`GET .../issues/{n}/parent`, 404 ends the chain; a parent in another repository, or a 404 while the child has `parent_issue_url`, throws `GitHubError`), `blocked_by` dependencies, `git/ref/heads/issue/{n}` (404 = no branch), the issue PR (head `issue/{n}`, filtered on `head.ref`; the open one when it exists, else the newest by `created_at`), its merge-queue state (GraphQL `isInMergeQueue`), the newest PR comment by the agent account, the newest issue comment by the agent account with marker `claim`, and the ref head commit (`git/commits/{sha}`) for `claimCommitAt`. Throws `GitHubError`. |
+| `claimCommitMessage({ number, session, kind? }) → string` | `chore(claim): #N [session <id>]`; `kind: 'takeover'` gives `chore(claim): #N takeover [session <id>]`. The only builder; `claim.mjs` uses it for the commit it creates. `session` must pass `isValidSessionId`. |
+| `parseClaimCommit(message) → { number, session, kind: 'claim'\|'takeover' } \| null` | Inverse of the builder, reading the first line only. The only parser; `loadIssueFacts` uses it for `claimCommitAt`. |
+| `isValidSessionId(session) → boolean` | `[A-Za-z0-9._-]+`. |
 | `isHotfixLane(facts, config) → boolean` | Bug, no parent, valid `priority:p0`. |
 | `leaseState(pr, { config, now, claimCommentAt, claimCommitAt }) → { expired: boolean, released: boolean, since: string \| null }` | Draft PRs only (ready PRs never expire, 6.4); `since` is `lastAgentCommentAt ?? createdAt`, expired after `limits.draftLeaseMinutes`. `pr: null` (ref without a PR): `since` is `claimCommentAt ?? claimCommitAt`, expired after `limits.claimWithoutPrMinutes`; both `null` (ref head is not a claim commit) → `{ expired: true, released: false, since: null }`. |
 | `deriveStatus(facts, { config, now }) → { status: Status, reason: string }` | First matching row of 4.4; pure. |
@@ -1123,6 +1150,10 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-20: Phase 3a contract (#82)
+
+13, 13.1: agent script flags, exit codes, `--json` shapes and the session id rule fixed; comment formats and markers (`takeover`, `checkpoint`, `handover`) added; `fillTemplate`, `templateSection`, `claimCommitMessage`, `parseClaimCommit` and `isValidSessionId` added. `claimCommitAt` now also accepts a takeover commit, and session ids are limited to `[A-Za-z0-9._-]+`.
 
 ### 2026-11-20: agent App identity
 

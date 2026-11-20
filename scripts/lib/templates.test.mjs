@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { formFieldLabels, parseSections, parseStateSection, templatePlaceholders } from './markdown.mjs';
+import {
+  fillTemplate, formFieldLabels, hasMarker, parseSections, parseStateSection, templatePlaceholders, templateSection,
+} from './markdown.mjs';
 import { ISSUE_TYPES, REQUIRED_HEADINGS, validateIssueBody } from './issue-model.mjs';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -32,4 +34,37 @@ test('state-section.md has placeholders and the eight State fields', () => {
   const state = readRepoFile('.github/groundwork/templates/state-section.md');
   assert.ok(templatePlaceholders(state).length > 0);
   assert.deepEqual(Object.keys(parseStateSection(state).fields), STATE_FIELDS);
+});
+
+const readTemplate = (name) => readRepoFile(`.github/groundwork/templates/${name}.md`);
+const FILL_VALUES = {
+  n: 82, 'session id': 'w82-a1', 'previous session id': 'w82-a0', 'date time': '2026-11-20 10:00',
+  agent: 'sonnet/claude-code', journal: 'line', 'pr number': 91, 'ACs delivered, with evidence': 'AC1',
+  'issues opened, or none': 'none', 'traps for the next worker, or none': 'none',
+};
+
+test('claim-comment.md holds the pointer, PR claim and takeover comments with their markers', () => {
+  const file = readTemplate('claim-comment');
+  const expected = { 'Issue pointer': 'claim', 'PR claim': 'claim', 'PR takeover': 'takeover' };
+  for (const [name, marker] of Object.entries(expected)) {
+    const section = templateSection(file, name);
+    assert.ok(section, name);
+    assert.equal(hasMarker(section, marker), true, name);
+    assert.deepEqual(fillTemplate(section, FILL_VALUES).unfilled, [], name);
+  }
+  assert.deepEqual(parseSections(file).sections.map((section) => section.name), Object.keys(expected));
+});
+
+test('checkpoint and handover templates fill completely and carry their marker', () => {
+  for (const [name, marker] of [['checkpoint-comment', 'checkpoint'], ['handover-comment', 'handover']]) {
+    const { text, unfilled } = fillTemplate(readTemplate(name), FILL_VALUES);
+    assert.deepEqual(unfilled, [], name);
+    assert.deepEqual(templatePlaceholders(text), [], name);
+    assert.equal(hasMarker(text, marker), true, name);
+  }
+});
+
+test('the checkpoint comment header reads like the State header', () => {
+  const { text } = fillTemplate(readTemplate('checkpoint-comment'), FILL_VALUES);
+  assert.equal(text.split('\n')[0], 'Checkpoint 82 · 2026-11-20 10:00 · sonnet/claude-code · session w82-a1');
 });

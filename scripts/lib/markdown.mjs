@@ -7,6 +7,7 @@ const SECTION_BREAK = '---';
 const STATE_FIELD = /^([A-Za-z][A-Za-z ]*):[ \t]*(.*)$/;
 const STATE_GROUP = /\(([^()]*)\)\s*$/;
 const HEADER_SEPARATOR = '·';
+const PLACEHOLDER = /<[^<>\s!/][^<>\n]*>/g;
 const INLINE_CODE = /(`+)(?:[^`]|(?!\1)`+)*?\1(?!`)/g;
 const CLOSING_REF = new RegExp(
   '(?<![\\w-])(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\\b:?[ \\t]+(?:'
@@ -235,7 +236,29 @@ export function parseStateSection(section) {
  */
 export function templatePlaceholders(templateText) {
   const text = stripCommentsAndFences(templateText);
-  return [...new Set(text.match(/<[^<>\s!/][^<>\n]*>/g) ?? [])];
+  return [...new Set(text.match(PLACEHOLDER) ?? [])];
+}
+
+/**
+ * Replaces every `<name>` placeholder outside comments and fences with `values[name]`.
+ * One pass: a value that itself looks like a placeholder is not filled again. A placeholder
+ * with no value stays in the text and is listed in `unfilled` (with its angle brackets, once).
+ * @param {string} template
+ * @param {Record<string, string|number>} values keyed by the placeholder text without the brackets
+ * @returns {{ text: string, unfilled: string[] }}
+ */
+export function fillTemplate(template, values) {
+  const source = normalizeNewlines(template);
+  const dead = deadMask(source);
+  const unfilled = new Set();
+  const text = source.replace(PLACEHOLDER, (token, offset) => {
+    if (dead[offset]) return token;
+    const name = token.slice(1, -1);
+    if (Object.hasOwn(values, name)) return String(values[name]);
+    unfilled.add(token);
+    return token;
+  });
+  return { text, unfilled: [...unfilled] };
 }
 
 function liveLines(text) {
@@ -284,7 +307,24 @@ export function replaceSection(body, name, content) {
   return `${result.replace(/\n+$/, '')}\n`;
 }
 
-const markerText = (name) => `<!-- groundwork:${name} -->`;
+/**
+ * Raw text of the level-2 section `name` of a template file that holds several comments, one
+ * per section; markers (HTML comments) are kept, unlike `parseSections`. `null` when absent.
+ * @param {string} templateText
+ * @param {string} name
+ * @returns {string|null}
+ */
+export function templateSection(templateText, name) {
+  const lines = liveLines(normalizeNewlines(templateText));
+  const headingName = (line) => SECTION_HEADING.exec(line.text)?.[1].replace(TRAILING_GROUP, '').trim();
+  const start = lines.findIndex((line) => line.live && headingName(line) === name);
+  if (start === -1) return null;
+  const next = lines.findIndex((line, index) => index > start && line.live && SECTION_HEADING.test(line.text));
+  const end = next === -1 ? lines.length : next;
+  return lines.slice(start + 1, end).map((line) => line.text).join('\n').trim();
+}
+
+const markerText =(name) => `<!-- groundwork:${name} -->`;
 
 /**
  * @param {string} body

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   stripCommentsAndFences, parseSections, findClosingRefs, criterionIds, parseTable,
   parseStateSection, templatePlaceholders, replaceSection, hasMarker, addMarker,
-  removeMarker, formFieldLabels,
+  removeMarker, formFieldLabels, fillTemplate, templateSection,
 } from './markdown.mjs';
 
 test('stripCommentsAndFences removes backtick and tilde fences and multi-line comments', () => {
@@ -232,4 +232,30 @@ test('replaceSection stops at a --- footer line', () => {
   const body = '## State\nold\n---\nfooter text\n';
   assert.equal(replaceSection(body, 'State', 'new'), '## State\nnew\n\n---\nfooter text\n');
   assert.equal(replaceSection('```\n---\n```\n## S\nold', 'S', 'n'), '```\n---\n```\n## S\nn\n');
+});
+
+test('fillTemplate fills every occurrence and leaves comments and fences alone', () => {
+  const template = ['<a> and <a>, <b c>', '<!-- <a> -->', '```', '<a>', '```'].join('\n');
+  const result = fillTemplate(template, { a: 'X', 'b c': 2 });
+  assert.equal(result.text, ['X and X, 2', '<!-- <a> -->', '```', '<a>', '```'].join('\n'));
+  assert.deepEqual(result.unfilled, []);
+});
+
+test('fillTemplate reports unfilled placeholders once and keeps them in the text', () => {
+  const result = fillTemplate('<a> <b> <b>', { a: 'X', unused: 'Y' });
+  assert.equal(result.text, 'X <b> <b>');
+  assert.deepEqual(result.unfilled, ['<b>']);
+});
+
+test('fillTemplate does not fill a placeholder that a value introduces', () => {
+  const result = fillTemplate('<a> <b>', { a: '<b>', b: 'Z' });
+  assert.equal(result.text, '<b> Z');
+  assert.deepEqual(result.unfilled, []);
+});
+
+test('templateSection returns the raw section with markers, or null', () => {
+  const file = '## One\nfirst <n>\n<!-- groundwork:claim -->\n\n## Two\n<!-- ## Three -->\nsecond\n';
+  assert.equal(templateSection(file, 'One'), 'first <n>\n<!-- groundwork:claim -->');
+  assert.equal(templateSection(file, 'Two'), '<!-- ## Three -->\nsecond');
+  assert.equal(templateSection(file, 'Three'), null);
 });
