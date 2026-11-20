@@ -650,5 +650,7 @@ test('parseFooter rejects a missing break, a trailing line, a bad agent and no b
   assert.equal(parseFooter('x\n---\nAgent: a/b · session s1\nmore text'), null);
   assert.equal(parseFooter('x\n---\nAgent: codex · session s1'), null);
   assert.equal(parseFooter('x\n---\nAgent: a/b · session'), null);
+  assert.equal(parseFooter('x\n---\n## More\ntext\nAgent: a/b · session s1\n'), null);
+  assert.equal(parseFooter('x\n---\nAgent: a/b · session s1\n---\nmore\n'), null);
   assert.equal(parseFooter(null), null);
 });

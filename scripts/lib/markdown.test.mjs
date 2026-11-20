@@ -20,11 +20,17 @@ test('stripCommentsAndFences: unclosed fence runs to the end', () => {
   assert.equal(stripCommentsAndFences('a\n```\nb\nc'), 'a\n');
 });
 
-test('parseSections ends a section at a --- line but not inside a fence', () => {
-  const body = '## State\nDone: x\nOpen: y\n\n---\nAgent: a/b · session s1\n\n## Next\nz\n```\n---\n```\n';
+test('parseSections ends the last section at the PR footer break', () => {
+  const body = '## Summary\nx\n\n## State\nDone: x\nOpen: y\n\n---\nAgent: a/b · session s1\n\n<!-- groundwork:released -->\n';
   const { sections } = parseSections(body);
-  assert.equal(sections[0].content, 'Done: x\nOpen: y');
-  assert.equal(sections[1].content, 'z');
+  assert.equal(sections[1].content, 'Done: x\nOpen: y');
+});
+
+test('parseSections keeps content after a --- rule that is not the footer break', () => {
+  const issue = '## Acceptance criteria\n- [ ] AC1 a\n\n---\n\n- [ ] AC2 b\n';
+  assert.match(parseSections(issue).byName['Acceptance criteria'], /AC2/);
+  const moreSections = '## State\nDone: x\n---\n## Next\nz\nAgent: a/b · session s1\n';
+  assert.equal(parseSections(moreSections).byName.State, 'Done: x\n---');
 });
 
 test('parseSections strips the trailing group, reports duplicates, ignores fenced headings', () => {

@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { repoRoot } from '../lib/config.mjs';
 import { createFixtureClient } from '../lib/github.mjs';
 import { parseSections, parseStateSection } from '../lib/markdown.mjs';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { CheckpointError, runCheckpoint, sessionFromHookInput } from './checkpoint.mjs';
+import { CheckpointError, resolveSession, runCheckpoint, sessionFromHookInput } from './checkpoint.mjs';
 
 const root = repoRoot(import.meta.url);
 const repo = { owner: 'o', repo: 'r' };
@@ -63,7 +63,15 @@ test('AC3: --auto takes the session from the hook stdin JSON', () => {
   for (const text of ['', 'not json', '{}', '{"session_id":"a b"}', '[]', 'null']) assert.equal(sessionFromHookInput(text), '', text);
 });
 
-const SCRIPT = fileURLToPath(new URL('./checkpoint.mjs', import.meta.url));
+test('resolveSession prefers the configured session and reads the hook input only without one', async () => {
+  const hook = async () => '{"session_id":"hook-1"}';
+  const unused = async () => assert.fail('hook input read although a session was configured');
+  assert.equal(await resolveSession('env-1', unused), 'env-1');
+  assert.equal(await resolveSession('', hook), 'hook-1');
+  assert.equal(await resolveSession('', async () => ''), '');
+});
+
+const SCRIPT =fileURLToPath(new URL('./checkpoint.mjs', import.meta.url));
 const runScript = (input, session) => {
   const env = { ...process.env, GROUNDWORK_SESSION: session };
   if (session === undefined) delete env.GROUNDWORK_SESSION;

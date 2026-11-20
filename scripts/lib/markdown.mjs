@@ -94,25 +94,42 @@ export function stripCommentsAndFences(text) {
   return result;
 }
 
+const MARKER_LINE = /^<!-- groundwork:\S+ -->$/;
+const AGENT_LINE = /^Agent: .+$/;
+
+/**
+ * Index of the PR footer break: the last `---` line, when only blank lines, groundwork markers and one
+ * `Agent:` line follow it to the end. -1 otherwise, so a `---` rule in an issue body stays content.
+ * @param {string[]} lines
+ * @returns {number}
+ */
+export function findFooterBreak(lines) {
+  const breakIndex = lines.lastIndexOf(SECTION_BREAK);
+  if (breakIndex === -1) return -1;
+  const rest = lines.slice(breakIndex + 1).map((line) => line.trim()).filter((line) => line !== '' && !MARKER_LINE.test(line));
+  return rest.length === 1 && AGENT_LINE.test(rest[0]) ? breakIndex : -1;
+}
+
 /**
  * Level-2 sections outside comments and fences. `content` is the text between
- * the heading and the next level-2 heading or a line that is exactly `---`, trimmed. `byName` keeps the first
+ * the heading and the next level-2 heading or the PR footer break (see `findFooterBreak`), trimmed. `byName` keeps the first
  * occurrence of a repeated name; `duplicates` lists each repeated name once.
  * @param {string} body
  * @returns {{ sections: Array<{ name: string, line: string, content: string }>, byName: Record<string, string>, duplicates: string[] }}
  */
 export function parseSections(body) {
   const lines = stripCommentsAndFences(body).split('\n');
+  const footerBreak = findFooterBreak(lines);
   const sections = [];
   let open = false;
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     const heading = SECTION_HEADING.exec(line);
     if (heading) {
       sections.push({ name: heading[1].replace(TRAILING_GROUP, '').trim(), line: line.trimEnd(), content: [] });
       open = true;
       continue;
     }
-    if (line === SECTION_BREAK) open = false;
+    if (index === footerBreak) open = false;
     if (open) sections[sections.length - 1].content.push(line);
   }
   const result = sections.map((section) => ({ ...section, content: section.content.join('\n').trim() }));

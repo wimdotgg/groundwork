@@ -21,6 +21,7 @@ Pace: at most 5 issue creations and 10 comments per minute. No polling loops.
 
 ## Loop
 
+0. Session id: use your harness session id (Claude Code's `session_id`) for `<id>` in `--session` and in `GROUNDWORK_SESSION`; don't invent one. The hooks pass the same id on stdin, so it matches the PR footer.
 1. `node scripts/agent/next.mjs`. Nothing ready: stop and report the skipped reasons.
 2. `node scripts/agent/claim.mjs N --session <id> --agent <model>/<harness>`. Exit 3 means held by someone else: run `next` again. Exit 1: stop and report the reason. After a takeover run `node scripts/agent/resume.mjs N --session <id>` and continue from its briefing; never restart.
 3. Build on `issue/N`. Bugs start with a failing test. Push early through the wrapper. Update from `main` with `git merge origin/main`.

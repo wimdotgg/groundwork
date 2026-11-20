@@ -13,6 +13,7 @@ import {
 
 const EXIT_ERROR = 1;
 const EXIT_HELD = 3;
+const STDIN_TIMEOUT_MS = 2000;
 const DEFAULT_INPUT = '.artifacts/checkpoint.json';
 const BRANCH_PATTERN = /^issue\/(\d+)$/;
 const FOOTER_BREAK = '---';
@@ -198,10 +199,27 @@ export function sessionFromHookInput(text) {
   }
 }
 
+/**
+ * The configured session (flag or env) wins; the hook input is read only when there is none.
+ * @param {string} configuredSession
+ * @param {() => Promise<string>} readHookInput
+ * @returns {Promise<string>} '' when neither gives a session
+ */
+export async function resolveSession(configuredSession, readHookInput) {
+  if (configuredSession !== '') return configuredSession;
+  return sessionFromHookInput(await readHookInput());
+}
+
 async function readStdin() {
   if (process.stdin.isTTY) return '';
-  let text = '';
-  for await (const chunk of process.stdin.setEncoding('utf8')) text += chunk;
+  const read = (async () => {
+    let text = '';
+    for await (const chunk of process.stdin.setEncoding('utf8')) text += chunk;
+    return text;
+  })();
+  const timeout = new Promise((resolve) => { setTimeout(resolve, STDIN_TIMEOUT_MS, '').unref(); });
+  const text = await Promise.race([read, timeout]);
+  process.stdin.destroy();
   return text;
 }
 
@@ -224,7 +242,7 @@ function report(result, json) {
 
 async function main(argv, env) {
   const options = parseOptions(argv, env);
-  if (options.session === '' && options.auto) options.session = sessionFromHookInput(await readStdin());
+  if (options.auto) options.session = await resolveSession(options.session, readStdin);
   if (options.session === '' && options.auto) {
     process.stdout.write(report({ ok: true, skipped: 'no session id' }, options.json));
     return 0;
