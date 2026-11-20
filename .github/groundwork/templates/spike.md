@@ -9,3 +9,4 @@
 
 ## Output
 <what the decision record at docs/decisions/N-slug.md must answer>
+
