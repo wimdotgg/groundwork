@@ -27,7 +27,7 @@
     "dependencies": "dependabot[bot]",
     "automated": "app:release"
   },
-  "deploy": "scripts",
+  "deploy": "none",
   "limits": {
     "hierarchyDepth": 2,
     "hierarchyDepthWithIntermediate": 3,

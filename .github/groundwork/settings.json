@@ -22,9 +22,7 @@
   "controlRepository": {
     "is_template": true
   },
-  "teamAccess": [
-    { "team": "agents", "permission": "push" }
-  ],
+  "teamAccess": [],
   "security": {
     "private_vulnerability_reporting": true,
     "vulnerability_alerts": true,
