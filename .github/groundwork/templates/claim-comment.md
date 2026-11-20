@@ -1,11 +1,11 @@
 ## Issue pointer
-Claimed on `issue/<n>` by session <session id>.
+Claimed on `issue/<issue>` by session <session>.
 <!-- groundwork:claim -->
 
 ## PR claim
-Claim: #<n>, session <session id>.
+Claim: #<issue>, session <session>.
 <!-- groundwork:claim -->
 
 ## PR takeover
-Takeover: #<n>, session <session id>, previous session <previous session id>.
+Takeover: #<issue>, session <session>, previous session <previous session>.
 <!-- groundwork:takeover -->

@@ -242,19 +242,21 @@ export function templatePlaceholders(templateText) {
 /**
  * Replaces every `<name>` placeholder outside comments and fences with `values[name]`.
  * One pass: a value that itself looks like a placeholder is not filled again. A placeholder
- * with no value stays in the text and is listed in `unfilled` (with its angle brackets, once).
+ * with no value, or a `null` or `undefined` one, stays in the text and is listed in `unfilled`
+ * (with its angle brackets, once).
  * @param {string} template
- * @param {Record<string, string|number>} values keyed by the placeholder text without the brackets
+ * @param {Record<string, string|number|null|undefined>|null} [values] keyed by the placeholder text without the brackets
  * @returns {{ text: string, unfilled: string[] }}
  */
 export function fillTemplate(template, values) {
+  const provided = values ?? {};
   const source = normalizeNewlines(template);
   const dead = deadMask(source);
   const unfilled = new Set();
   const text = source.replace(PLACEHOLDER, (token, offset) => {
     if (dead[offset]) return token;
     const name = token.slice(1, -1);
-    if (Object.hasOwn(values, name)) return String(values[name]);
+    if (Object.hasOwn(provided, name) && provided[name] != null) return String(provided[name]);
     unfilled.add(token);
     return token;
   });
@@ -324,7 +326,7 @@ export function templateSection(templateText, name) {
   return lines.slice(start + 1, end).map((line) => line.text).join('\n').trim();
 }
 
-const markerText =(name) => `<!-- groundwork:${name} -->`;
+const markerText = (name) => `<!-- groundwork:${name} -->`;
 
 /**
  * @param {string} body

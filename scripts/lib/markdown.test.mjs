@@ -253,6 +253,21 @@ test('fillTemplate does not fill a placeholder that a value introduces', () => {
   assert.deepEqual(result.unfilled, []);
 });
 
+test('fillTemplate counts null and undefined values as unfilled and accepts null values', () => {
+  const result = fillTemplate('#<a> <b> <c>', { a: undefined, b: null, c: 0 });
+  assert.equal(result.text, '#<a> <b> 0');
+  assert.deepEqual(result.unfilled, ['<a>', '<b>']);
+  assert.deepEqual(fillTemplate('<a>', null), { text: '<a>', unfilled: ['<a>'] });
+  assert.deepEqual(fillTemplate('<a>', undefined), { text: '<a>', unfilled: ['<a>'] });
+});
+
+test('templateSection handles CRLF and ignores a heading inside a fence', () => {
+  const file = '## One\r\nfirst\r\n```\r\n## Two\r\n```\r\n<!-- groundwork:claim -->\r\n\r\n## Three\r\nthird\r\n';
+  assert.equal(templateSection(file, 'One'), 'first\n```\n## Two\n```\n<!-- groundwork:claim -->');
+  assert.equal(templateSection(file, 'Two'), null);
+  assert.equal(templateSection(file, 'Three'), 'third');
+});
+
 test('templateSection returns the raw section with markers, or null', () => {
   const file = '## One\nfirst <n>\n<!-- groundwork:claim -->\n\n## Two\n<!-- ## Three -->\nsecond\n';
   assert.equal(templateSection(file, 'One'), 'first <n>\n<!-- groundwork:claim -->');

@@ -37,10 +37,13 @@ test('state-section.md has placeholders and the eight State fields', () => {
 });
 
 const readTemplate = (name) => readRepoFile(`.github/groundwork/templates/${name}.md`);
+const STATE_VALUES = {
+  done: 'none', 'in progress': 'none', next: 'none', proven: 'none', unproven: 'none',
+  rejected: 'none', gotchas: 'none', open: 'none',
+};
+const HEADER_VALUES = { checkpoint: 0, time: '2026-11-20 10:00', agent: 'sonnet/claude-code', session: 'w82-a1' };
 const FILL_VALUES = {
-  n: 82, 'session id': 'w82-a1', 'previous session id': 'w82-a0', 'date time': '2026-11-20 10:00',
-  agent: 'sonnet/claude-code', journal: 'line', 'pr number': 91, 'ACs delivered, with evidence': 'AC1',
-  'issues opened, or none': 'none', 'traps for the next worker, or none': 'none',
+  ...STATE_VALUES, ...HEADER_VALUES, issue: 82, pr: 101, 'previous session': 'w82-a0', journal: 'line', 'follow-ups': 'none',
 };
 
 test('claim-comment.md holds the pointer, PR claim and takeover comments with their markers', () => {
@@ -64,7 +67,20 @@ test('checkpoint and handover templates fill completely and carry their marker',
   }
 });
 
-test('the checkpoint comment header reads like the State header', () => {
-  const { text } = fillTemplate(readTemplate('checkpoint-comment'), FILL_VALUES);
-  assert.equal(text.split('\n')[0], 'Checkpoint 82 · 2026-11-20 10:00 · sonnet/claude-code · session w82-a1');
+test('the checkpoint comment header and the State header use the same keys and text', () => {
+  const comment = fillTemplate(readTemplate('checkpoint-comment'), FILL_VALUES).text.split('\n')[0];
+  const state = fillTemplate(readTemplate('state-section'), FILL_VALUES).text.split('\n')[0];
+  assert.equal(comment, 'Checkpoint 0 · 2026-11-20 10:00 · sonnet/claude-code · session w82-a1');
+  assert.equal(state, '## State  (checkpoint 0 · 2026-11-20 10:00 · sonnet/claude-code · session w82-a1)');
 });
+
+test('the PR template embeds state-section.md and leaves only worker-owned placeholders after claim fills it', () => {
+  const template = readRepoFile('.github/pull_request_template.md');
+  const stateTemplate = readTemplate('state-section');
+  assert.ok(template.includes(stateTemplate.trimEnd()));
+  const { text, unfilled } = fillTemplate(template, FILL_VALUES);
+  assert.ok(text.startsWith('Closes #82\n'));
+  assert.ok(text.trimEnd().endsWith('Agent: sonnet/claude-code · session w82-a1'));
+  assert.deepEqual(unfilled, ['<command>', '<observed result>', '<why not, and when>', '<finding>', '<sha>', '<reason>']);
+});
+

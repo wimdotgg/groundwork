@@ -1,4 +1,4 @@
-Closes #N
+Closes #<issue>
 
 ## Summary
 - Problem:
@@ -19,18 +19,18 @@ Closes #N
 - Risk: low | medium | high
 - Rollback:
 
-## State  (checkpoint <n> · <date time> · <model>/<harness> · session <id>)
-Done:        <ACs done, with test evidence>
-In progress: <current work and files>
-Next:        <next steps>
-Proven:      <ACs proven, with CI run>
-Unproven:    <ACs not yet proven>
-Rejected:    <approaches tried and dropped, with why>
-Gotchas:     <environment or repo traps>
-Open:        <open questions, or none>
+## State  (checkpoint <checkpoint> · <time> · <agent> · session <session>)
+Done:        <done>
+In progress: <in progress>
+Next:        <next>
+Proven:      <proven>
+Unproven:    <unproven>
+Rejected:    <rejected>
+Gotchas:     <gotchas>
+Open:        <open>
 
 ## Review log
 - <finding>: fixed in <sha> | answered: <reason>
 
 ---
-Agent: <model>/<harness> · session <id>
+Agent: <agent> · session <session>

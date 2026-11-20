@@ -114,6 +114,7 @@ export function validateIssueBody({ type, body }) {
 const hasLabel = (labels, name) => labels.some((label) => normalizeLabel(label) === normalizeLabel(name));
 
 const SESSION_ID = /^[A-Za-z0-9._-]+$/;
+const AGENT_ID = /^[A-Za-z0-9._/-]+$/;
 const CLAIM_COMMIT = /^chore\(claim\): #(\d+)( takeover)? \[session ([A-Za-z0-9._-]+)\]$/;
 
 /**
@@ -123,6 +124,16 @@ const CLAIM_COMMIT = /^chore\(claim\): #(\d+)( takeover)? \[session ([A-Za-z0-9.
  */
 export function isValidSessionId(session) {
   return SESSION_ID.test(String(session ?? ''));
+}
+
+/**
+ * `<model>/<harness>`, as written in the State header and the PR footer: the session id characters plus `/`,
+ * so it cannot break the header's parenthesised, `·` separated group.
+ * @param {string} agent
+ * @returns {boolean}
+ */
+export function isValidAgent(agent) {
+  return AGENT_ID.test(String(agent ?? ''));
 }
 
 /**

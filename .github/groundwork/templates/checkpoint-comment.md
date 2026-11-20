@@ -1,3 +1,3 @@
-Checkpoint <n> · <date time> · <agent> · session <session id>
+Checkpoint <checkpoint> · <time> · <agent> · session <session>
 <journal>
 <!-- groundwork:checkpoint -->

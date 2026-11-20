@@ -8,6 +8,7 @@ import {
   TITLE_TYPES,
   claimCommitMessage,
   deriveStatus,
+  isValidAgent,
   isValidSessionId,
   isHotfixLane,
   leaseState,
@@ -619,6 +620,11 @@ test('parseClaimCommit reads the subject only and rejects other shapes', () => {
 test('isValidSessionId accepts letters, digits, dot, underscore and hyphen only', () => {
   for (const id of ['a1b2', 'w82-a1', 'A.b_c']) assert.equal(isValidSessionId(id), true, id);
   for (const id of ['', 'a b', 'a]b', 'a·b', 'a(b)', undefined]) assert.equal(isValidSessionId(id), false, String(id));
+});
+
+test('isValidAgent accepts model/harness and rejects header-breaking characters', () => {
+  for (const id of ['sonnet/claude-code', 'codex', 'gpt-5.1/cli']) assert.equal(isValidAgent(id), true, id);
+  for (const id of ['', 'a b', 'a(b)', 'a·b', 'a)', undefined]) assert.equal(isValidAgent(id), false, String(id));
 });
 
 test('loadIssueFacts: a takeover commit head sets claimCommitAt', async () => {
