@@ -130,7 +130,7 @@ test('AC4: a rerun with everything in place, head moved past the claim commit, w
   assert.deepEqual(writeKeys(calls), []);
 });
 
-test('R5: a rerun where only the PR claim comment is missing posts just that', async () => {
+test('a rerun where only the PR claim comment is missing posts just that', async () => {
   const { client, calls } = recordingClient({
     ...creationRoutes,
     [REF]: ok({ object: { sha: 'later-sha' } }),
@@ -142,13 +142,13 @@ test('R5: a rerun where only the PR claim comment is missing posts just that', a
   assert.deepEqual(writeKeys(calls), [POST_PR_COMMENT]);
 });
 
-test('R2: a fresh claim posts a new pointer even when an older claim left one', async () => {
+test('a fresh claim posts a new pointer even when an older claim left one', async () => {
   const { client, calls } = recordingClient({ ...creationRoutes, [ISSUE_COMMENTS]: ok(POINTER) });
   await run(client);
   assert.deepEqual(writeKeys(calls), [POST_COMMIT, POST_REF, POST_ISSUE_COMMENT, POST_PULL, POST_PR_COMMENT]);
 });
 
-test('R2: a rerun posts the pointer unless it names this session', async () => {
+test('a rerun posts the pointer unless it names this session', async () => {
   const rerun = {
     ...creationRoutes,
     [REF]: ok({ object: { sha: 'claim-sha' } }),
@@ -160,7 +160,7 @@ test('R2: a rerun posts the pointer unless it names this session', async () => {
   assert.equal(writeKeys(other.calls)[0], POST_ISSUE_COMMENT);
 });
 
-test('R3: an Epic, an untyped issue, a closed issue or a PR number exits 3 before any write', async () => {
+test('an Epic, an untyped issue, a closed issue or a PR number exits 3 before any write', async () => {
   const targets = [{ type: { name: 'Epic' } }, { type: null }, { type: { name: 'Feature' }, state: 'closed' }, { type: { name: 'Feature' }, pull_request: {} }];
   for (const fields of targets) {
     const issue = { number: 7, title: 'T', ...fields };
@@ -170,7 +170,7 @@ test('R3: an Epic, an untyped issue, a closed issue or a PR number exits 3 befor
   }
 });
 
-test('R4: a PR with this session\'s footer by another author or from another repo is not ours (exit 3)', async () => {
+test('a PR with this session\'s footer by another author or from another repo is not ours (exit 3)', async () => {
   const spoofs = [pullOf({ user: { login: 'mallory' } }), pullOf({ head: { ref: 'issue/7', repo: { full_name: 'mallory/r' } } })];
   for (const spoof of spoofs) {
     const { client, calls } = recordingClient({
@@ -184,7 +184,7 @@ test('R4: a PR with this session\'s footer by another author or from another rep
   }
 });
 
-test('R5: another session\'s footer over a moved head is held (exit 3)', async () => {
+test('another session\'s footer over a moved head is held (exit 3)', async () => {
   const { client, calls } = recordingClient({
     ...creationRoutes,
     [REF]: ok({ object: { sha: 'later-sha' } }),
@@ -194,7 +194,7 @@ test('R5: another session\'s footer over a moved head is held (exit 3)', async (
   assert.deepEqual(writeKeys(calls), []);
 });
 
-test('R5: a transport failure on the ref POST propagates (exit 1), with nothing written after it', async () => {
+test('a transport failure on the ref POST propagates (exit 1), with nothing written after it', async () => {
   const { client, calls } = recordingClient(creationRoutes);
   const failing = {
     ...client,
@@ -206,7 +206,7 @@ test('R5: a transport failure on the ref POST propagates (exit 1), with nothing 
   assert.deepEqual(writeKeys(calls), [POST_COMMIT]);
 });
 
-test('R6: a comment template with an unknown placeholder or a missing section refuses before any write', async () => {
+test('a comment template with an unknown placeholder or a missing section refuses before any write', async () => {
   const unknown = { ...templates, claimComment: templates.claimComment.replace('<session>.', '<session> <pr>.') };
   const missing = { ...templates, claimComment: templates.claimComment.replace('## PR claim', '## Renamed') };
   for (const broken of [unknown, missing]) {
@@ -216,11 +216,18 @@ test('R6: a comment template with an unknown placeholder or a missing section re
   }
 });
 
-test('R8: closing keywords are stripped from the issue title in the PR title', async () => {
+test('an issue title with a closing reference becomes a fixed PR summary', async () => {
   const issue = { number: 7, title: 'Fix #45 and resolves wimdotgg/groundwork#3', type: { name: 'Bug' } };
   const { client, calls } = recordingClient({ ...creationRoutes, 'GET /repos/o/r/issues/7': ok(issue) });
   await run(client);
-  assert.equal(bodyOf(calls, POST_PULL).title, 'fix: #45 and wimdotgg/groundwork#3');
+  assert.equal(bodyOf(calls, POST_PULL).title, 'fix: work on #7');
+});
+
+test('an open released PR with this session\'s footer is not ours (exit 3)', async () => {
+  const released = pullOf({ body: `body\n<!-- groundwork:released -->\n\n${FOOTER}\n` });
+  const { client, calls } = recordingClient({ ...creationRoutes, [REF]: ok({ object: { sha: 'later-sha' } }), [ISSUE_PULLS]: ok([released]) });
+  assert.equal((await run(client)).exitCode, EXIT_HELD);
+  assert.deepEqual(writeKeys(calls), []);
 });
 
 test('an existing ref claimed by another session is held (exit 3) with no write', async () => {
@@ -252,13 +259,13 @@ test('AC5: another session\'s draft PR and this session\'s ready PR do not block
   assert.equal((await run(client)).exitCode, EXIT_CLAIMED);
 });
 
-test('R1: a released draft with this session\'s footer does not block the claim', async () => {
+test('a released draft with this session\'s footer does not block the claim', async () => {
   const released = pullOf({ number: 20, head: { ref: 'issue/9', repo: { full_name: 'o/r' } }, body: `x\n<!-- groundwork:released -->\n\n${FOOTER}\n` });
   const { client } = recordingClient({ ...creationRoutes, [OPEN_PULLS]: ok([released]) });
   assert.equal((await run(client)).exitCode, EXIT_CLAIMED);
 });
 
-test('R7: the limit comes from config.limits.tasksPerWorker', async () => {
+test('the limit comes from config.limits.tasksPerWorker', async () => {
   const held = pullOf({ number: 20, head: { ref: 'issue/9', repo: { full_name: 'o/r' } } });
   const { client } = recordingClient({ ...creationRoutes, [OPEN_PULLS]: ok([held]) });
   const roomy = { ...CONFIG, limits: { tasksPerWorker: 2 } };

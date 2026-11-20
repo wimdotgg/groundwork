@@ -5,7 +5,7 @@ import { GitHubError, apiPath, createClient, currentRepo, repoFromEnv } from '..
 import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { sameLogin } from '../lib/trust.mjs';
 import { TITLE_TYPES, claimCommitMessage, isValidAgent, isValidSessionId, parseClaimCommit } from '../lib/issue-model.mjs';
-import { fillTemplate, hasMarker, templateSection } from '../lib/markdown.mjs';
+import { fillTemplate, findClosingRefs, hasMarker, templateSection } from '../lib/markdown.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ claimComment: string, pullRequest: string }} Templates */
@@ -37,7 +37,6 @@ const INITIAL_STATE = {
   gotchas: 'none',
   open: 'none',
 };
-const CLOSING_KEYWORD_BEFORE_REF = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+(?=(?:[\w.-]+\/[\w.-]+)?#\d|https?:\/\/)/gi;
 const USAGE = 'usage: claim.mjs <issue number> --session <id> --agent <model>/<harness> [--json]';
 
 const repoParams = (repo, extra = {}) => ({ ...repo, ...extra });
@@ -74,8 +73,8 @@ function renderComment(templates, sectionName, values) {
 const isOurPull = ({ repo, config }, pull) => sameLogin(pull.user?.login, config.accounts.agent)
   && sameLogin(pull.head?.repo?.full_name, `${repo.owner}/${repo.repo}`);
 
-/** Closing keywords in an issue title would close another issue when the PR merges. */
-const stripClosingKeywords = (title) => title.replace(CLOSING_KEYWORD_BEFORE_REF, '');
+/** A closing reference in the title would close another issue when the PR merges, so such a title is replaced. */
+const summaryFor = (issue) => (findClosingRefs(issue.title).length > 0 ? `work on #${issue.number}` : issue.title);
 
 /** @returns {Promise<number[]>} the draft PRs on other issues that this session holds; a released draft is not held */
 async function findHeldDrafts(context) {
@@ -101,7 +100,7 @@ async function findOpenPull(context) {
 
 async function hasAgentComment({ client, repo, config }, issueNumber, expectedBody) {
   const comments = await client.paginate(apiPath(`${REPO_PATH}/issues/{issueNumber}/comments`, repoParams(repo, { issueNumber })));
-  return comments.some((comment) => sameLogin(comment.user?.login, config.accounts.agent) && (comment.body ?? '').trim() === expectedBody);
+  return comments.some((comment) => sameLogin(comment.user?.login, config.accounts.agent) && (comment.body ?? '').trim() === expectedBody.trim());
 }
 
 /** @returns {Promise<{ exists: boolean, sha: string|null }>} */
@@ -120,7 +119,7 @@ async function headIsOwnClaimCommit(context, sha) {
 }
 
 async function branchBelongsToSession(context, sha, openPull) {
-  if (openPull) return footerSession(openPull.body) === context.session;
+  if (openPull) return !hasMarker(openPull.body ?? '', 'released') && footerSession(openPull.body) === context.session;
   return headIsOwnClaimCommit(context, sha);
 }
 
@@ -158,7 +157,7 @@ function renderPosts(context, issue, prefix) {
   return {
     pointer: renderComment(templates, 'Issue pointer', values),
     prClaim: renderComment(templates, 'PR claim', values),
-    prTitle: `${prefix}: ${stripClosingKeywords(issue.title)}`,
+    prTitle: `${prefix}: ${summaryFor(issue)}`,
     prBody: fillOwned(templates.pullRequest, { issue: number, ...INITIAL_STATE, time: formatTime(now), agent, session }),
   };
 }
