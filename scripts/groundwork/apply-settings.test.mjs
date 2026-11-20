@@ -12,7 +12,7 @@ const REAL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const CONFIG = {
   org: 'wimdotgg',
   controlRepo: 'groundwork',
-  accounts: { owner: 'wianvdm', agent: 'wianvdm-agent' },
+  accounts: { owner: 'wianvdm', agent: 'wimdotgg-agent[bot]' },
   apps: { admin: 'wimdotgg-admin', release: 'wimdotgg-release' },
   deploy: 'scripts',
 };
@@ -432,6 +432,36 @@ test('a failing gh call throws a GitHubError with its first stderr line', async 
     return true;
   });
   assert.equal(events.at(-1), 'step 7/9 release environment');
+});
+
+test('recordCall gets one row per gh write, with the exit status and no value', async () => {
+  const root = await makeRoot();
+  const rows = [];
+  const context = {
+    client: createFixtureClient(readRoutes(CONTROL)), token: TOKEN, org: 'wimdotgg', repo: CONTROL,
+    settingsRoot: root, config: CONFIG, env: RELEASE_ENV, log: () => {}, recordCall: (row) => rows.push(row),
+  };
+  const spawnGh = async ({ args }) => ({ code: args[0] === 'variable' ? 1 : 0, stderr: 'denied' });
+  await assert.rejects(run(context, { spawnGh }), GitHubError);
+  assert.deepEqual(rows, [
+    { method: 'gh', path: `secret set RELEASE_APP_KEY --env release --repo wimdotgg/${CONTROL}`, status: 0 },
+    { method: 'gh', path: `variable set RELEASE_APP_CLIENT_ID --env release --repo wimdotgg/${CONTROL}`, status: 1 },
+  ]);
+  for (const value of Object.values(RELEASE_ENV)) assert.ok(!JSON.stringify(rows).includes(value));
+});
+
+test('recordCall gets a null-status row when the gh spawn itself fails, then rethrows', async () => {
+  const root = await makeRoot();
+  const rows = [];
+  const context = {
+    client: createFixtureClient(readRoutes(CONTROL)), token: TOKEN, org: 'wimdotgg', repo: CONTROL,
+    settingsRoot: root, config: CONFIG, env: RELEASE_ENV, log: () => {}, recordCall: (row) => rows.push(row),
+  };
+  const spawnGh = async () => { throw new Error('spawn gh ENOENT'); };
+  await assert.rejects(run(context, { spawnGh }), /ENOENT/);
+  assert.deepEqual(rows, [
+    { method: 'gh', path: `secret set RELEASE_APP_KEY --env release --repo wimdotgg/${CONTROL}`, status: null },
+  ]);
 });
 
 test('no log line or summary holds a secret value', async () => {

@@ -1,14 +1,17 @@
 import { spawn } from 'node:child_process';
 import { ConfigError } from '../lib/config.mjs';
 import { GitHubError, apiPath } from '../lib/github.mjs';
-import { SettingsError, loadDesiredState, readSignals, repoKind, resolvePlaceholders } from '../lib/settings.mjs';
+import {
+  SettingsError, appliesToKind, assertionState, loadDesiredState, readSignals, repoKind, resolvePlaceholders,
+} from '../lib/settings.mjs';
 import { normalizeLabel, resolveActor } from '../lib/trust.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {import('../lib/settings.mjs').DesiredState} DesiredState */
 /** @typedef {import('../lib/settings.mjs').Signals} Signals */
 /** @typedef {{ client: GitHubClient, token: string, org: string, repo: string|null, settingsRoot: string,
- *   config: import('../lib/config.mjs').Config, env: Record<string, string|undefined>, log: (line: string) => void }} OpContext */
+ *   config: import('../lib/config.mjs').Config, env: Record<string, string|undefined>, log: (line: string) => void,
+ *   recordCall?: (call: { method: string, path: string, status: number|null }) => void }} OpContext */
 /** @typedef {{ args: string[], stdin: string, env: Record<string, string|undefined> }} GhInvocation */
 /** @typedef {{ spawnGh: (invocation: GhInvocation) => Promise<{ code: number|null, stderr: string }> }} Dependencies */
 
@@ -142,19 +145,9 @@ async function applyActions(context) {
   return `${applied} endpoint(s) applied`;
 }
 
-/** Mirrors the assertWhen rules of settings.mjs; an unreadable signal never holds. */
-function assertionHolds(assertWhen, { signals, config }) {
-  if (assertWhen === 'kitInstalled') return signals.kitInstalled === true;
-  if (assertWhen === 'deployReady') {
-    if (config.deploy === 'none') return false;
-    return signals.codeScanningConfigured === true || signals.pass2Ran === true;
-  }
-  throw new SettingsError(`settings.json: unknown assertWhen "${assertWhen}"`);
-}
-
 async function applyVariables(context) {
   const wanted = Object.entries(context.desired.settings.variables ?? {})
-    .filter(([, spec]) => assertionHolds(spec.assertWhen, context));
+    .filter(([, spec]) => assertionState(spec.assertWhen, context) === 'hold');
   const counts = { created: 0, updated: 0 };
   if (wanted.length === 0) return describeCounts(counts);
   const live = await repoList(context, { suffix: '/actions/variables', itemsKey: 'variables' });
@@ -172,8 +165,6 @@ async function applyVariables(context) {
   }
   return describeCounts(counts);
 }
-
-const appliesToKind = (repos, kind) => repos === 'all' || (repos === 'projects' && kind === 'project') || (repos === 'control' && kind === 'control');
 
 async function lookupUserId(context, login) {
   const response = await context.client.request('GET', apiPath('/users/{login}', { login }));
@@ -240,14 +231,25 @@ function requireReleaseValues(env) {
   if (missing) throw new SettingsError(`${missing.name} is not set in the environment`);
 }
 
+/** Records the call even when the spawn itself fails (gh missing), with a null status. */
+async function spawnRecorded(context, invocation) {
+  const call = { method: 'gh', path: invocation.args.join(' ') };
+  try {
+    const result = await context.dependencies.spawnGh(invocation);
+    context.recordCall?.({ ...call, status: result.code });
+    return result;
+  } catch (error) {
+    context.recordCall?.({ ...call, status: null });
+    throw error;
+  }
+}
+
 async function applyReleaseEnvironment(context) {
   requireReleaseValues(context.env);
   const target = `${context.org}/${context.repoRef.repo}`;
   for (const { command, name } of RELEASE_WRITES) {
     const args = [command, 'set', name, '--env', RELEASE_ENVIRONMENT, '--repo', target];
-    const { code, stderr } = await context.dependencies.spawnGh({
-      args, stdin: context.env[name], env: ghEnvironment(context),
-    });
+    const { code, stderr } = await spawnRecorded(context, { args, stdin: context.env[name], env: ghEnvironment(context) });
     if (code !== 0) throw new GitHubError(`gh ${command} set ${name} failed: ${firstLine(stderr)}`);
   }
   return `${RELEASE_WRITES.map(({ name }) => name).join(', ')} written to ${RELEASE_ENVIRONMENT}`;

@@ -11,7 +11,7 @@ const REPO = 'groundwork';
 const R = `/repos/${OWNER}/${REPO}`;
 const CONFIG = {
   controlRepo: 'groundwork',
-  accounts: { owner: 'wianvdm', agent: 'wianvdm-agent' },
+  accounts: { owner: 'wianvdm', agent: 'wimdotgg-agent[bot]' },
   apps: { admin: 'wimdotgg-admin', release: 'wimdotgg-release' },
   deploy: 'scripts',
 };

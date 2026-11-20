@@ -1,5 +1,5 @@
 import {
-  compareStates, loadDesiredState, readLiveState, readSignals, repoKind, resolvePlaceholders, SettingsError,
+  appliesToKind, compareStates, loadDesiredState, readLiveState, readSignals, repoKind, resolvePlaceholders, SettingsError,
 } from '../lib/settings.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
@@ -37,11 +37,6 @@ export function validateArgs(args) {
   if (!isPlainObject(args)) return ['args must be a JSON object'];
   return Object.keys(args).map((key) => `unknown argument "${key}"`);
 }
-
-// Same repos filter as settings.mjs compareEnvironments (appliesToKind there): which environments apply to a repo kind.
-const appliesToKind = (repos, kind) => repos === 'all'
-  || (repos === 'projects' && kind === 'project')
-  || (repos === 'control' && kind === 'control');
 
 /** Environment names whose repos filter selects them for the repo kind; only those are read in full. */
 function applicableEnvironmentNames(settings, kind) {

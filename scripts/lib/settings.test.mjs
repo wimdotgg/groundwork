@@ -7,13 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { GitHubError, createFixtureClient } from './github.mjs';
 import {
-  SettingsError, compareStates, loadDesiredState, readLiveState, readSignals, repoKind, resolvePlaceholders,
+  SettingsError, appliesToKind, assertionState, compareStates, loadDesiredState, readLiveState, readSignals, repoKind, resolvePlaceholders,
 } from './settings.mjs';
 
 const REAL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CONFIG = {
   controlRepo: 'groundwork',
-  accounts: { owner: 'wianvdm', agent: 'wianvdm-agent' },
+  accounts: { owner: 'wianvdm', agent: 'wimdotgg-agent[bot]' },
   apps: { admin: 'wimdotgg-admin', release: 'wimdotgg-release' },
   deploy: 'scripts',
 };
@@ -189,6 +189,36 @@ test('resolvePlaceholders throws SettingsError for an unknown key and a failed l
 test('repoKind compares the control repo name case-insensitively', () => {
   assert.equal(repoKind('Groundwork', CONFIG), 'control');
   assert.equal(repoKind('app', CONFIG), 'project');
+});
+
+test('appliesToKind selects environments by repo kind', () => {
+  assert.equal(appliesToKind('all', 'control'), true);
+  assert.equal(appliesToKind('all', 'project'), true);
+  assert.equal(appliesToKind('projects', 'project'), true);
+  assert.equal(appliesToKind('projects', 'control'), false);
+  assert.equal(appliesToKind('control', 'control'), true);
+  assert.equal(appliesToKind('control', 'project'), false);
+  assert.equal(appliesToKind(undefined, 'project'), false);
+});
+
+test('assertionState: kitInstalled holds, defers or is unreadable by signal', () => {
+  const state = (kitInstalled) => assertionState('kitInstalled', { config: CONFIG, signals: { kitInstalled } });
+  assert.equal(state(true), 'hold');
+  assert.equal(state(false), 'deferred');
+  assert.equal(state(null), 'unreadable');
+});
+
+test('assertionState: deployReady follows deploy mode and the pass 2 signals', () => {
+  const state = (signals, deploy = 'scripts') => assertionState('deployReady', { config: { ...CONFIG, deploy }, signals });
+  assert.equal(state({ pass2Ran: true, codeScanningConfigured: false }), 'hold');
+  assert.equal(state({ pass2Ran: false, codeScanningConfigured: true }), 'hold');
+  assert.equal(state({ pass2Ran: false, codeScanningConfigured: false }), 'deferred');
+  assert.equal(state({ pass2Ran: null, codeScanningConfigured: false }), 'unreadable');
+  assert.equal(state({ pass2Ran: true, codeScanningConfigured: true }, 'none'), 'deferred');
+});
+
+test('assertionState throws on an unknown assertWhen', () => {
+  assert.throws(() => assertionState('always', { config: CONFIG, signals: { kitInstalled: true, pass2Ran: true } }), SettingsError);
 });
 
 test('compareStates: everything matching yields only match rows, tolerant of OrganizationAdmin null id', () => {

@@ -745,6 +745,18 @@ test('apply: mint receives a makeClient that builds on the injected createClient
   assert.equal((await client.request('DELETE', '/installation/token')).status, 204);
 });
 
+test('apply: calls an op records through ctx.recordCall land in the call table', async () => {
+  const registry = stubRegistry({
+    check: async (ctx) => {
+      ctx.recordCall({ method: 'gh', path: 'secret set RELEASE_APP_KEY --env release --repo acme/proj', status: 0 });
+      return { ok: true, summary: 'ok' };
+    },
+  });
+  const { overrides } = harness({ registry, routes: { ...settingsRoutes(HEAD), ...revokeRoute } });
+  const result = await apply(dispatchEnv(), overrides);
+  assert.match(result.summary, /\| gh \| `secret set RELEASE_APP_KEY --env release --repo acme\/proj` \| 0 \|/);
+});
+
 test('apply: ops get an env without ADMIN_APP_KEY, mint keeps the original', async () => {
   let seenEnv;
   const registry = stubRegistry({ check: async (ctx) => { seenEnv = ctx.env; return { ok: true, summary: 'ok' }; } });

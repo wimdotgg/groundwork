@@ -249,7 +249,8 @@ export function repoKind(repoName, config) {
   return String(repoName).toLowerCase() === config.controlRepo.toLowerCase() ? 'control' : 'project';
 }
 
-const appliesToKind = (repos, kind) => repos === 'all' || (repos === 'projects' && kind === 'project') || (repos === 'control' && kind === 'control');
+/** Which environments (`repos` filter) apply to a repo kind. */
+export const appliesToKind = (repos, kind) => repos === 'all' || (repos === 'projects' && kind === 'project') || (repos === 'control' && kind === 'control');
 
 function row(section, key, desired, live, result) {
   return { section, key, desired, live, result };
@@ -342,12 +343,17 @@ function compareTeamAccess(settings, live) {
   });
 }
 
-/** @returns {'hold'|'deferred'|'unreadable'} */
-function assertionState(assertWhen, { config, signals }) {
+/**
+ * Whether a variable with this `assertWhen` is asserted now, deferred until its signal appears, or undecidable.
+ * @returns {'hold'|'deferred'|'unreadable'}
+ * @throws {SettingsError} for an unknown `assertWhen`, so a bad value never reads as asserted
+ */
+export function assertionState(assertWhen, { config, signals }) {
   if (assertWhen === 'kitInstalled') {
     if (typeof signals.kitInstalled !== 'boolean') return 'unreadable';
     return signals.kitInstalled ? 'hold' : 'deferred';
   }
+  if (assertWhen !== 'deployReady') throw new SettingsError(`settings.json: unknown assertWhen "${assertWhen}"`);
   if (config.deploy === 'none') return 'deferred';
   if (signals.pass2Ran === true || signals.codeScanningConfigured === true) return 'hold';
   if (signals.pass2Ran === false && signals.codeScanningConfigured === false) return 'deferred';

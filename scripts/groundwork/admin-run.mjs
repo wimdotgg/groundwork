@@ -318,13 +318,13 @@ async function verifyRefAncestry({ request, client, org, clean }) {
 }
 
 async function runOp(context) {
-  const { deps, request, client, directory, token, org, env, logs, clean } = context;
+  const { deps, request, client, directory, token, org, env, logs, clean, recordCall } = context;
   const { ancestry, error } = await verifyRefAncestry(context);
   if (error !== undefined) return { ok: false, parts: [], error };
   const { settingsRoot } = await prepareSettings({ deps, request, client, org, directory });
   const config = await deps.loadConfig({ root: settingsRoot });
   const repo = request.module.TOKEN_SCOPE === 'org' ? null : request.targetRepo;
-  const ctx = { client, token, org, repo, settingsRoot, config, env, log: (line) => logs.push(clean(line)) };
+  const ctx = { client, token, org, repo, settingsRoot, config, env, log: (line) => logs.push(clean(line)), recordCall };
   const parts = [await request.module.run(ctx)];
   if (request.op === OP_THEN_CHECK && parts[0].ok) parts.push(await deps.registry[OP_CHECK].run(ctx));
   return { ok: parts.every((part) => part.ok), parts, ancestry };
@@ -432,7 +432,7 @@ export async function apply(env, overrides = {}) {
     token = minted.token;
     mask(token);
     const client = deps.createClient({ env: opEnv, token, onCall: record });
-    outcome = await executeOp({ deps, request, client, token, org, env: opEnv, logs, clean });
+    outcome = await executeOp({ deps, request, client, token, org, env: opEnv, logs, clean, recordCall: record });
   } catch (error) {
     outcome = { ok: false, parts: [], error: clean(error?.message) };
   } finally {
