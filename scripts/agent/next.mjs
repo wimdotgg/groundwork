@@ -80,10 +80,10 @@ function takeoverReason(facts, { config, now }) {
 /**
  * @param {{ facts: IssueFacts, epic: number|null, position: number, epicRank: number }} candidate
  * @param {{ config: object, now: Date }} context
- * @returns {{ ranked: Ranked }|{ skip: Skip }}
+ * @returns {{ ranked: Ranked }|{ skipEntry: Skip }}
  */
 export function classify({ facts, epic, position, epicRank }, context) {
-  const skip = (code, reason) => ({ skip: { number: facts.number, code, reason } });
+  const skip = (code, reason) => ({ skipEntry: { number: facts.number, code, reason } });
   if (facts.type === 'Epic') return skip('epic', 'epics are planned, never claimed');
   if (!isTrustedAuthor({ login: facts.author, kind: 'issue' }, context.config)) {
     return skip('untrusted-author', `${facts.author} is not a trusted author`);
@@ -129,7 +129,7 @@ export async function rankCandidates(context) {
     const epicRank = candidate.epic === null ? NO_PRIORITY : epicRanks.get(candidate.epic);
     const result = classify({ facts, epic: candidate.epic, position: candidate.position, epicRank }, context);
     if (result.ranked) ranked.push(result.ranked);
-    else skipped.push(result.skip);
+    else skipped.push(result.skipEntry);
   }
   return { ranked: ranked.sort(compareKeys), skipped };
 }
