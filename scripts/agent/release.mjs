@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig, repoRoot, CONFIG_DIR } from '../lib/config.mjs';
 import { apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
-import { isValidSessionId } from '../lib/issue-model.mjs';
+import { isValidSessionId, parseFooter } from '../lib/issue-model.mjs';
 import {
   addMarker, fillTemplate, hasMarker, parseSections, parseStateSection, replaceSection, templateSection,
 } from '../lib/markdown.mjs';
@@ -19,7 +19,6 @@ const SESSION_VARIABLE = 'GROUNDWORK_SESSION';
 const RELEASED_MARKER = 'released';
 const HANDOVER_MARKER = 'handover';
 const HANDOVER_TEMPLATE_FILE = 'templates/handover-comment.md';
-const FOOTER_SESSION = /^Agent: .+ · session (\S+)\s*$/;
 const FOOTER_BREAK = '---';
 const ALLOWED_FLAGS = ['--decision', '--merged', '--json'];
 const CONVERT_TO_DRAFT = 'mutation($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { pullRequest { id } } }';
@@ -51,15 +50,6 @@ async function findPull(client, repoRef, number) {
   return pull;
 }
 
-/**
- * @param {string} body
- * @returns {string|null} the session named by the footer, which is the last line
- */
-export function footerSession(body) {
-  const lastLine = (body ?? '').trimEnd().split('\n').pop();
-  return FOOTER_SESSION.exec(lastLine)?.[1] ?? null;
-}
-
 /** Puts the marker above the `---` footer break so the footer stays the last line. */
 function markBeforeFooter(body, marker) {
   const lines = body.replace(/\r\n/g, '\n').trimEnd().split('\n');
@@ -72,7 +62,7 @@ function markBeforeFooter(body, marker) {
 async function releaseDecision(context, number, session) {
   const { client, repo } = context;
   const pull = await findPull(client, repo, number);
-  const holder = footerSession(pull.body);
+  const holder = parseFooter(pull.body)?.session ?? null;
   if (holder !== session) {
     throw new ReleaseRefusal(`PR #${pull.number} footer names session ${holder ?? 'none'}, not ${session}`, {
       exitCode: EXIT_HELD_BY_OTHER, session: holder,
@@ -95,9 +85,7 @@ function renderHandover(context, { number, pull, session }) {
   const sections = parseSections(pull.body ?? '').sections;
   const stateSection = sections.find((section) => section.name === 'State');
   if (!stateSection) throw new ReleaseRefusal(`PR #${pull.number} has no ## State section`);
-  // parseSections does not stop at the `---` footer break, so the last State field would absorb it.
-  const stateContent = stateSection.content.split(/^---$/m)[0];
-  const { fields } = parseStateSection({ line: stateSection.line, content: stateContent });
+  const { fields } = parseStateSection(stateSection);
   const { text, unfilled } = fillTemplate(context.handoverTemplate, {
     issue: number,
     pr: pull.number,

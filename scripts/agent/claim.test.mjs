@@ -365,12 +365,12 @@ test('AC3: a body without a footer gets one appended, and an unreadable previous
   assert.match(bodyOf(calls, POST_PR_COMMENT).body, /previous session unknown\./);
 });
 
-test('AC3: a last-line footer without a --- break gets the break, so the footer parsers accept it', async () => {
+test('AC3: an Agent line without a --- break is not a footer, so the new footer is appended under a break', async () => {
   const unbroken = pullOf({ created_at: '2026-11-20T05:00:00Z', body: 'Closes #7\nAgent: a/b · session old-1\n' });
   const { client, calls } = recordingClient({ ...takeoverRoutes, [ISSUE_PULLS]: ok([unbroken]), [PR_COMMENTS]: ok([]) });
   await run(client);
-  assert.equal(bodyOf(calls, PATCH_PULL).body, `Closes #7\n\n${FOOTER}\n`);
-  assert.match(bodyOf(calls, POST_PR_COMMENT).body, /previous session old-1\./);
+  assert.equal(bodyOf(calls, PATCH_PULL).body, `Closes #7\nAgent: a/b · session old-1\n\n${FOOTER}\n`);
+  assert.match(bodyOf(calls, POST_PR_COMMENT).body, /previous session unknown\./);
 });
 
 test('a needs-decision label on the issue blocks takeover of an expired draft', async () => {

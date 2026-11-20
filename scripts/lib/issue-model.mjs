@@ -1,5 +1,5 @@
 import { GitHubError, apiPath } from './github.mjs';
-import { criterionIds, hasMarker, parseSections } from './markdown.mjs';
+import { criterionIds, findFooterBreak, hasMarker, parseSections } from './markdown.mjs';
 import { normalizeLabel, sameLogin, validLabels } from './trust.mjs';
 
 /** @typedef {'Epic'|'Feature'|'Bug'|'Chore'|'Spike'} IssueType */
@@ -115,6 +115,7 @@ const hasLabel = (labels, name) => labels.some((label) => normalizeLabel(label) 
 
 const SESSION_ID = /^[A-Za-z0-9._-]+$/;
 const AGENT_ID = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const FOOTER_LINE = /^Agent: (\S+) · session (\S+)$/;
 const CLAIM_COMMIT = /^chore\(claim\): #(\d+)( takeover)? \[session ([A-Za-z0-9._-]+)\]$/;
 
 /**
@@ -134,6 +135,22 @@ export function isValidSessionId(session) {
  */
 export function isValidAgent(agent) {
   return AGENT_ID.test(String(agent ?? ''));
+}
+
+/**
+ * The `Agent: <agent> · session <session>` line under the PR footer break (the last `---`, followed only by
+ * blank lines, groundwork markers and that line). Null without a break or when the agent is not `<model>/<harness>`.
+ * @param {string|null|undefined} body
+ * @returns {{ agent: string, session: string } | null}
+ */
+export function parseFooter(body) {
+  const lines = String(body ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const breakIndex = findFooterBreak(lines);
+  if (breakIndex === -1) return null;
+  const agentLine = lines.slice(breakIndex + 1).find((line) => line.trim() !== '' && !line.trim().startsWith('<!--'));
+  const match = FOOTER_LINE.exec(agentLine.trim());
+  if (match === null || !isValidAgent(match[1])) return null;
+  return { agent: match[1], session: match[2] };
 }
 
 /**
