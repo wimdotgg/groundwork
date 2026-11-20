@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.0](https://github.com/wimdotgg/groundwork/compare/v0.2.0...v0.3.0) (2026-11-20)
+
+
+### Features
+
+* **agent:** add checkpoint hooks, permission rules and worker skill ([#112](https://github.com/wimdotgg/groundwork/issues/112)) ([ab94fba](https://github.com/wimdotgg/groundwork/commit/ab94fbaa60c6ba09905f1017b5294e54f89b9086))
+* **agent:** add checkpoint.mjs to push, rewrite State and post the journal ([#105](https://github.com/wimdotgg/groundwork/issues/105)) ([addac33](https://github.com/wimdotgg/groundwork/commit/addac335491b01ea1eee9298d8f1a95b460a8142))
+* **agent:** add claim.mjs for fresh claims ([#104](https://github.com/wimdotgg/groundwork/issues/104)) ([23692fe](https://github.com/wimdotgg/groundwork/commit/23692fefa0e668a56467bf4a4543897fcc484996))
+* **agent:** add release.mjs for decision release and handover ([#107](https://github.com/wimdotgg/groundwork/issues/107)) ([0f849fa](https://github.com/wimdotgg/groundwork/commit/0f849fa1ca5e977f4d6fa05587c900fa27ed4a51))
+* **agent:** add resume briefing script ([#108](https://github.com/wimdotgg/groundwork/issues/108)) ([dd2da9e](https://github.com/wimdotgg/groundwork/commit/dd2da9e8ca865885479e516f7b22bf0b1a175c00))
+* **agent:** fix the agent comment and CLI contract ([#101](https://github.com/wimdotgg/groundwork/issues/101)) ([4f988b2](https://github.com/wimdotgg/groundwork/commit/4f988b222fb2ec5e5af41cc3b694d252eab4b3c3))
+* **agent:** rank ready tasks and takeover candidates in next.mjs ([#106](https://github.com/wimdotgg/groundwork/issues/106)) ([f580341](https://github.com/wimdotgg/groundwork/commit/f580341d36752fc269ae5996830f675d02f524ff))
+* **agent:** skip tasks whose hotspot an open PR holds in next.mjs ([#114](https://github.com/wimdotgg/groundwork/issues/114)) ([98ef95a](https://github.com/wimdotgg/groundwork/commit/98ef95a104be2fe0c11cbaf40171fcdf14afc063))
+* **agent:** take over expired or released claims in claim.mjs ([#118](https://github.com/wimdotgg/groundwork/issues/118)) ([2e18485](https://github.com/wimdotgg/groundwork/commit/2e1848536dbf892fff5f14adbefd80478b15fd30))
+
+
+### Bug Fixes
+
+* **ci:** print settings-plan section status to the job log ([#113](https://github.com/wimdotgg/groundwork/issues/113)) ([8d20fe2](https://github.com/wimdotgg/groundwork/commit/8d20fe29ed70d6ca99cf6a206b6b4b9d46fe5026))
+* **ci:** read automatic_base_change_succeeded from issue events ([#116](https://github.com/wimdotgg/groundwork/issues/116)) ([f3c852e](https://github.com/wimdotgg/groundwork/commit/f3c852ec227e3687742466f88b7d98111cbf325c))
+* **ci:** record that settings-plan cannot read environments ([#119](https://github.com/wimdotgg/groundwork/issues/119)) ([56cc7b7](https://github.com/wimdotgg/groundwork/commit/56cc7b7847996f7915fbfdbca7568a0530d9ed32))
+
 ## [0.2.0](https://github.com/wimdotgg/groundwork/compare/v0.1.0...v0.2.0) (2026-11-20)
 
 
