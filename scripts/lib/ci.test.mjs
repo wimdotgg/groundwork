@@ -145,6 +145,16 @@ test('summary is appended to the file, or written to stdout when GITHUB_STEP_SUM
   });
 });
 
+test('result.log lines go to stdout even when the summary goes to the file', async () => {
+  await withFixture(async (fixture) => {
+    let printed = '';
+    const outcome = result('pass', { log: ['demo: a readable', 'demo: b unreadable (HTTP 403)'] });
+    await run(validatorReturning(outcome), fixture, { stdout: (value) => { printed += value; } });
+    assert.equal(printed, 'demo: a readable\ndemo: b unreadable (HTTP 403)\n');
+    assert.doesNotMatch(await readFile(fixture.summaryPath, 'utf8'), /unreadable \(HTTP/);
+  });
+});
+
 test('payload comes from argv[2] first, else GITHUB_EVENT_PATH', async () => {
   await withFixture(async (fixture) => {
     const payloads = [];

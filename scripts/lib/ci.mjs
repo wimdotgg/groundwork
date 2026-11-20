@@ -14,7 +14,7 @@ import { sameLogin } from './trust.mjs';
  *   | { kind: 'upsert-comment', number: number, marker: string, body: string }
  *   | { kind: 'create-issue', title: string, body: string }
  *   | { kind: 'close-issue', number: number, comment: string }} Action */
-/** @typedef {{ conclusion: 'pass'|'fail'|'skip', errors: string[], warnings: string[], details: string, actions: Action[] }} ValidatorResult */
+/** @typedef {{ conclusion: 'pass'|'fail'|'skip', errors: string[], warnings: string[], details: string, actions: Action[], log?: string[] }} ValidatorResult   log: optional lines printed to stdout, so they reach the job log */
 
 const EXIT_OK = 0;
 const EXIT_FAIL = 1;
@@ -164,6 +164,8 @@ export async function runValidator(validator, options) {
     outcome.exitCode = EXIT_ERROR;
   }
   if (setExitCode) process.exitCode = outcome.exitCode;
+  const logLines = outcome.result?.log ?? [];
+  if (logLines.length > 0 && env.GITHUB_STEP_SUMMARY) stdout(`${logLines.join('\n')}\n`);
   try {
     if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
     else stdout(`${summary}\n`);
