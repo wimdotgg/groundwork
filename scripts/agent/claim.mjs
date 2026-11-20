@@ -23,6 +23,7 @@ const CREATED = 201;
 const OK = 200;
 const NEEDS_DECISION_LABEL = 'needs-decision';
 const UNKNOWN_SESSION = 'unknown';
+const MS_PER_MINUTE = 60_000;
 const REPO_PATH = '/repos/{owner}/{repo}';
 const FOOTER_SESSION = /^Agent: \S+ · session (\S+)$/;
 const OWNED_PLACEHOLDERS = [
@@ -156,19 +157,18 @@ async function postComment({ client, repo }, issueNumber, body) {
 const formatFooter = (agent, session) => `Agent: ${agent} · session ${session}`;
 const labelNames = (pull) => (pull.labels ?? []).map((label) => (typeof label === 'string' ? label : label?.name));
 
-/** Moves the footer to the new session and keeps it the last line; a body without a footer gets one appended. */
+/** Puts the new footer last, under a `---` break, which the footer parsers need; a body without a footer gets both appended. */
 function rewriteFooter(body, agent, session) {
-  const footer = formatFooter(agent, session);
-  const text = String(body ?? '').trimEnd();
-  if (footerSession(text) === null) return `${text}\n\n---\n${footer}\n`;
-  const lines = text.split(/\r?\n/);
-  lines[lines.length - 1] = footer;
-  return `${lines.join('\n')}\n`;
+  const lines = String(body ?? '').trimEnd().split(/\r?\n/);
+  if (footerSession(body) !== null) lines.pop();
+  while (lines.length > 0 && lines.at(-1).trim() === '') lines.pop();
+  if (lines.at(-1)?.trim() !== '---') lines.push('', '---');
+  return `${[...lines, formatFooter(agent, session)].join('\n')}\n`;
 }
 
 /** A takeover candidate is a draft with an expired lease or the released marker, and no needs-decision label (6.4). */
-async function isTakeoverCandidate({ client, repo, config, now }, pull) {
-  if (pull.draft !== true || labelNames(pull).includes(NEEDS_DECISION_LABEL)) return false;
+async function isTakeoverCandidate({ client, repo, config, now }, pull, issue) {
+  if (pull.draft !== true || [pull, issue].some((item) => labelNames(item).includes(NEEDS_DECISION_LABEL))) return false;
   const comments = await client.paginate(apiPath(`${REPO_PATH}/issues/{issueNumber}/comments`, repoParams(repo, { issueNumber: pull.number })));
   const agentTimes = comments
     .filter((comment) => sameLogin(comment.user?.login, config.accounts.agent))
@@ -181,14 +181,25 @@ async function isTakeoverCandidate({ client, repo, config, now }, pull) {
 }
 
 /**
+ * Another session's takeover commit still inside the claim window means its winner has not posted the takeover
+ * comment yet, so the lease is not restarted and a second takeover would stack on the first. The commit date is
+ * stamped by GitHub; a missing date counts as recent.
+ */
+function isRecentForeignTakeover({ config, now, number, session }, headCommit) {
+  const claim = parseClaimCommit(headCommit.message ?? '');
+  if (claim?.kind !== 'takeover' || claim.number !== number || claim.session === session) return false;
+  const ageMinutes = (new Date(now).getTime() - new Date(headCommit.committer?.date).getTime()) / MS_PER_MINUTE;
+  return !Number.isFinite(ageMinutes) || ageMinutes < config.limits.claimWithoutPrMinutes;
+}
+
+/**
  * The compare-and-swap: a takeover commit on the observed head, then a plain fast-forward ref update.
  * A moved head makes the update non-fast-forward, which GitHub rejects; the loser moves on.
  * @returns {Promise<boolean>} true when this call moved the ref
  */
-async function moveRefToTakeover({ client, repo, number, session }, headSha) {
-  const headCommit = await client.request('GET', apiPath(`${REPO_PATH}/git/commits/{headSha}`, repoParams(repo, { headSha })));
+async function moveRefToTakeover({ client, repo, number, session }, headSha, treeSha) {
   const commit = await client.request('POST', apiPath(`${REPO_PATH}/git/commits`, repoParams(repo)), {
-    body: { message: claimCommitMessage({ number, session, kind: 'takeover' }), tree: headCommit.data.tree.sha, parents: [headSha] },
+    body: { message: claimCommitMessage({ number, session, kind: 'takeover' }), tree: treeSha, parents: [headSha] },
   });
   try {
     const ref = await client.request('PATCH', apiPath(`${REPO_PATH}/git/refs/heads/issue/{number}`, repoParams(repo, { number })), {
@@ -203,18 +214,22 @@ async function moveRefToTakeover({ client, repo, number, session }, headSha) {
 }
 
 /**
- * Takeover per 6.4. The PR body is rewritten before the comment, because the comment restarts the lease.
+ * Takeover per 6.4. The PR body is rewritten before the comment: the comment restarts the lease, so a comment
+ * first and then a crash would leave the PR under the old footer for 4 hours, owned by nobody.
  * @returns {Promise<ClaimOutcome>}
  */
-async function takeOver(context, branchSha, pull) {
+async function takeOver(context, branchSha, pull, issue) {
   const { client, repo, number, session, agent, templates } = context;
   const held = { exitCode: EXIT_HELD, reason: `${issueBranch(number)} is held by another session` };
-  if (!await isTakeoverCandidate(context, pull)) return held;
+  if (!await isTakeoverCandidate(context, pull, issue)) return held;
+  const headCommit = (await client.request('GET', apiPath(`${REPO_PATH}/git/commits/{branchSha}`, repoParams(repo, { branchSha })))).data;
+  if (isRecentForeignTakeover(context, headCommit)) return held;
+  const strippedBody = removeMarker(pull.body ?? '', 'released');
   const takeoverComment = renderComment(templates, 'PR takeover', {
-    issue: number, session, 'previous session': footerSession(pull.body) ?? UNKNOWN_SESSION,
+    issue: number, session, 'previous session': footerSession(strippedBody) ?? UNKNOWN_SESSION,
   });
-  if (!await moveRefToTakeover(context, branchSha)) return held;
-  const body = rewriteFooter(removeMarker(pull.body ?? '', 'released'), agent, session);
+  if (!await moveRefToTakeover(context, branchSha, headCommit.tree.sha)) return held;
+  const body = rewriteFooter(strippedBody, agent, session);
   await client.request('PATCH', apiPath(`${REPO_PATH}/pulls/{pullNumber}`, repoParams(repo, { pullNumber: pull.number })), { body: { body } });
   await postComment(context, pull.number, takeoverComment);
   return { exitCode: EXIT_CLAIMED, pr: pull.number, mode: 'takeover' };
@@ -277,7 +292,7 @@ export async function runClaim(context) {
   const branch = await readBranch(context);
   const openPull = branch.exists ? await findOpenPull(context) : null;
   if (branch.exists && !await branchBelongsToSession(context, branch.sha, openPull)) {
-    if (openPull) return takeOver(context, branch.sha, openPull);
+    if (openPull) return takeOver(context, branch.sha, openPull, issue);
     return { exitCode: EXIT_HELD, reason: `${issueBranch(number)} is held by another session` };
   }
   if (!branch.exists && !await createClaimRef(context)) {

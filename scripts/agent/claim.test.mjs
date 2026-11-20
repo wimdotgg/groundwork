@@ -9,7 +9,7 @@ const REPO = { owner: 'o', repo: 'r' };
 const SESSION = 'w85-a1';
 const AGENT = 'sonnet/claude-code';
 const AGENT_LOGIN = 'wimdotgg-agent[bot]';
-const CONFIG = { accounts: { agent: AGENT_LOGIN }, limits: { tasksPerWorker: 1, draftLeaseMinutes: 240 } };
+const CONFIG = { accounts: { agent: AGENT_LOGIN }, limits: { tasksPerWorker: 1, draftLeaseMinutes: 240, claimWithoutPrMinutes: 15 } };
 const NOW = new Date('2026-11-20T10:05:30Z');
 const templates = {
   claimComment: await readFile(new URL('../../.github/groundwork/templates/claim-comment.md', import.meta.url), 'utf8'),
@@ -269,6 +269,7 @@ test('the limit comes from config.limits.tasksPerWorker', async () => {
 
 const PATCH_REF = 'PATCH /repos/o/r/git/refs/heads/issue/7';
 const PATCH_PULL = 'PATCH /repos/o/r/pulls/12';
+const HEAD_COMMIT = 'GET /repos/o/r/git/commits/head-sha';
 const OLD_FOOTER = '---\nAgent: a/b · session old-1';
 const STALE_PULL = pullOf({ created_at: '2026-11-20T05:00:00Z', body: `body\n\n${OLD_FOOTER}\n` });
 const mutationKeys = (calls) => calls.filter((call) => !call.key.startsWith('GET ')).map((call) => call.key);
@@ -279,7 +280,7 @@ const takeoverRoutes = {
   [REF]: ok({ object: { sha: 'head-sha' } }),
   [ISSUE_PULLS]: ok([STALE_PULL]),
   [PR_COMMENTS]: ok([{ user: { login: AGENT_LOGIN }, created_at: '2026-11-20T05:10:00Z', body: 'Claim: #7, session old-1.' }]),
-  'GET /repos/o/r/git/commits/head-sha': ok({ tree: { sha: 'head-tree' } }),
+  [HEAD_COMMIT]: ok({ tree: { sha: 'head-tree' }, message: 'feat: work', committer: { date: '2026-11-20T08:00:00Z' } }),
   [POST_COMMIT]: ok({ sha: 'takeover-sha' }, 201),
   [PATCH_REF]: ok({}, 200),
   [PATCH_PULL]: ok({}, 200),
@@ -362,6 +363,39 @@ test('AC3: a body without a footer gets one appended, and an unreadable previous
   await run(client);
   assert.equal(bodyOf(calls, PATCH_PULL).body, `Closes #7\n\n${FOOTER}\n`);
   assert.match(bodyOf(calls, POST_PR_COMMENT).body, /previous session unknown\./);
+});
+
+test('AC3: a last-line footer without a --- break gets the break, so the footer parsers accept it', async () => {
+  const unbroken = pullOf({ created_at: '2026-11-20T05:00:00Z', body: 'Closes #7\nAgent: a/b · session old-1\n' });
+  const { client, calls } = recordingClient({ ...takeoverRoutes, [ISSUE_PULLS]: ok([unbroken]), [PR_COMMENTS]: ok([]) });
+  await run(client);
+  assert.equal(bodyOf(calls, PATCH_PULL).body, `Closes #7\n\n${FOOTER}\n`);
+  assert.match(bodyOf(calls, POST_PR_COMMENT).body, /previous session old-1\./);
+});
+
+test('a needs-decision label on the issue blocks takeover of an expired draft', async () => {
+  const labelled = { number: 7, title: 'Build the thing', type: { name: 'Feature' }, labels: [{ name: 'needs-decision' }] };
+  const { client, calls } = recordingClient({ ...takeoverRoutes, 'GET /repos/o/r/issues/7': ok(labelled) });
+  assert.equal((await run(client)).exitCode, EXIT_HELD);
+  assert.deepEqual(mutationKeys(calls), []);
+});
+
+test('a head that is another session\'s takeover commit decides takeover by its age (2 minutes held, 20 minutes taken over)', async () => {
+  const takeoverHead = (date, session = 'rival-1') => ok({
+    tree: { sha: 'head-tree' }, message: `chore(claim): #7 takeover [session ${session}]`, committer: { date },
+  });
+  const cases = [
+    ['2026-11-20T10:03:30Z', 'rival-1', EXIT_HELD],
+    ['2026-11-20T09:45:30Z', 'rival-1', EXIT_CLAIMED],
+    ['2026-11-20T10:03:30Z', SESSION, EXIT_CLAIMED],
+  ];
+  for (const [date, session, expected] of cases) {
+    const { client, calls } = recordingClient({ ...takeoverRoutes, [HEAD_COMMIT]: takeoverHead(date, session) });
+    assert.equal((await run(client)).exitCode, expected, `${date} ${session}`);
+    if (expected === EXIT_HELD) assert.deepEqual(mutationKeys(calls), []);
+  }
+  const undated = recordingClient({ ...takeoverRoutes, [HEAD_COMMIT]: ok({ tree: { sha: 't' }, message: 'chore(claim): #7 takeover [session rival-1]' }) });
+  assert.equal((await run(undated.client)).exitCode, EXIT_HELD, 'a missing date counts as recent');
 });
 
 test('AC4: no request in the takeover path sends force true, and the ref update sends force false', async () => {
