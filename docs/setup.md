@@ -78,7 +78,7 @@ In https://github.com/wimdotgg/groundwork/settings/environments, create `admin`:
    - `RELEASE_APP_KEY`: full contents of the release App `.pem`.
 5. Environment variables:
    - `ADMIN_APP_CLIENT_ID`: `Iv23lipUuaiDCWGAKcYI`.
-   - `RELEASE_APP_CLIENT_ID`: the release App client ID.
+   - `RELEASE_APP_CLIENT_ID`: the release App ID (5796650). The client ID works too, because the App JWT accepts either as issuer.
 
 Verify: the environment page shows one reviewer, one branch rule, two secrets and two variables. Delete the `.pem` files from disk once stored.
 
