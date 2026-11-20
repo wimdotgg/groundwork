@@ -64,6 +64,7 @@ Why not a machine user: GitHub flagged `wianvdm-agent` as spam and hid its conte
 ### 2.3 `wimdotgg-release` App
 
 Repository permissions: Contents RW, Pull requests RW, Issues RW, Metadata R. It is the only actor allowed to create `v*` tags (ruleset bypass). release-please uses it so that release PRs trigger CI (PRs opened by `GITHUB_TOKEN` do not). The ruleset bypass entry needs the numeric App ID (not the client ID or installation ID); bootstrap resolves it with `GET /apps/{slug}`.
+The `RELEASE_APP_CLIENT_ID` variable may hold either the App ID or the client ID: `actions/create-github-app-token` signs the App JWT with it as issuer, and GitHub accepts both. The live variable holds the App ID (5796650).
 `release-please.yml` mints its token with `actions/create-github-app-token` v3.3.0 (commit `64ab729a6294000f5aa4a4bc0b73d1f32bc45510`; `app-id` is deprecated there): inputs `client-id`, `private-key`, `permission-contents: write`, `permission-pull-requests: write`, `permission-issues: write`. With `owner` and `repositories` unset the token covers only the current repository.
 
 ### 2.4 `wimdotgg-admin` App
@@ -669,7 +670,7 @@ Server-side backing for D17: nobody, including you, can force-push or otherwise 
 
 | Environment | Repos | Reviewers | `prevent_self_review` | `can_admins_bypass` | Deployment refs | Secrets and variables |
 |---|---|---|---|---|---|---|
-| `release` | all | none | false | true (API default) | branch `main` | secret `RELEASE_APP_KEY`; var `RELEASE_APP_CLIENT_ID` |
+| `release` | all | none | false | true (API default) | branch `main` | secret `RELEASE_APP_KEY`; var `RELEASE_APP_CLIENT_ID` (App ID or client ID) |
 | `production` | projects | `wianvdm` | false | false | tag `v*` | project deploy secrets (none with `"deploy": "none"`) |
 | `admin` | `groundwork` only | `wianvdm` | false | false | branch `main` | secrets `ADMIN_APP_KEY`, `RELEASE_APP_KEY`; vars `ADMIN_APP_CLIENT_ID`, `RELEASE_APP_CLIENT_ID` |
 
@@ -742,7 +743,7 @@ Jobs:
 |---|---|---|---|
 | `bootstrap` | step 1: `groundwork` (fallback: installation-wide for the generate call only, revoked at once; 2.4); step 2: `target_repo` | step 1: Administration write, Contents read. Step 2: Administration, Contents, Workflows, Environments, Variables, Issues write; Members, Actions read | 14.2 pass 1, then `check` |
 | `bootstrap-pass2` | `target_repo` | Administration, Variables write; Contents, Environments, Actions, Issues, Members read | 14.2 step 4, then `check` |
-| `apply-settings` | `target_repo` | Administration, Environments, Variables, Issues write; Contents, Members, Actions read | Syncs `settings.json`, `labels.json`, environments and rulesets from `ref`, then `check`. On `groundwork` it also writes the `release` environment. On every target it writes the `release` environment secret `RELEASE_APP_KEY` and variable `RELEASE_APP_CLIENT_ID`, and deletes live repository-level rulesets the settings do not declare. Refuses before any write when no `main` ruleset is desired, or when the desired `main` lacks `code_scanning` while pass 2 has run or its state is unreadable. |
+| `apply-settings` | `target_repo` | Administration, Environments, Variables, Issues write; Contents, Members, Actions read | Syncs `settings.json`, `labels.json`, environments and rulesets from `ref`, then `check`. On every target, `groundwork` included, it writes the `release` environment secret `RELEASE_APP_KEY` and variable `RELEASE_APP_CLIENT_ID`, and deletes live repository-level rulesets the settings do not declare. Refuses before any write when no `main` ruleset is desired, or when the desired `main` lacks `code_scanning` while pass 2 has run or its state is unreadable. |
 | `check` | `target_repo` | Administration, Contents, Environments, Variables, Actions, Issues, Members read | Read-only comparison (section 13); stays a standalone op for drift checks |
 | `create-issue-types` | none (org) | Issue types write | Creates the five types, renames case variants, deletes only GitHub default types (Task); other types outside the five are left alone and fail the run for the owner to review; idempotent. Permission key `issue_types` (V7: the GitHub API names it in the `X-Accepted-GitHub-Permissions` header; mint body still to confirm live) |
 | `script` | `target_repo` | the script's exported `permissions` | Runs `admin-ops/<name>.mjs` |
@@ -1163,6 +1164,10 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-20: release App variable and apply-settings (#77)
+
+2.3, 10.1: `RELEASE_APP_CLIENT_ID` may hold the App ID or the client ID; the live variable holds the App ID. Changing it is owner-only and both work, so the spec follows live. 12.1: the `apply-settings` row states once that every target, `groundwork` included, gets the `release` environment.
 
 ### 2026-11-20: Phase 3a contract (#82)
 
