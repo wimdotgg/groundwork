@@ -33,7 +33,7 @@
       "eventName": "issues",
       "number": 7,
       "label": "accepted",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -58,7 +58,7 @@
       "eventName": "issues",
       "number": 9,
       "label": "priority:p1",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -111,7 +111,7 @@
       "eventName": "pull_request_target",
       "number": 12,
       "label": "dependencies",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -150,7 +150,7 @@
       "eventName": "pull_request_target",
       "number": 13,
       "label": "automated",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -175,7 +175,7 @@
       "eventName": "pull_request_target",
       "number": 14,
       "label": "size-exception",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -200,7 +200,7 @@
       "eventName": "issues",
       "number": 7,
       "label": "bug",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -234,7 +234,7 @@
         "name": "accepted"
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -257,7 +257,7 @@
         "name": "accepted"
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -280,7 +280,7 @@
         "name": "accepted"
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -346,7 +346,7 @@
       "eventName": "issues",
       "number": 15,
       "label": "no-issue",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -385,7 +385,7 @@
       "eventName": "issues",
       "number": 16,
       "label": "integrity-exception",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -424,7 +424,7 @@
       "eventName": "issues",
       "number": 7,
       "label": "Accepted",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -449,7 +449,7 @@
       "eventName": "issues",
       "number": 7,
       "label": "priority",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -463,7 +463,7 @@
       "eventName": "issues",
       "number": 7,
       "label": "priority:`p1",
-      "sender": "wianvdm-agent"
+      "sender": "wimdotgg-agent[bot]"
     },
     "expected": {
       "conclusion": "pass",
@@ -509,7 +509,7 @@
         "number": 7
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -528,7 +528,7 @@
         "name": "accepted"
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -546,7 +546,7 @@
         "name": "accepted"
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -617,7 +617,7 @@
         ]
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -653,7 +653,7 @@
         ]
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -697,7 +697,7 @@
         ]
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},
@@ -728,7 +728,7 @@
         "labels": []
       },
       "sender": {
-        "login": "wianvdm-agent"
+        "login": "wimdotgg-agent[bot]"
       }
     },
     "env": {},

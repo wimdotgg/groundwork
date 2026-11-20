@@ -7,9 +7,7 @@ import { collect, dependabotUpdateType, evaluate } from './pr-metadata.mjs';
 
 const root = repoRoot(import.meta.url);
 const cases = JSON.parse(await readFile(new URL('./fixtures/pr-metadata.json', import.meta.url), 'utf8'));
-const loadedConfig = await loadConfig({ root });
-// Fixtures predate the App identity and name the old agent login as author.
-const config = { ...loadedConfig, accounts: { ...loadedConfig.accounts, agent: 'wianvdm-agent' } };
+const config = await loadConfig({ root });
 const REPO = { owner: 'wimdotgg', repo: 'groundwork' };
 
 async function factsFor(testCase) {
