@@ -93,6 +93,10 @@
         "rulesets": {
           "readable": true,
           "value": []
+        },
+        "environments": {
+          "readable": false,
+          "status": 403
         }
       },
       "signals": {
@@ -111,6 +115,12 @@
       "detailsInclude": [
         "| repository | has_issues | true | true | match |",
         "| repository | has_wiki | false | true | differ |"
+      ],
+      "log": [
+        "settings-plan: repository readable",
+        "settings-plan: labels readable",
+        "settings-plan: rulesets readable",
+        "settings-plan: environments unreadable (HTTP 403)"
       ]
     }
   },
