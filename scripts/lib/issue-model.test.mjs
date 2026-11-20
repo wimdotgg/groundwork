@@ -6,10 +6,14 @@ import {
   ISSUE_TYPES,
   REQUIRED_HEADINGS,
   TITLE_TYPES,
+  claimCommitMessage,
   deriveStatus,
+  isValidAgent,
+  isValidSessionId,
   isHotfixLane,
   leaseState,
   loadIssueFacts,
+  parseClaimCommit,
   parseConventionalTitle,
   validateIssueBody,
 } from './issue-model.mjs';
@@ -593,4 +597,42 @@ test('loadIssueFacts: a non-404 error propagates as GitHubError', async () => {
     load({ [`GET ${REPO}/issues/5/parent`]: { status: 403, data: {}, headers: {} } }),
     (error) => error instanceof GitHubError && error.status === 403,
   );
+});
+
+test('claimCommitMessage and parseClaimCommit round-trip both kinds', () => {
+  const claim = { number: 82, session: 'w82-a1', kind: 'claim' };
+  assert.equal(claimCommitMessage(claim), 'chore(claim): #82 [session w82-a1]');
+  assert.deepEqual(parseClaimCommit(claimCommitMessage(claim)), claim);
+  const takeover = { ...claim, kind: 'takeover' };
+  assert.equal(claimCommitMessage(takeover), 'chore(claim): #82 takeover [session w82-a1]');
+  assert.deepEqual(parseClaimCommit(claimCommitMessage(takeover)), takeover);
+  assert.equal(claimCommitMessage({ number: 1, session: 's' }), 'chore(claim): #1 [session s]');
+});
+
+test('parseClaimCommit reads the subject only and rejects other shapes', () => {
+  assert.equal(parseClaimCommit('chore(claim): #5 [session s-1]\r\n\nbody').number, 5);
+  for (const message of ['', 'feat: work', 'chore(claim): #5 [session ]', 'chore(claim): #5 [session a b]',
+    'chore(claim): #5 [session s-1] extra', 'chore(claim): #5 handover [session s-1]']) {
+    assert.equal(parseClaimCommit(message), null, message);
+  }
+});
+
+test('isValidSessionId accepts letters, digits, dot, underscore and hyphen only', () => {
+  for (const id of ['a1b2', 'w82-a1', 'A.b_c']) assert.equal(isValidSessionId(id), true, id);
+  for (const id of ['', 'a b', 'a]b', 'a·b', 'a(b)', undefined]) assert.equal(isValidSessionId(id), false, String(id));
+});
+
+test('isValidAgent accepts model/harness and rejects header-breaking characters', () => {
+  for (const id of ['sonnet/claude-code', 'gpt-5.1/cli']) assert.equal(isValidAgent(id), true, id);
+  for (const id of ['', 'codex', '/', 'a/', '/b', 'a/b/c', 'a b/c', 'a(b)/c', 'a·b/c', 'a/b)', undefined]) assert.equal(isValidAgent(id), false, String(id));
+});
+
+test('loadIssueFacts: a takeover commit head sets claimCommitAt', async () => {
+  const facts = await load({
+    [`GET ${REPO}/git/ref/heads/issue/5`]: found({ object: { sha: 'abc123' } }),
+    [`GET ${REPO}/git/commits/abc123`]: found({
+      message: 'chore(claim): #5 takeover [session s-2]', committer: { date: '2026-01-01T11:00:00Z' },
+    }),
+  });
+  assert.equal(facts.claimCommitAt, '2026-01-01T11:00:00Z');
 });

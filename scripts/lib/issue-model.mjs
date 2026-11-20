@@ -13,7 +13,7 @@ import { normalizeLabel, sameLogin, validLabels } from './trust.mjs';
  *   branch: { exists: boolean, sha: string|null }, claimCommentAt: string|null, claimCommitAt: string|null, pr: PullFacts|null }} IssueFacts
  *   ancestors are nearest first.
  *   claimCommentAt: server created_at of the newest issue comment by the agent account carrying marker `claim` (6.3)
- *   claimCommitAt: committer date of the ref head when its message matches the claim commit format `chore(claim): #N [session <id>]`, else null */
+ *   claimCommitAt: committer date of the ref head when `parseClaimCommit` accepts its message for this issue (claim or takeover commit), else null */
 
 export const ISSUE_TYPES = ['Epic', 'Feature', 'Bug', 'Chore', 'Spike'];
 
@@ -112,6 +112,52 @@ export function validateIssueBody({ type, body }) {
 }
 
 const hasLabel = (labels, name) => labels.some((label) => normalizeLabel(label) === normalizeLabel(name));
+
+const SESSION_ID = /^[A-Za-z0-9._-]+$/;
+const AGENT_ID = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const CLAIM_COMMIT = /^chore\(claim\): #(\d+)( takeover)? \[session ([A-Za-z0-9._-]+)\]$/;
+
+/**
+ * Session ids appear in commit subjects, State headers (split on `·`, parenthesised) and PR footers.
+ * @param {string} session
+ * @returns {boolean}
+ */
+export function isValidSessionId(session) {
+  return SESSION_ID.test(String(session ?? ''));
+}
+
+/**
+ * Exactly `<model>/<harness>`, as written in the State header and the PR footer: two segments of session id
+ * characters joined by one `/`, so it cannot break the header's parenthesised, `·` separated group.
+ * @param {string} agent
+ * @returns {boolean}
+ */
+export function isValidAgent(agent) {
+  return AGENT_ID.test(String(agent ?? ''));
+}
+
+/**
+ * Subject of the empty commit that claims a task (6.3) or takes it over (6.4). `session` must
+ * pass `isValidSessionId`; the message is the whole commit message, with no body.
+ * @param {{ number: number, session: string, kind?: 'claim'|'takeover' }} claim
+ * @returns {string}
+ */
+export function claimCommitMessage({ number, session, kind = 'claim' }) {
+  const takeover = kind === 'takeover' ? ' takeover' : '';
+  return `chore(claim): #${number}${takeover} [session ${session}]`;
+}
+
+/**
+ * Inverse of `claimCommitMessage`. Only the first line is read, so a body is allowed.
+ * @param {string} message
+ * @returns {{ number: number, session: string, kind: 'claim'|'takeover' }|null}
+ */
+export function parseClaimCommit(message) {
+  const subject = String(message ?? '').split(/\r?\n/)[0];
+  const match = CLAIM_COMMIT.exec(subject);
+  if (!match) return null;
+  return { number: Number(match[1]), session: match[3], kind: match[2] ? 'takeover' : 'claim' };
+}
 
 /**
  * Bug, no parent, valid `priority:p0`.
@@ -251,9 +297,8 @@ async function loadBranch(client, repoRef, number) {
 
 async function loadClaimCommitAt(client, repoRef, number, sha) {
   const response = await client.request('GET', apiPath(`${REPO_PATH}/git/commits/{sha}`, { ...repoRef, sha }));
-  const subject = String(response.data.message ?? '').split(/\r?\n/)[0];
-  const isClaimCommit = new RegExp(`^chore\\(claim\\): #${number} \\[session [^\\]\\s]+\\]$`).test(subject);
-  return isClaimCommit ? response.data.committer?.date ?? null : null;
+  const claim = parseClaimCommit(response.data.message);
+  return claim?.number === number ? response.data.committer?.date ?? null : null;
 }
 
 async function isInMergeQueue(client, { owner, repo }, number) {
