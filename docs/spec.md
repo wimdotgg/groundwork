@@ -401,7 +401,7 @@ Raised when: 3 review rounds without convergence; the same failure 3 times; work
 **Body (`pull_request_template.md`)**
 
 ```
-Closes #N
+Closes #<issue>
 
 ## Summary
 - Problem:
@@ -422,14 +422,21 @@ Closes #N
 - Risk: low | medium | high
 - Rollback:
 
-## State
-(see section 6.5 format)
+## State  (checkpoint <checkpoint> · <time> · <agent> · session <session>)
+Done:        <done>
+In progress: <in progress>
+Next:        <next>
+Proven:      <proven>
+Unproven:    <unproven>
+Rejected:    <rejected>
+Gotchas:     <gotchas>
+Open:        <open>
 
 ## Review log
 - <finding>: fixed in <sha> | answered: <reason>
 
 ---
-Agent: <model>/<harness> · session <id>
+Agent: <agent> · session <session>
 ```
 
 Screenshots and evidence are attached in the PR, never committed.
@@ -782,18 +789,18 @@ Push probe (the agent identity is the one the rule must stop, so it runs on the 
 
 Agent script contract (the five scripts above; 3a lanes build against this text):
 
-- Session id: `--session <id>`, else env `GROUNDWORK_SESSION`, else exit 1 with `session id required`. `claim`, `checkpoint` and `release` need one; `resume` checks the PR footer only when one is given; `next` takes none. An id matches `[A-Za-z0-9._-]+` (`isValidSessionId`), because it sits in commit subjects, the State header and the PR footer. `claim` also needs the agent, `--agent <model>/<harness>` else env `GROUNDWORK_AGENT`, else exit 1; it must pass `isValidAgent` (the id characters plus `/`, never `(`, `)` or `·`, which would break the State header). `checkpoint` reads the agent from the PR footer.
+- Session id: `--session <id>`, else env `GROUNDWORK_SESSION`, else exit 1 with `session id required`. `claim`, `checkpoint` and `release` need one; `resume` checks the PR footer only when one is given; `next` takes none. An id matches `[A-Za-z0-9._-]+` (`isValidSessionId`), because it sits in commit subjects, the State header and the PR footer. `claim` also needs the agent, `--agent <model>/<harness>` else env `GROUNDWORK_AGENT`, else exit 1; it must pass `isValidAgent` (exactly one `/` with a non-empty id-character segment on each side, so no `(`, `)` or `·`, which would break the State header). `checkpoint` reads the agent from the PR footer.
 - Exit codes: 0 success, 1 error or refusal, 3 held by another session. Exit 3 comes from `claim` (the ref or task is held, or `issue/N` is not a takeover candidate), `resume`, `checkpoint` and `release --decision` (the PR footer names another session, so a revived worker stops before writing). Usage errors exit 1. A failure writes one line to stderr.
 - One task per worker (`tasksPerWorker`): `claim` refuses a session that already holds a draft PR with exit 1, not 3, because 3 means "try the next candidate" and no candidate can succeed. A rerun by the same session on the issue it already holds is exempt.
 - Authorship: a comment counts as ours only when it carries the marker and its author is the agent account (`sameLogin` with `config.accounts.agent`); a marker from anyone else is ignored by `claim`, `checkpoint`, `resume` and `release`.
 - `--json`: one JSON object on stdout, always with `ok`. On a non-zero exit it is `{ "ok": false, "reason": "<one line>" }`, plus the fields the row names. Without `--json`, stdout is for humans and has no format guarantee.
 - `next` success: `{ "ok": true, "next": { "kind": "takeover"|"fresh", "number": N, "pr": number|null, "epic": number|null, "title": "...", "reason": "..." }|null, "skipped": [{ "number": N, "code": "...", "reason": "..." }] }`. `next` is null for "nothing ready". `code` is a 4.4 status (`proposed`, `blocked`, `claimed`, `in-review`, `queued`, `needs-decision`, `orphaned`, `done`) or one of `needs-format`, `size` (missing or `size:L`), `untrusted-author`, `epic`, `hotspot`.
 - `claim` success: `{ "ok": true, "number": N, "mode": "claim"|"takeover", "branch": "issue/N", "pr": number }`; exit 3 adds `number`.
-- `checkpoint`: `--input <path>` (default `.artifacts/checkpoint.json`, git-ignored) holds `{ "fields": { "Done", "In progress", "Next", "Proven", "Unproven", "Rejected", "Gotchas", "Open" }, "journal": "<text>" }`, all eight fields non-empty. The script writes the header itself: next checkpoint number (`claim` writes the initial State as checkpoint 0), UTC `YYYY-MM-DD HH:MM`, the agent from the PR footer, the session. The header is filled from `state-section.md` and the journal from `checkpoint-comment.md` with `fillTemplate`. It refuses before any write when `unfilled` is not empty for the journal comment, when the rendered `## State` section (and only that section, so a journal saying `Map<string, number>` is fine) still has a `<...>` token, or when the State or journal exceeds `limits.stateLines` or `limits.journalLines`. It deletes the input file after the journal posts, so a hook runs `--auto` without repeating a journal. `--auto` always pushes `issue/N` without force (6.5: the branch is pushed even if red); without an input file it posts no journal and rewrites no State. Off a draft `issue/N` PR it does nothing. Success: `{ "ok": true, "number": N, "pr": number, "checkpoint": number }`; a no-op: `{ "ok": true, "skipped": "<reason>" }`.
+- `checkpoint`: `--input <path>` (default `.artifacts/checkpoint.json`, git-ignored) holds `{ "fields": { "Done", "In progress", "Next", "Proven", "Unproven", "Rejected", "Gotchas", "Open" }, "journal": "<text>" }`, all eight fields non-empty. The script writes the header itself: next checkpoint number (`claim` writes the initial State as checkpoint 0), UTC `YYYY-MM-DD HH:MM`, the agent from the PR footer, the session. The header is filled from `state-section.md` and the journal from `checkpoint-comment.md` with `fillTemplate`. It refuses before any write when `unfilled` is not empty for the journal comment, when the rendered `## State` section (and only that section, so a journal saying `Map<string, number>` is fine) still has a `<...>` token, or when the State or journal exceeds `limits.stateLines` or `limits.journalLines`. It deletes the input file after the journal posts, so a hook runs `--auto` without repeating a journal. `--auto` pushes `issue/N` without force (6.5: the branch is pushed even if red) only after the PR footer session check passes; on exit 3 it skips the push, so a revived worker cannot push onto a takeover winner's branch. Without an input file it posts no journal and rewrites no State. Off a draft `issue/N` PR it does nothing. Success: `{ "ok": true, "number": N, "pr": number, "checkpoint": number }`; a no-op: `{ "ok": true, "skipped": "<reason>" }`.
 - `resume` success: `{ "ok": true, "number": N, "pr": number|null, "session": "<footer session>"|null, "truncated": boolean, "briefing": "<text>" }`; exit 3 carries `session`.
 - `release` success: `{ "ok": true, "number": N, "mode": "decision"|"merged", "changed": boolean }`; `changed` is false on a rerun.
 - PR footer: `Agent: <agent> · session <session>` (agent is `<model>/<harness>`), the last line of the PR body after `---`. A takeover rewrites it to the new agent and session. `checkpoint` and `release --decision` read the footer session as `resume` does.
-- Initial PR body: `claim` fills `.github/pull_request_template.md` with `fillTemplate`: `<issue>` (so `Closes #<issue>` becomes `Closes #N`), the State keys with `checkpoint` 0, `time`, `agent`, `session`, and the fields `done`, `proven`, `rejected`, `gotchas`, `open` = `none`, `in progress` = `claimed, nothing built yet`, `next` = `start the first acceptance criterion`, `unproven` = `all`. Every other placeholder (`<command>`, `<observed result>`, `<why not, and when>`, `<finding>`, `<sha>`, `<reason>`) is the worker's to fill; `PR metadata` fails a ready PR that still has one. `claim` refuses to post only when `unfilled` lists a key it owns, so the draft PR is never blocked by the worker-owned ones. The refuse-on-`unfilled` rule applies to comments, `## State` and the footer.
+- Initial PR body: `claim` fills `.github/pull_request_template.md` with `fillTemplate`: `<issue>` (so `Closes #<issue>` becomes `Closes #N`), the State keys with `checkpoint` 0, `time`, `agent`, `session`, and the fields `done`, `proven`, `rejected`, `gotchas`, `open` = `none`, `in progress` = `claimed, nothing built yet`, `next` = `start the first acceptance criterion`, `unproven` = `all`. Every other placeholder (`<command>`, `<observed result>`, `<why not, and when>`, `<finding>`, `<sha>`, `<reason>`) is the worker's to fill. `PR metadata` checks only `## State` for leftover placeholders; clearing the others is part of the worker's Definition of Done (4.5). `claim` refuses to post only when `unfilled` lists a key it owns, so the draft PR is never blocked by the worker-owned ones. The refuse-on-`unfilled` rule applies to comments, `## State` and the footer.
 - Handover inputs: `release --merged` takes no input file. Done comes from the final `## State` `Done` field, Gotchas from its `Gotchas`, Follow-ups from its `Open`; `pr` is the merged PR number, `issue` the issue.
 - Placeholder keys, one per meaning in every template (`state-section.md`, `pull_request_template.md`, comments): `issue`, `pr`, `checkpoint`, `session`, `previous session`, `agent`, `time` (UTC `YYYY-MM-DD HH:MM`), `journal`, the eight State fields in lower case (`done`, `in progress`, `next`, `proven`, `unproven`, `rejected`, `gotchas`, `open`), and `follow-ups`. Handover `done` and `gotchas` reuse the State keys of the same meaning.
 
@@ -939,7 +946,7 @@ Behaviour shared by all transports: `request` rejects a path that does not start
 | `claimCommitMessage({ number, session, kind? }) → string` | `chore(claim): #N [session <id>]`; `kind: 'takeover'` gives `chore(claim): #N takeover [session <id>]`. The only builder; `claim.mjs` uses it for the commit it creates. `session` must pass `isValidSessionId`. |
 | `parseClaimCommit(message) → { number, session, kind: 'claim'\|'takeover' } \| null` | Inverse of the builder, reading the first line only. The only parser; `loadIssueFacts` uses it for `claimCommitAt`. |
 | `isValidSessionId(session) → boolean` | `[A-Za-z0-9._-]+`. |
-| `isValidAgent(agent) → boolean` | `[A-Za-z0-9._/-]+`: a session id plus `/`, for `<model>/<harness>`. |
+| `isValidAgent(agent) → boolean` | Exactly `<model>/<harness>`: two non-empty segments of `[A-Za-z0-9._-]+` joined by one `/`. |
 | `isHotfixLane(facts, config) → boolean` | Bug, no parent, valid `priority:p0`. |
 | `leaseState(pr, { config, now, claimCommentAt, claimCommitAt }) → { expired: boolean, released: boolean, since: string \| null }` | Draft PRs only (ready PRs never expire, 6.4); `since` is `lastAgentCommentAt ?? createdAt`, expired after `limits.draftLeaseMinutes`. `pr: null` (ref without a PR): `since` is `claimCommentAt ?? claimCommitAt`, expired after `limits.claimWithoutPrMinutes`; both `null` (ref head is not a claim commit) → `{ expired: true, released: false, since: null }`. |
 | `deriveStatus(facts, { config, now }) → { status: Status, reason: string }` | First matching row of 4.4; pure. |
@@ -1159,7 +1166,7 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 
 ### 2026-11-20: Phase 3a contract (#82)
 
-13, 13.1: agent script flags, exit codes, `--json` shapes and the session id rule fixed; comment formats and markers (`takeover`, `checkpoint`, `handover`) added; `fillTemplate`, `templateSection`, `claimCommitMessage`, `parseClaimCommit` and `isValidSessionId` added. `claimCommitAt` now also accepts a takeover commit, and session ids are limited to `[A-Za-z0-9._-]+`. Review round 1: one placeholder key per meaning across the comment templates, `state-section.md` and `pull_request_template.md` (the section 7 sketch of the PR template predates the key names; the file wins); initial PR body, handover inputs, footer checks, exit 1 for `tasksPerWorker`, author-and-marker matching, `--auto` push and `isValidAgent` added.
+13, 13.1: agent script flags, exit codes, `--json` shapes and the session id rule fixed; comment formats and markers (`takeover`, `checkpoint`, `handover`) added; `fillTemplate`, `templateSection`, `claimCommitMessage`, `parseClaimCommit` and `isValidSessionId` added. `claimCommitAt` now also accepts a takeover commit, and session ids are limited to `[A-Za-z0-9._-]+`. Review round 1: one placeholder key per meaning across the comment templates, `state-section.md` and `pull_request_template.md` (section 7 shows the same template); initial PR body, handover inputs, footer checks, exit 1 for `tasksPerWorker`, author-and-marker matching, `--auto` push and `isValidAgent` added.
 
 ### 2026-11-20: agent App identity
 

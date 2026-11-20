@@ -623,8 +623,8 @@ test('isValidSessionId accepts letters, digits, dot, underscore and hyphen only'
 });
 
 test('isValidAgent accepts model/harness and rejects header-breaking characters', () => {
-  for (const id of ['sonnet/claude-code', 'codex', 'gpt-5.1/cli']) assert.equal(isValidAgent(id), true, id);
-  for (const id of ['', 'a b', 'a(b)', 'a·b', 'a)', undefined]) assert.equal(isValidAgent(id), false, String(id));
+  for (const id of ['sonnet/claude-code', 'gpt-5.1/cli']) assert.equal(isValidAgent(id), true, id);
+  for (const id of ['', 'codex', '/', 'a/', '/b', 'a/b/c', 'a b/c', 'a(b)/c', 'a·b/c', 'a/b)', undefined]) assert.equal(isValidAgent(id), false, String(id));
 });
 
 test('loadIssueFacts: a takeover commit head sets claimCommitAt', async () => {
