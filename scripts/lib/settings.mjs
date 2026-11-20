@@ -249,7 +249,8 @@ export function repoKind(repoName, config) {
   return String(repoName).toLowerCase() === config.controlRepo.toLowerCase() ? 'control' : 'project';
 }
 
-const appliesToKind = (repos, kind) => repos === 'all' || (repos === 'projects' && kind === 'project') || (repos === 'control' && kind === 'control');
+/** Which environments (`repos` filter) apply to a repo kind. */
+export const appliesToKind = (repos, kind) => repos === 'all' || (repos === 'projects' && kind === 'project') || (repos === 'control' && kind === 'control');
 
 function row(section, key, desired, live, result) {
   return { section, key, desired, live, result };
@@ -342,8 +343,11 @@ function compareTeamAccess(settings, live) {
   });
 }
 
-/** @returns {'hold'|'deferred'|'unreadable'} */
-function assertionState(assertWhen, { config, signals }) {
+/**
+ * Whether a variable with this `assertWhen` is asserted now, deferred until its signal appears, or undecidable.
+ * @returns {'hold'|'deferred'|'unreadable'}
+ */
+export function assertionState(assertWhen, { config, signals }) {
   if (assertWhen === 'kitInstalled') {
     if (typeof signals.kitInstalled !== 'boolean') return 'unreadable';
     return signals.kitInstalled ? 'hold' : 'deferred';
