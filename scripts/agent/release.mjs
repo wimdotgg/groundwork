@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig, repoRoot, CONFIG_DIR } from '../lib/config.mjs';
-import { GitHubError, apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
+import { apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
 import { isValidSessionId } from '../lib/issue-model.mjs';
 import {
-  addMarker, fillTemplate, hasMarker, parseSections, parseStateSection, replaceSection,
+  addMarker, fillTemplate, hasMarker, parseSections, parseStateSection, replaceSection, templateSection,
 } from '../lib/markdown.mjs';
 import { sameLogin } from '../lib/trust.mjs';
 
@@ -20,6 +20,9 @@ const RELEASED_MARKER = 'released';
 const HANDOVER_MARKER = 'handover';
 const HANDOVER_TEMPLATE_FILE = 'templates/handover-comment.md';
 const FOOTER_SESSION = /^Agent: .+ · session (\S+)\s*$/;
+const FOOTER_BREAK = '---';
+const ALLOWED_FLAGS = ['--decision', '--merged', '--json'];
+const CONVERT_TO_DRAFT = 'mutation($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { pullRequest { id } } }';
 const DECISION_FILE = (number) => new RegExp(`^docs/decisions/${number}-[A-Za-z0-9._-]+\\.md$`);
 const USAGE = 'usage: release.mjs <N> --decision|--merged [--session <id>] [--json]';
 
@@ -49,30 +52,37 @@ async function findPull(client, repoRef, number) {
 }
 
 /**
- * The footer is not always the last line: `addMarker` appends the released marker after it.
  * @param {string} body
- * @returns {string|null}
+ * @returns {string|null} the session named by the footer, which is the last line
  */
 export function footerSession(body) {
-  const lines = (body ?? '').replace(/\r\n/g, '\n').split('\n');
-  const footer = lines.findLast((line) => FOOTER_SESSION.test(line));
-  return footer ? FOOTER_SESSION.exec(footer)[1] : null;
+  const lastLine = (body ?? '').trimEnd().split('\n').pop();
+  return FOOTER_SESSION.exec(lastLine)?.[1] ?? null;
+}
+
+/** Puts the marker above the `---` footer break so the footer stays the last line. */
+function markBeforeFooter(body, marker) {
+  const lines = body.replace(/\r\n/g, '\n').trimEnd().split('\n');
+  const breakIndex = lines.lastIndexOf(FOOTER_BREAK);
+  if (breakIndex === -1) return addMarker(body, marker);
+  const head = addMarker(lines.slice(0, breakIndex).join('\n'), marker);
+  return `${head}\n${lines.slice(breakIndex).join('\n')}\n`;
 }
 
 async function releaseDecision(context, number, session) {
   const { client, repo } = context;
   const pull = await findPull(client, repo, number);
-  if (pull.state !== 'open' || pull.draft !== true) {
-    throw new ReleaseRefusal(`PR #${pull.number} is not an open draft`);
-  }
   const holder = footerSession(pull.body);
   if (holder !== session) {
     throw new ReleaseRefusal(`PR #${pull.number} footer names session ${holder ?? 'none'}, not ${session}`, {
       exitCode: EXIT_HELD_BY_OTHER, session: holder,
     });
   }
-  if (hasMarker(pull.body ?? '', RELEASED_MARKER)) return false;
-  const body = addMarker(pull.body ?? '', RELEASED_MARKER);
+  if (pull.state !== 'open') throw new ReleaseRefusal(`PR #${pull.number} is not open`);
+  const convert = pull.draft !== true;
+  if (convert) await client.graphql(CONVERT_TO_DRAFT, { id: pull.node_id });
+  if (hasMarker(pull.body ?? '', RELEASED_MARKER)) return convert;
+  const body = markBeforeFooter(pull.body ?? '', RELEASED_MARKER);
   await client.request('PATCH', apiPath(`${REPO_PATH}/pulls/{number}`, { ...repo, number: pull.number }), { body: { body } });
   return true;
 }
@@ -116,7 +126,12 @@ async function findParentEpic(client, repo, number) {
     okStatuses: [NOT_FOUND],
   });
   if (response.status === NOT_FOUND) throw new ReleaseRefusal(`spike #${number} has no parent epic`);
-  return response.data.number;
+  const epic = response.data;
+  if (!String(epic.repository_url ?? '').toLowerCase().endsWith(`/repos/${repo.owner}/${repo.repo}`.toLowerCase())) {
+    throw new ReleaseRefusal(`parent #${epic.number} is not in ${repo.owner}/${repo.repo}`);
+  }
+  if (epic.type?.name !== 'Epic') throw new ReleaseRefusal(`parent #${epic.number} is not an Epic`);
+  return epic;
 }
 
 async function findDecisionFile(client, repo, { number, pullNumber }) {
@@ -126,18 +141,23 @@ async function findDecisionFile(client, repo, { number, pullNumber }) {
   return match;
 }
 
-async function appendSpikeDecision(context, { number, pull }) {
+async function planSpikeDecision(context, { number, pull }) {
   const { client, repo } = context;
-  const epicNumber = await findParentEpic(client, repo, number);
+  const epic = await findParentEpic(client, repo, number);
   const decisionFile = await findDecisionFile(client, repo, { number, pullNumber: pull.number });
-  const epicPath = apiPath(`${REPO_PATH}/issues/{number}`, { ...repo, number: epicNumber });
-  const epic = (await client.request('GET', epicPath)).data;
-  const decisions = parseSections(epic.body ?? '').byName.Decisions ?? '';
+  return { epic, decisionFile };
+}
+
+async function appendSpikeDecision(context, { number, pull, plan }) {
+  const { epic, decisionFile } = plan;
+  const { repo } = context;
+  const decisions = templateSection(epic.body ?? '', 'Decisions') ?? '';
   if (decisions.includes(decisionFile)) return false;
-  const date = pull.merged_at.slice(0, 10);
-  const line = `- ${date}: Spike #${number} decided in [${decisionFile}](${decisionFile}) (PR #${pull.number}).`;
+  const url = `https://github.com/${repo.owner}/${repo.repo}/blob/${pull.merge_commit_sha}/${decisionFile}`;
+  const line = `- ${pull.merged_at.slice(0, 10)}: Spike #${number} decided in [${decisionFile}](${url}) (PR #${pull.number}).`;
   const body = replaceSection(epic.body ?? '', 'Decisions', decisions === '' ? line : `${decisions}\n${line}`);
-  await client.request('PATCH', epicPath, { body: { body } });
+  const epicPath = apiPath(`${REPO_PATH}/issues/{number}`, { ...repo, number: epic.number });
+  await context.client.request('PATCH', epicPath, { body: { body } });
   return true;
 }
 
@@ -147,8 +167,9 @@ async function releaseMerged(context, number, session) {
   if (!pull.merged_at) throw new ReleaseRefusal(`PR #${pull.number} is not merged`);
   const handover = renderHandover(context, { number, pull, session });
   const issue = (await client.request('GET', apiPath(`${REPO_PATH}/issues/{number}`, { ...repo, number }))).data;
+  const plan = issue.type?.name === 'Spike' ? await planSpikeDecision(context, { number, pull }) : null;
   const posted = await postHandover(context, handover, number);
-  const appended = issue.type?.name === 'Spike' && await appendSpikeDecision(context, { number, pull });
+  const appended = plan !== null && await appendSpikeDecision(context, { number, pull, plan });
   return posted || appended;
 }
 
@@ -178,8 +199,10 @@ export function parseArguments(argv, env) {
     const argument = argv[index];
     if (argument === '--session') {
       session = argv[index + 1];
+      if (session === undefined || session.startsWith('--')) throw new ReleaseRefusal('--session needs a value');
       index += 1;
     } else if (argument.startsWith('--')) {
+      if (!ALLOWED_FLAGS.includes(argument)) throw new ReleaseRefusal(`unknown flag ${argument}; ${USAGE}`);
       flags.add(argument);
     } else {
       positional.push(argument);
@@ -209,20 +232,11 @@ async function main(argv, env) {
     const handoverTemplate = await readFile(path.join(root, CONFIG_DIR, HANDOVER_TEMPLATE_FILE), 'utf8');
     const repo = env.GITHUB_REPOSITORY ? repoFromEnv(env) : await currentRepo();
     const result = await release({ client: createClient({ env }), repo, config, handoverTemplate }, request);
-    return report({ json: request.json, exitCode: 0, payload: result });
+    return report({ json, exitCode: 0, payload: result });
   } catch (error) {
-    if (!(error instanceof ReleaseRefusal || error instanceof GitHubError)) throw error;
-    const exitCode = error.exitCode ?? EXIT_REFUSED;
     const payload = { ok: false, reason: error.message, ...(error.session === undefined ? {} : { session: error.session }) };
-    return report({ json, exitCode, payload });
+    return report({ json, exitCode: error.exitCode ?? EXIT_REFUSED, payload });
   }
 }
 
-if (import.meta.main) {
-  try {
-    process.exitCode = await main(process.argv.slice(2), process.env);
-  } catch (error) {
-    console.error(`release: ${error.message}`);
-    process.exitCode = 1;
-  }
-}
+if (import.meta.main) process.exitCode = await main(process.argv.slice(2), process.env);
