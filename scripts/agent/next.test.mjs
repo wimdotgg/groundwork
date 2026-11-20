@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFixtureClient } from '../lib/github.mjs';
 import { loadConfig, repoRoot } from '../lib/config.mjs';
-import { chooseNext, formatOutput, parseArgs, rankCandidates } from './next.mjs';
+import { chooseNext, findHeldHotspots, formatOutput, parseArgs, rankCandidates } from './next.mjs';
 
 const config = await loadConfig({ root: repoRoot(import.meta.url) });
 const repoRef = { owner: 'wimdotgg', repo: 'groundwork' };
@@ -239,4 +239,53 @@ test('arguments: only --json is accepted', () => {
   assert.deepEqual(parseArgs(['--json']), { json: true });
   assert.deepEqual(parseArgs([]), { json: false });
   assert.throws(() => parseArgs(['--verbose']), /usage/);
+});
+
+const HOTSPOT = { name: 'spec', paths: ['docs/spec.md', 'scripts/lib/'] };
+const touching = (text) => OK_BODY.replace(TOUCHES, text);
+const prFiles = (number, filenames) => ({
+  [`GET ${BASE}/pulls/${number}/files?per_page=100`]: { status: 200, data: filenames.map((filename) => ({ filename })) },
+});
+const openPrs = (numbers, extra = {}) => createFixtureClient({
+  [`GET ${BASE}/pulls?per_page=100&state=open`]: { status: 200, data: numbers.map((number) => ({ number })) },
+  ...extra,
+});
+
+test('AC1: a candidate naming a held hotspot by name or path is skipped with the hotspot and PR', async () => {
+  const client = openPrs([50, 51], { ...prFiles(50, ['README.md']), ...prFiles(51, ['scripts/lib/x.mjs']) });
+  const held = await findHeldHotspots({ client, repoRef }, [HOTSPOT]);
+  assert.deepEqual(held, [{ hotspot: HOTSPOT, pr: 51 }]);
+  const result = await run({ epics: [accepted(10, [
+    task(11, { body: touching('the spec hotspot') }),
+    task(12, { body: touching('docs/spec.md') }),
+    task(13),
+  ])] });
+  const chosen = chooseNext(result.ranked, result.skipped, held);
+  assert.equal(chosen.next.number, 13);
+  assert.deepEqual(chosen.skipped, [
+    { number: 11, code: 'hotspot', reason: 'hotspot spec is held by PR #51' },
+    { number: 12, code: 'hotspot', reason: 'hotspot spec is held by PR #51' },
+  ]);
+});
+
+test('AC1: a hotspot no open PR holds does not skip', async () => {
+  const held = await findHeldHotspots({ client: openPrs([50], prFiles(50, ['README.md'])), repoRef }, [HOTSPOT]);
+  const result = await run({ epics: [accepted(10, [task(11, { body: touching('docs/spec.md') })])] });
+  assert.equal(chooseNext(result.ranked, result.skipped, held).next.number, 11);
+});
+
+test('AC2: without hotspots no PR is listed and results equal the plain choice', async () => {
+  assert.deepEqual(await findHeldHotspots({ client: createFixtureClient({}), repoRef }, []), []);
+  const result = await run({ epics: [accepted(10, [task(11, { body: touching('docs/spec.md') })])] });
+  assert.deepEqual(chooseNext(result.ranked, result.skipped, []), chooseNext(result.ranked, result.skipped));
+});
+
+test('AC3: a takeover candidate is not blocked by its own PR', async () => {
+  const result = await run({ epics: [accepted(10, [
+    task(11, { ref: true, pr: { createdAt: minutesAgo(300) }, body: touching('docs/spec.md') }),
+    task(12, { body: touching('docs/spec.md') }),
+  ])] });
+  const chosen = chooseNext(result.ranked, result.skipped, [{ hotspot: HOTSPOT, pr: 911 }]);
+  assert.equal(chosen.next.number, 11);
+  assert.deepEqual(chosen.skipped.map(({ number, code }) => [number, code]), [[12, 'hotspot']]);
 });

@@ -1,5 +1,5 @@
 import { GitHubError, apiPath, createClient, currentRepo } from '../lib/github.mjs';
-import { loadConfig, repoRoot } from '../lib/config.mjs';
+import { loadConfig, loadHotspots, repoRoot } from '../lib/config.mjs';
 import {
   deriveStatus, isHotfixLane, leaseState, loadIssueFacts, normalizeIssueBody, validateIssueBody,
 } from '../lib/issue-model.mjs';
@@ -10,6 +10,8 @@ import { isTrustedAuthor, normalizeLabel, validLabels } from '../lib/trust.mjs';
 /** @typedef {{ kind: 'takeover'|'fresh', number: number, pr: number|null, epic: number|null, title: string, reason: string }} Pick */
 /** @typedef {{ number: number, code: string, reason: string }} Skip */
 /** @typedef {{ pick: Pick, key: number[], touches: string }} Ranked   touches: the `## Touches` text, for hotspot exclusion */
+/** @typedef {import('../lib/config.mjs').Hotspot} Hotspot */
+/** @typedef {{ hotspot: Hotspot, pr: number }} HeldHotspot */
 /** @typedef {{ number: number, epic: number|null, position: number, skipEntry?: Skip }} Candidate */
 
 const REPO_PATH = '/repos/{owner}/{repo}';
@@ -140,15 +142,49 @@ function compareKeys(a, b) {
   return index === -1 ? 0 : a.key[index] - b.key[index];
 }
 
+const isUnder = (file, hotspotPath) => {
+  const base = hotspotPath.replace(/\/+$/, '');
+  return file === base || file.startsWith(`${base}/`);
+};
+const namesHotspot = (touches, hotspot) => [hotspot.name, ...hotspot.paths].some((term) => touches.includes(term));
+
 /**
- * Seam for hotspot exclusion (#84): filter `ranked` here and add `hotspot` skips before the first entry is taken;
- * each entry carries its `## Touches` text.
+ * One PR list plus one files listing per open PR, only when hotspots exist.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, repoRef: { owner: string, repo: string } }} context
+ * @param {Hotspot[]} hotspots
+ * @returns {Promise<HeldHotspot[]>}
+ */
+export async function findHeldHotspots({ client, repoRef }, hotspots) {
+  if (hotspots.length === 0) return [];
+  const prs = await client.paginate(apiPath(`${REPO_PATH}/pulls`, repoRef), { query: { state: 'open' } });
+  const held = [];
+  for (const pr of prs) {
+    const files = await client.paginate(apiPath(`${REPO_PATH}/pulls/{number}/files`, { ...repoRef, number: pr.number }));
+    for (const hotspot of hotspots) {
+      if (files.some(({ filename }) => hotspot.paths.some((path) => isUnder(filename, path)))) held.push({ hotspot, pr: pr.number });
+    }
+  }
+  return held;
+}
+
+function hotspotSkip({ pick, touches }, held) {
+  const holding = held.find(({ hotspot, pr }) => pr !== pick.pr && namesHotspot(touches, hotspot));
+  if (!holding) return null;
+  return { number: pick.number, code: 'hotspot', reason: `hotspot ${holding.hotspot.name} is held by PR #${holding.pr}` };
+}
+
+/**
+ * Skips an entry whose `## Touches` names a hotspot held by another open PR; a takeover is not held by its own PR.
  * @param {Ranked[]} ranked
  * @param {Skip[]} skipped
+ * @param {HeldHotspot[]} [held]
  * @returns {{ next: Pick|null, skipped: Skip[] }}
  */
-export function chooseNext(ranked, skipped) {
-  return { next: ranked[0]?.pick ?? null, skipped };
+export function chooseNext(ranked, skipped, held = []) {
+  const hotspotSkips = ranked.map((entry) => hotspotSkip(entry, held)).filter(Boolean);
+  const blocked = new Set(hotspotSkips.map((entry) => entry.number));
+  const free = ranked.find((entry) => !blocked.has(entry.pick.number));
+  return { next: free?.pick ?? null, skipped: [...skipped, ...hotspotSkips] };
 }
 
 async function classifyCandidate(context, epicRanks, candidate) {
@@ -199,8 +235,10 @@ async function main(argv) {
   const { json } = parseArgs(argv);
   const config = await loadConfig({ root: repoRoot(import.meta.url) });
   const client = createClient({ env: process.env });
-  const { ranked, skipped } = await rankCandidates({ client, repoRef: await currentRepo(), config, now: new Date() });
-  console.log(formatOutput(chooseNext(ranked, skipped), { json }));
+  const repoRef = await currentRepo();
+  const { ranked, skipped } = await rankCandidates({ client, repoRef, config, now: new Date() });
+  const held = await findHeldHotspots({ client, repoRef }, await loadHotspots({ root: repoRoot(import.meta.url) }));
+  console.log(formatOutput(chooseNext(ranked, skipped, held), { json }));
 }
 
 if (import.meta.main) {
