@@ -65,8 +65,9 @@ function recordingClient(routes) {
   return { client, calls };
 }
 
-const run = (client) => runClaim({
-  client, repo: REPO, config: CONFIG, number: 7, session: SESSION, agent: AGENT, templates, now: NOW,
+const READY = async () => null;
+const run = (client, findUnmetReadiness = READY) => runClaim({
+  client, repo: REPO, config: CONFIG, number: 7, session: SESSION, agent: AGENT, templates, now: NOW, findUnmetReadiness,
 });
 const writeKeys = (calls) => calls.filter((call) => call.key.startsWith('POST ')).map((call) => call.key);
 const bodyOf = (calls, key) => calls.find((call) => call.key === key).body;
@@ -160,6 +161,24 @@ test('a rerun posts the pointer unless it names this session', async () => {
   assert.equal(writeKeys(other.calls)[0], POST_ISSUE_COMMENT);
 });
 
+test('AC1: a task that fails the Definition of Ready exits 3 before any write and names the unmet item', async () => {
+  const { client, calls } = recordingClient(creationRoutes);
+  const outcome = await run(client, async () => ({ code: 'blocked', reason: 'blocked by #5' }));
+  assert.deepEqual(outcome, { exitCode: EXIT_HELD, reason: '#7 is not ready (blocked): blocked by #5' });
+  assert.deepEqual(writeKeys(calls), []);
+});
+
+test('AC1: a rerun by the owning session skips the readiness check, since its own claim makes the task not ready', async () => {
+  const { client } = recordingClient({
+    ...creationRoutes,
+    [REF]: ok({ object: { sha: 'claim-sha' } }),
+    [ISSUE_PULLS]: ok([]),
+    'GET /repos/o/r/git/commits/claim-sha': ok({ message: 'chore(claim): #7 [session w85-a1]' }),
+  });
+  const outcome = await run(client, async () => ({ code: 'claimed', reason: 'unreachable' }));
+  assert.equal(outcome.exitCode, EXIT_CLAIMED);
+});
+
 test('an Epic, an untyped issue, a closed issue or a PR number exits 3 before any write', async () => {
   const targets = [{ type: { name: 'Epic' } }, { type: null }, { type: { name: 'Feature' }, state: 'closed' }, { type: { name: 'Feature' }, pull_request: {} }];
   for (const fields of targets) {
@@ -212,7 +231,7 @@ test('a comment template with an unknown placeholder or a missing section refuse
   const missing = { ...templates, claimComment: templates.claimComment.replace('## PR claim', '## Renamed') };
   for (const broken of [unknown, missing]) {
     const { client, calls } = recordingClient(creationRoutes);
-    await assert.rejects(runClaim({ client, repo: REPO, config: CONFIG, number: 7, session: SESSION, agent: AGENT, templates: broken, now: NOW }), GitHubError);
+    await assert.rejects(runClaim({ client, repo: REPO, config: CONFIG, number: 7, session: SESSION, agent: AGENT, templates: broken, now: NOW, findUnmetReadiness: READY }), GitHubError);
     assert.deepEqual(writeKeys(calls), []);
   }
 });
@@ -263,7 +282,7 @@ test('the limit comes from config.limits.tasksPerWorker', async () => {
   const held = pullOf({ number: 20, head: { ref: 'issue/9', repo: { full_name: 'o/r' } } });
   const { client } = recordingClient({ ...creationRoutes, [OPEN_PULLS]: ok([held]) });
   const roomy = { ...CONFIG, limits: { tasksPerWorker: 2 } };
-  const outcome = await runClaim({ client, repo: REPO, config: roomy, number: 7, session: SESSION, agent: AGENT, templates, now: NOW });
+  const outcome = await runClaim({ client, repo: REPO, config: roomy, number: 7, session: SESSION, agent: AGENT, templates, now: NOW, findUnmetReadiness: READY });
   assert.equal(outcome.exitCode, EXIT_CLAIMED);
 });
 
@@ -409,6 +428,6 @@ test('AC4: no request in the takeover path sends force true, and the ref update 
 test('a takeover comment template without its section refuses before the lock is taken', async () => {
   const broken = { ...templates, claimComment: templates.claimComment.replace('## PR takeover', '## Renamed') };
   const { client, calls } = recordingClient(takeoverRoutes);
-  await assert.rejects(runClaim({ client, repo: REPO, config: CONFIG, number: 7, session: SESSION, agent: AGENT, templates: broken, now: NOW }), GitHubError);
+  await assert.rejects(runClaim({ client, repo: REPO, config: CONFIG, number: 7, session: SESSION, agent: AGENT, templates: broken, now: NOW, findUnmetReadiness: READY }), GitHubError);
   assert.deepEqual(mutationKeys(calls), []);
 });

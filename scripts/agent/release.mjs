@@ -4,9 +4,12 @@ import { loadConfig, repoRoot, CONFIG_DIR } from '../lib/config.mjs';
 import { apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
 import { isValidSessionId, parseFooter } from '../lib/issue-model.mjs';
 import {
-  addMarker, fillTemplate, hasMarker, parseSections, parseStateSection, replaceSection, templateSection,
+  addMarker, fillTemplate, findFooterBreak, hasMarker, parseSections, parseStateSection, replaceSection, templateSection,
 } from '../lib/markdown.mjs';
 import { sameLogin } from '../lib/trust.mjs';
+import { assertNode24 } from './token.mjs';
+
+assertNode24(import.meta);
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ client: GitHubClient, repo: { owner: string, repo: string }, config: { accounts: { agent: string } }, handoverTemplate: string }} ReleaseContext */
@@ -19,7 +22,6 @@ const SESSION_VARIABLE = 'GROUNDWORK_SESSION';
 const RELEASED_MARKER = 'released';
 const HANDOVER_MARKER = 'handover';
 const HANDOVER_TEMPLATE_FILE = 'templates/handover-comment.md';
-const FOOTER_BREAK = '---';
 const ALLOWED_FLAGS = ['--decision', '--merged', '--json'];
 const CONVERT_TO_DRAFT = 'mutation($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { pullRequest { id } } }';
 const DECISION_FILE = (number) => new RegExp(`^docs/decisions/${number}-[A-Za-z0-9._-]+\\.md$`);
@@ -53,7 +55,7 @@ async function findPull(client, repoRef, number) {
 /** Puts the marker above the `---` footer break so the footer stays the last line. */
 function markBeforeFooter(body, marker) {
   const lines = body.replace(/\r\n/g, '\n').trimEnd().split('\n');
-  const breakIndex = lines.lastIndexOf(FOOTER_BREAK);
+  const breakIndex = findFooterBreak(lines);
   if (breakIndex === -1) return addMarker(body, marker);
   const head = addMarker(lines.slice(0, breakIndex).join('\n'), marker);
   return `${head}\n${lines.slice(breakIndex).join('\n')}\n`;

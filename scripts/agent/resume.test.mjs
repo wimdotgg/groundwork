@@ -134,13 +134,20 @@ test('AC4: a PR footer naming another session exits 3', async () => {
   assert.deepEqual([mismatch.result.ok, mismatch.result.session], [false, 's1']);
   assert.equal((await run({}, { ...TARGET, session: 's1' })).exitCode, 0);
   assert.equal((await run()).exitCode, 0);
-  const noFooter = { [`GET ${REPO}/pulls/7`]: found({ number: 7, user: { login: 'agent-bot[bot]' }, body: 'Closes #5', head: { sha: 'headsha' } }) };
-  assert.equal((await run(noFooter, { ...TARGET, session: 'other' })).exitCode, 0);
 });
 
-test('AC4: an Agent line without a --- break names no session', async () => {
+test('AC2: with --session, a PR without a footer exits 1 with one reason line; without --session it still resumes', async () => {
+  const noFooter = { [`GET ${REPO}/pulls/7`]: found({ number: 7, user: { login: 'agent-bot[bot]' }, body: 'Closes #5', head: { sha: 'headsha' } }) };
+  const refused = await run(noFooter, { ...TARGET, session: 'other' });
+  assert.equal(refused.exitCode, 1);
+  assert.deepEqual([refused.result.ok, refused.result.reason.includes('\n')], [false, false]);
+  assert.match(refused.result.reason, /PR #7 has no Agent footer/);
+  assert.equal((await run(noFooter)).exitCode, 0);
+});
+
+test('AC2: an Agent line without a --- break is not a footer, so --session exits 1', async () => {
   const unbroken = { [`GET ${REPO}/pulls/7`]: found({ number: 7, user: { login: 'agent-bot[bot]' }, body: 'Closes #5\nAgent: a/b · session s1\n', head: { sha: 'headsha' } }) };
-  assert.equal((await run(unbroken, { ...TARGET, session: 'other' })).exitCode, 0);
+  assert.equal((await run(unbroken, { ...TARGET, session: 'other' })).exitCode, 1);
 });
 
 test('AC4: a released PR still names its session', async () => {

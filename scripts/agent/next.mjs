@@ -5,6 +5,9 @@ import {
 } from '../lib/issue-model.mjs';
 import { parseSections } from '../lib/markdown.mjs';
 import { isTrustedAuthor, normalizeLabel, validLabels } from '../lib/trust.mjs';
+import { assertNode24 } from './token.mjs';
+
+assertNode24(import.meta);
 
 /** @typedef {import('../lib/issue-model.mjs').IssueFacts} IssueFacts */
 /** @typedef {{ kind: 'takeover'|'fresh', number: number, pr: number|null, epic: number|null, title: string, reason: string }} Pick */
@@ -108,6 +111,20 @@ function takeoverReason(facts, { config, now }) {
 }
 
 const withoutClaim = (facts) => ({ ...facts, branch: { exists: false, sha: null }, pr: null });
+
+/**
+ * The Definition of Ready for an unclaimed task, shared with `claim`.
+ * @param {IssueFacts} facts
+ * @param {{ config: object, now: Date }} context
+ * @returns {{ code: string, reason: string }|null} null when ready
+ */
+export function unmetReadiness(facts, context) {
+  const ineligible = ineligibleReason({ type: facts.type, author: facts.author }, context.config);
+  if (ineligible) return ineligible;
+  const { status, reason } = deriveStatus(facts, context);
+  if (status !== 'ready') return { code: status, reason };
+  return skipReasonForFresh(facts);
+}
 
 /**
  * @param {{ facts: IssueFacts, epic: number|null, position: number, epicRank: number }} candidate

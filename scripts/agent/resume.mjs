@@ -4,6 +4,9 @@ import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { deriveStatus, isValidSessionId, loadIssueFacts, parseFooter } from '../lib/issue-model.mjs';
 import { hasMarker, parseSections, parseStateSection, removeMarker } from '../lib/markdown.mjs';
 import { isTrustedAuthor, sameLogin, untrustedBlock } from '../lib/trust.mjs';
+import { assertNode24 } from './token.mjs';
+
+assertNode24(import.meta);
 
 /** @typedef {{ title: string, blocks: Array<{ text: string, author: string|null }> }} Section   author is set when the text is fenced as untrusted */
 
@@ -11,6 +14,7 @@ const REPO_PATH = '/repos/{owner}/{repo}';
 const JOURNAL_ENTRIES = 3;
 const MAX_REVIEW_THREADS = 100;
 const NOT_FOUND = 404;
+const EXIT_ERROR = 1;
 const EXIT_OTHER_SESSION = 3;
 const PART_COUNT = 8;
 const MIN_RESUME_LINES = PART_COUNT * 2 + (PART_COUNT - 1); // header and truncation marker per part, a blank line between parts
@@ -227,6 +231,9 @@ export async function resume(client, { owner, repo, number, session }, { config,
   const pullPath = facts.pr ? apiPath(`${REPO_PATH}/pulls/{number}`, { ...repoRef, number: facts.pr.number }) : null;
   const pull = pullPath ? (await client.request('GET', pullPath)).data : null;
   const heldBy = parseFooter(pull?.body)?.session ?? null;
+  if (session !== null && pull && heldBy === null) {
+    return { exitCode: EXIT_ERROR, result: { ok: false, reason: `PR #${pull.number} has no Agent footer, so session ${session} cannot be checked`, number, session: null } };
+  }
   if (session !== null && heldBy !== null && heldBy !== session) {
     return { exitCode: EXIT_OTHER_SESSION, result: { ok: false, reason: `PR #${pull.number} footer names session ${heldBy}, not ${session}`, number, session: heldBy } };
   }

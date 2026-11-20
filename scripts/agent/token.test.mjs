@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createVerify, generateKeyPairSync } from 'node:crypto';
 import { createFixtureClient } from '../lib/github.mjs';
 import {
-  buildChildEnv, createAppJwt, credentialOutput, fetchBotUserId, mintInstallationToken,
+  assertNode24, buildChildEnv, createAppJwt, credentialOutput, fetchBotUserId, mintInstallationToken,
   resolveClientId, resolvePrivateKey,
 } from './token.mjs';
 
@@ -89,4 +89,13 @@ test('mintInstallationToken: org installation lookup, then token; failures are o
 test('fetchBotUserId: reads the bot user id', async () => {
   const client = createFixtureClient({ 'GET /users/demo-agent%5Bbot%5D': { status: 200, data: { id: 42 } } });
   assert.equal(await fetchBotUserId(client, 'demo-agent[bot]'), 42);
+});
+
+test('assertNode24: import.meta.main undefined (Node below 24) throws a message naming Node 24', () => {
+  assert.throws(() => assertNode24({ url: 'file:///x.mjs' }), /Node 24/);
+});
+
+test('assertNode24: a defined import.meta.main passes, whether this module is the entry point or not', () => {
+  assert.doesNotThrow(() => assertNode24({ main: true }));
+  assert.doesNotThrow(() => assertNode24({ main: false }));
 });

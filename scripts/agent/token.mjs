@@ -19,6 +19,17 @@ const DPAPI_SCRIPT = '$s = Get-Content $env:GROUNDWORK_DPAPI_FILE | ConvertTo-Se
   + '[Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))';
 const USAGE = 'usage: token.mjs exec -- <command> [args...] | token.mjs credential <get|store|erase>';
 
+/**
+ * Every agent script ends with `if (import.meta.main)`, which is undefined below Node 24, so the script would
+ * exit 0 having done nothing. Each script calls this first, so an old Node fails loudly instead.
+ * @param {{ main?: boolean }} meta the script's `import.meta`
+ */
+export function assertNode24(meta) {
+  if (meta.main === undefined) throw new Error('groundwork agent scripts need Node 24 or newer (import.meta.main is unavailable)');
+}
+
+assertNode24(import.meta);
+
 /** @returns {string|undefined} where setup stores `<slug><suffix>` on Windows */
 function windowsStorePath({ env, platform, slug }, suffix) {
   if (platform !== 'win32' || !env.APPDATA) return undefined;

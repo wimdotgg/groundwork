@@ -10,6 +10,9 @@ import { isValidSessionId, parseFooter } from '../lib/issue-model.mjs';
 import {
   fillTemplate, parseSections, parseStateSection, replaceSection, templatePlaceholders,
 } from '../lib/markdown.mjs';
+import { assertNode24 } from './token.mjs';
+
+assertNode24(import.meta);
 
 const EXIT_ERROR = 1;
 const EXIT_HELD = 3;

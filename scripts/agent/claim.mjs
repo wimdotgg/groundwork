@@ -4,13 +4,20 @@ import { parseArgs } from 'node:util';
 import { GitHubError, apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
 import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { sameLogin } from '../lib/trust.mjs';
-import { TITLE_TYPES, claimCommitMessage, isValidAgent, isValidSessionId, leaseState, parseClaimCommit, parseFooter } from '../lib/issue-model.mjs';
+import {
+  TITLE_TYPES, claimCommitMessage, isValidAgent, isValidSessionId, leaseState, loadIssueFacts, parseClaimCommit, parseFooter,
+} from '../lib/issue-model.mjs';
+import { unmetReadiness } from './next.mjs';
 import { fillTemplate, findClosingRefs, hasMarker, removeMarker, templateSection } from '../lib/markdown.mjs';
+import { assertNode24 } from './token.mjs';
+
+assertNode24(import.meta);
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ claimComment: string, pullRequest: string }} Templates */
 /** @typedef {{ client: GitHubClient, repo: { owner: string, repo: string }, config: any, number: number,
- *   session: string, agent: string, templates: Templates, now: Date }} ClaimContext */
+ *   session: string, agent: string, templates: Templates, now: Date,
+ *   findUnmetReadiness: (number: number) => Promise<{ code: string, reason: string }|null> }} ClaimContext */
 /** @typedef {{ exitCode: number, reason?: string, pr?: number, mode?: 'claim'|'takeover' }} ClaimOutcome */
 
 export const EXIT_CLAIMED = 0;
@@ -291,8 +298,10 @@ export async function runClaim(context) {
     if (openPull) return takeOver(context, branch.sha, openPull, issue);
     return { exitCode: EXIT_HELD, reason: `${issueBranch(number)} is held by another session` };
   }
-  if (!branch.exists && !await createClaimRef(context)) {
-    return { exitCode: EXIT_HELD, reason: `${issueBranch(number)} is already claimed` };
+  if (!branch.exists) {
+    const unmet = await context.findUnmetReadiness(number);
+    if (unmet) return { exitCode: EXIT_HELD, reason: `#${number} is not ready (${unmet.code}): ${unmet.reason}` };
+    if (!await createClaimRef(context)) return { exitCode: EXIT_HELD, reason: `${issueBranch(number)} is already claimed` };
   }
   const resume = branch.exists ? { pull: openPull } : null;
   return { exitCode: EXIT_CLAIMED, pr: await completeClaim(context, posts, resume) };
@@ -330,10 +339,14 @@ async function main(argv, env) {
   const cli = parseCli(argv, env);
   const root = repoRoot(import.meta.url);
   const templatesDir = path.join(root, '.github');
+  const client = createClient({ env });
+  const repo = env.GITHUB_REPOSITORY ? repoFromEnv(env) : await currentRepo();
+  const config = await loadConfig({ root });
+  const now = new Date();
   const context = {
-    client: createClient({ env }),
-    repo: env.GITHUB_REPOSITORY ? repoFromEnv(env) : await currentRepo(),
-    config: await loadConfig({ root }),
+    client,
+    repo,
+    config,
     number: cli.number,
     session: cli.session,
     agent: cli.agent,
@@ -341,7 +354,8 @@ async function main(argv, env) {
       claimComment: await readFile(path.join(templatesDir, 'groundwork', 'templates', 'claim-comment.md'), 'utf8'),
       pullRequest: await readFile(path.join(templatesDir, 'pull_request_template.md'), 'utf8'),
     },
-    now: new Date(),
+    now,
+    findUnmetReadiness: async (number) => unmetReadiness(await loadIssueFacts(client, { ...repo, number }, { config }), { config, now }),
   };
   const outcome = await runClaim(context);
   report(cli, outcome);
