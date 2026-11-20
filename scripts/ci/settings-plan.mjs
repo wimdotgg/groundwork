@@ -95,6 +95,14 @@ export async function collect(ctx) {
   };
 }
 
+/** One line per live section, so the job log shows what the PR token could read (the summary is not retrievable by API). */
+function sectionStatusLines(live) {
+  return Object.entries(live).map(([section, state]) => {
+    const status = state.readable ? 'readable' : `unreadable (HTTP ${state.status})`;
+    return `${name}: ${section} ${status}`;
+  });
+}
+
 const isContainer = (value) => value !== null && typeof value === 'object';
 
 /** Flattens objects and arrays to path/value pairs; an empty container is a leaf. */
@@ -203,7 +211,7 @@ export function evaluate(facts, config) {
   if (facts.eventName !== PULL_REQUEST_EVENT || !facts.touched) return { conclusion: 'skip', errors: [], warnings: [], details: '', actions: [] };
   if (facts.loadError !== null) return { conclusion: 'fail', errors: [sanitize(facts.loadError)], warnings: [], details: '', actions: [] };
   const rows = compareStates(facts.desired, facts.live, { repoKind: facts.repoKind, config, signals: facts.signals });
-  return { conclusion: 'pass', errors: [], warnings: [], details: renderDetails(facts, rows), actions: [] };
+  return { conclusion: 'pass', errors: [], warnings: [], details: renderDetails(facts, rows), actions: [], log: sectionStatusLines(facts.live) };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
