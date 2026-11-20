@@ -10,9 +10,11 @@ const BASE = '/repos/wimdotgg/groundwork';
 const NOW = new Date('2026-01-01T12:00:00Z');
 const minutesAgo = (minutes) => new Date(NOW.getTime() - minutes * 60_000).toISOString();
 const OWNER = 'wianvdm';
+const TOUCHES = 'scripts/a.mjs';
+const BODY_TEXT = { Serves: 'E1', 'Acceptance criteria': '- [ ] AC1 done', Touches: TOUCHES };
 const OK_BODY = [
   'Outcome', 'Serves', 'Scope', 'Touches', 'Acceptance criteria', 'Verification plan', 'Risk', 'Context',
-].map((heading) => `## ${heading}\n${heading === 'Serves' ? 'E1' : heading === 'Acceptance criteria' ? '- [ ] AC1 done' : 'x'}\n`).join('\n');
+].map((heading) => `## ${heading}\n${BODY_TEXT[heading] ?? 'x'}\n`).join('\n');
 const OLD = minutesAgo(600);
 
 function labeledEvents(labels) {
@@ -31,6 +33,7 @@ function issueRoutes(issue) {
       body: issue.body ?? OK_BODY, labels: labels.map((name) => ({ name })),
     } },
     [`GET ${own}/timeline?per_page=100`]: { status: 200, data: labeledEvents(labels) },
+    ...(parent ? { [`GET ${BASE}/issues/${parent.number}/timeline?per_page=100`]: { status: 200, data: labeledEvents(parent.labels) } } : {}),
     [`GET ${own}/parent`]: parent
       ? { status: 200, data: {
         number: parent.number, repository_url: `https://api.github.com${BASE}`, type: { name: 'Epic' },
@@ -52,25 +55,45 @@ function issueRoutes(issue) {
   return routes;
 }
 
-// `epics`: [{ number, labels, children: [issue] }]; `bugs`: top-level p0 Bug issues.
+// `epics`: [{ number, labels, children: [issue] }]; a child with `children` is a grouping issue; `bugs`: top-level p0 Bug issues.
+// A closed, Epic or untrusted child gets no issue routes: loading its facts would throw, which proves it was skipped from the list.
 function world({ epics = [], bugs = [] }) {
+  const userOf = (issue) => ({ login: issue.author ?? OWNER });
   const routes = {
-    [`GET ${BASE}/issues?per_page=100&state=open&type=Epic`]: { status: 200, data: epics.map((epic) => ({ number: epic.number })) },
-    [`GET ${BASE}/issues?labels=priority%3Ap0&per_page=100&state=open&type=Bug`]: { status: 200, data: bugs.map((bug) => ({ number: bug.number })) },
+    [`GET ${BASE}/issues?per_page=100&state=open&type=Epic`]: { status: 200, data: epics.map((epic) => ({
+      number: epic.number, labels: epic.labels.map((name) => ({ name })),
+    })) },
+    [`GET ${BASE}/issues?labels=priority%3Ap0&per_page=100&state=open&type=Bug`]: { status: 200, data: bugs.map((bug) => ({
+      number: bug.number, type: { name: 'Bug' }, user: userOf(bug),
+    })) },
   };
   const graphql = [];
   const addIssue = (issue) => {
     Object.assign(routes, issueRoutes(issue));
     if (issue.pr) graphql.push({ status: 200, data: { data: { repository: { pullRequest: { isInMergeQueue: false } } } } });
   };
+  const addChildren = (parent) => {
+    routes[`GET ${BASE}/issues/${parent.number}/sub_issues?per_page=100`] = {
+      status: 200,
+      data: parent.children.map((child) => ({
+        number: child.number, state: child.state ?? 'open', type: { name: child.type ?? 'Feature' }, user: userOf(child),
+        sub_issues_summary: { total: child.children?.length ?? 0 },
+      })),
+    };
+    for (const child of parent.children) {
+      const unloaded = child.state === 'closed' || child.type === 'Epic' || child.author;
+      if (!unloaded) addIssue({ ...child, parent });
+      if (child.children) addChildren(child);
+    }
+  };
   for (const epic of epics) {
     addIssue({ ...epic, type: 'Epic' });
-    routes[`GET ${BASE}/issues/${epic.number}/sub_issues?per_page=100`] = {
-      status: 200, data: epic.children.map((child) => ({ number: child.number, state: 'open', type: { name: child.type ?? 'Feature' } })),
-    };
-    epic.children.forEach((child) => addIssue({ ...child, parent: epic }));
+    addChildren(epic);
   }
-  bugs.forEach(addIssue);
+  for (const bug of bugs) {
+    addIssue(bug);
+    if (bug.parent) routes[`GET ${BASE}/issues/${bug.parent.number}/parent`] = { status: 404, data: {} };
+  }
   if (graphql.length > 0) routes['POST /graphql'] = graphql;
   return createFixtureClient(routes);
 }
@@ -152,8 +175,55 @@ test('AC4: --json prints the shape fixed in spec 13', async () => {
   assert.deepEqual(json, {
     ok: true,
     next: { kind: 'fresh', number: 11, pr: null, epic: 10, title: 'task 11', reason: 'accepted ancestor' },
-    skipped: [{ number: 12, code: 'size', reason: 'needs exactly size:S or size:M' }],
+    skipped: [{ number: 12, code: 'size', reason: 'needs exactly one of size:S or size:M' }],
   });
+});
+
+test('R1: a takeover still needs an accepted epic and no open blockers', async () => {
+  const stale = { createdAt: minutesAgo(300) };
+  const result = await run({ epics: [
+    { number: 10, labels: [], children: [task(11, { ref: true, pr: stale })] },
+    accepted(20, [task(21, { ref: true, pr: stale, blockedBy: [{ number: 99, state: 'open' }] })]),
+  ] });
+  assert.deepEqual(order(result), []);
+  assert.deepEqual(result.skipped.map(({ number, code }) => [number, code]), [[11, 'proposed'], [21, 'blocked']]);
+});
+
+test('R2: a p0 Bug with a parent outside an open epic is skipped', async () => {
+  const body = `${OK_BODY}\n## Reproduction\nx\n\n## Expected vs actual\nx\n`;
+  const result = await run({ bugs: [
+    { number: 41, type: 'Bug', labels: sized(['priority:p0']), body, parent: { number: 5, labels: ['accepted'] } },
+  ] });
+  assert.deepEqual(order(result), []);
+  assert.deepEqual(result.skipped.map(({ number, code }) => [number, code]), [[41, 'proposed']]);
+});
+
+test('R3, R5: grouping issues are walked in order, never offered, and stop at the depth limit', async () => {
+  const result = await run({ epics: [accepted(10, [
+    task(11),
+    { number: 12, labels: [], children: [task(13), task(14, { state: 'closed' }), task(15)] },
+    task(16, { state: 'closed' }),
+    { number: 17, labels: [], children: [{ number: 18, labels: [], children: [task(19)] }] },
+    task(20),
+  ])] });
+  assert.deepEqual(order(result), [11, 13, 15, 20]);
+  assert.deepEqual(result.skipped.map(({ number, code }) => [number, code]), [[18, 'needs-format']]);
+  assert.match(result.skipped[0].reason, /depth limit/);
+});
+
+test('R6: a ranked entry carries the Touches text', async () => {
+  const result = await run({ epics: [accepted(10, [task(11)])] });
+  assert.equal(result.ranked[0].touches, TOUCHES);
+});
+
+test('R9: both size labels, or size:L with one, is a size skip', async () => {
+  const result = await run({ epics: [accepted(10, [
+    { number: 11, labels: ['size:S', 'size:M'] },
+    { number: 12, labels: ['size:S', 'size:L'] },
+    { number: 13, labels: ['size:S'] },
+  ])] });
+  assert.deepEqual(order(result), [13]);
+  assert.deepEqual(result.skipped.map(({ code }) => code), ['size', 'size']);
 });
 
 test('AC4: nothing ready is a null next with the skipped list', async () => {
