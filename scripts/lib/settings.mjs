@@ -261,7 +261,7 @@ function deepEqual(a, b) {
 }
 
 /** Objects: every desired key must be covered by live. Arrays: same length, each desired element covered by a distinct live element. */
-function covers(live, desired) {
+export function covers(live, desired) {
   if (Array.isArray(desired)) return Array.isArray(live) && live.length === desired.length && coversEach(live, desired);
   if (isPlainObject(desired)) {
     return isPlainObject(live) && Object.entries(desired).every(([key, value]) => covers(live[key], value));
