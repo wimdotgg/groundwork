@@ -159,11 +159,11 @@ function compareKeys(a, b) {
   return index === -1 ? 0 : a.key[index] - b.key[index];
 }
 
-const isUnder = (file, hotspotPath) => {
+export const isUnder = (file, hotspotPath) => {
   const base = hotspotPath.replace(/\/+$/, '');
   return file === base || file.startsWith(`${base}/`);
 };
-const namesHotspot = (touches, hotspot) => [hotspot.name, ...hotspot.paths].some((term) => touches.includes(term));
+export const namesHotspot = (touches, hotspot) => [hotspot.name, ...hotspot.paths].some((term) => touches.includes(term));
 
 /**
  * One PR list plus one files listing per open PR, only when hotspots exist.

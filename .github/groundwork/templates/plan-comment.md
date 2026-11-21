@@ -1,5 +1,5 @@
 Plan lint #<epic>: <result>
-Lane width: <width>
+Lane width: <width> (most open tasks in one lane; lane 1 can start now)
 
 ## Lanes
 <lanes>

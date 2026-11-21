@@ -2,16 +2,21 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { CONFIG_DIR, loadConfig, loadHotspots, repoRoot } from '../lib/config.mjs';
-import { GitHubError, apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
+import { apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
 import { ISSUE_TYPES, normalizeIssueBody } from '../lib/issue-model.mjs';
 import { criterionIds, fillTemplate, hasMarker, parseSections, removeMarker } from '../lib/markdown.mjs';
-import { sameLogin } from '../lib/trust.mjs';
+import { isTrustedAuthor, sameLogin } from '../lib/trust.mjs';
+import { isUnder, namesHotspot } from './next.mjs';
 import './token.mjs'; // exits on an unsupported Node before the script runs
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ number: number, title: string, type: string|null, state: 'open'|'closed', body: string,
- *   parent: number, level: number, blockedBy: number[] }} PlanNode   level: the epic is 1, its sub-issues 2 */
+ *   parent: number, level: number, blockedBy: Array<number|string> }} PlanNode
+ *   level: the epic is 1, its sub-issues 2. title is empty for an author that is not trusted (6.7).
+ *   blockedBy: a bare number for this repository, `<repository url>#<number>` for another one */
 /** @typedef {{ code: string, task: number|null, message: string }} Failure */
+/** @typedef {{ nodes: PlanNode[], tasks: PlanNode[], graph: Map<number, number[]>, cycles: number[][],
+ *   lanes: { lanes: PlanNode[][], width: number }|null }} Plan */
 /** @typedef {{ client: GitHubClient, repo: { owner: string, repo: string }, config: object,
  *   hotspots: Array<{ name: string, paths: string[] }>, template: string }} PlanLintContext */
 
@@ -20,55 +25,68 @@ const PLAN_MARKER = 'plan-lint';
 const TEMPLATE_FILE = 'templates/plan-comment.md';
 const USAGE = 'usage: plan-lint.mjs <epic> [--post] [--json]';
 const FIRST_TASK_LEVEL = 2;
-const SERVES_ID = /\bE\d+\b/;
-const BACKTICKED = /`([^`\n]+)`/g;
+const PATH_LIKE = /\/|\.[A-Za-z0-9]{2,}$/;
+const NOT_A_PATH = /^n\/a$/i;
 
 export class PlanLintError extends Error {}
 
 const openOrClosed = (state) => (state === 'closed' ? 'closed' : 'open');
 
-async function collectNodes({ client, repoRef }, { parent, level }, nodes) {
-  const children = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/sub_issues`, { ...repoRef, number: parent }));
+function blockerKey(blocker, repo) {
+  const localSuffix = `/repos/${repo.owner}/${repo.repo}`.toLowerCase();
+  const url = String(blocker.repository_url ?? '');
+  return url === '' || url.toLowerCase().endsWith(localSuffix) ? blocker.number : `${url}#${blocker.number}`;
+}
+
+async function loadBlockers({ client, repo }, issue) {
+  if (issue.issue_dependencies_summary?.total_blocked_by === 0) return [];
+  const blockers = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/dependencies/blocked_by`, { ...repo, number: issue.number }));
+  return blockers.map((blocker) => blockerKey(blocker, repo));
+}
+
+async function collectNodes(context, { parent, level }, nodes) {
+  const { client, repo, config } = context;
+  const children = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/sub_issues`, { ...repo, number: parent }));
   for (const issue of children) {
-    const blockedByPath = apiPath(`${REPO_PATH}/issues/{number}/dependencies/blocked_by`, { ...repoRef, number: issue.number });
-    const blockers = await client.paginate(blockedByPath);
+    const trusted = isTrustedAuthor({ login: issue.user?.login, kind: 'issue' }, config);
     nodes.push({
       number: issue.number,
-      title: issue.title ?? '',
+      title: trusted ? issue.title ?? '' : '',
       type: issue.type?.name ?? null,
       state: openOrClosed(issue.state),
       body: issue.body ?? '',
       parent,
       level,
-      blockedBy: blockers.map((blocker) => blocker.number),
+      blockedBy: await loadBlockers(context, issue),
     });
-    if (issue.sub_issues_summary?.total > 0) await collectNodes({ client, repoRef }, { parent: issue.number, level: level + 1 }, nodes);
+    if (issue.sub_issues_summary?.total > 0) await collectNodes(context, { parent: issue.number, level: level + 1 }, nodes);
   }
 }
 
 /**
- * Every sub-issue below the epic, closed ones included, depth first in sub-issue order.
- * @param {GitHubClient} client
- * @param {{ owner: string, repo: string }} repoRef
+ * Every sub-issue below the epic, closed ones included, depth first in sub-issue order, and the epic's criterion IDs.
+ * @param {{ client: GitHubClient, repo: { owner: string, repo: string }, config: object }} context
  * @param {number} epic
- * @returns {Promise<PlanNode[]>}
- * @throws {PlanLintError|GitHubError}
+ * @returns {Promise<{ nodes: PlanNode[], epicCriteria: string[] }>}
+ * @throws {PlanLintError|import('../lib/github.mjs').GitHubError}
  */
-export async function loadPlan(client, repoRef, epic) {
-  const issue = (await client.request('GET', apiPath(`${REPO_PATH}/issues/{number}`, { ...repoRef, number: epic }))).data;
+export async function loadPlan(context, epic) {
+  const { client, repo } = context;
+  const issue = (await client.request('GET', apiPath(`${REPO_PATH}/issues/{number}`, { ...repo, number: epic }))).data;
   if (issue.type?.name !== 'Epic') throw new PlanLintError(`#${epic} is not an epic`);
   const nodes = [];
-  await collectNodes({ client, repoRef }, { parent: epic, level: FIRST_TASK_LEVEL }, nodes);
-  return nodes;
+  await collectNodes(context, { parent: epic, level: FIRST_TASK_LEVEL }, nodes);
+  const criteria = parseSections(normalizeIssueBody('Epic', issue.body ?? '')).byName['Success criteria'] ?? '';
+  return { nodes, epicCriteria: criterionIds(criteria, 'E') };
 }
 
 // Tasks are the leaves: an issue with sub-issues only groups them (6.2, depth 3).
 const leavesOf = (nodes) => nodes.filter((node) => !nodes.some((other) => other.parent === node.number));
 
-// A blocker outside the plan cannot make a cycle or order a lane, and one on a grouping issue is ignored.
+// A blocker outside the plan cannot make a cycle or order a lane.
 function blockerGraph(tasks) {
   const known = new Set(tasks.map((task) => task.number));
-  return new Map(tasks.map((task) => [task.number, task.blockedBy.filter((number) => known.has(number))]));
+  return new Map(tasks.map((task) => [task.number, task.blockedBy.filter((blocker) => known.has(blocker))]));
 }
 
 function findCycles(graph) {
@@ -104,15 +122,49 @@ function transitiveBlockers(graph, number) {
   return found;
 }
 
-function cycleFailures(graph) {
-  return findCycles(graph).map((cycle) => ({
+/**
+ * Lane 1 holds the open tasks with no open blocker, so it is what can start now; lane 2 waits on lane 1, and so on.
+ * A closed blocker is satisfied. Width is the most tasks in one lane.
+ */
+function buildLanes(tasks) {
+  const open = tasks.filter((task) => task.state === 'open');
+  const graph = blockerGraph(open);
+  const laneOf = new Map();
+  const place = (task) => {
+    if (laneOf.has(task.number)) return laneOf.get(task.number);
+    const blockerLanes = graph.get(task.number).map((number) => place(open.find((other) => other.number === number)));
+    laneOf.set(task.number, Math.max(-1, ...blockerLanes) + 1);
+    return laneOf.get(task.number);
+  };
+  const lanes = [];
+  for (const task of open) {
+    const lane = place(task);
+    lanes[lane] = [...(lanes[lane] ?? []), task];
+  }
+  return { lanes, width: Math.max(0, ...lanes.map((lane) => lane.length)) };
+}
+
+/**
+ * The task graph, its cycles and its lanes, computed once. Lanes are null while a cycle leaves the order undefined.
+ * @param {PlanNode[]} nodes
+ * @returns {Plan}
+ */
+export function analyzePlan(nodes) {
+  const tasks = leavesOf(nodes);
+  const graph = blockerGraph(tasks);
+  const cycles = findCycles(graph);
+  return { nodes, tasks, graph, cycles, lanes: cycles.length > 0 ? null : buildLanes(tasks) };
+}
+
+function cycleFailures({ cycles }) {
+  return cycles.map((cycle) => ({
     code: 'cycle',
     task: cycle[0],
     message: `dependency cycle: ${cycle.map((number) => `#${number}`).join(' blocked by ')}`,
   }));
 }
 
-function integrationFailures(tasks, graph) {
+function integrationFailures({ tasks, graph }) {
   if (tasks.length === 0) return [{ code: 'no-integration-task', task: null, message: 'the epic has no sub-issues, so no integration task' }];
   const isIntegration = (task) => {
     const blockers = transitiveBlockers(graph, task.number);
@@ -120,6 +172,16 @@ function integrationFailures(tasks, graph) {
   };
   if (tasks.some(isIntegration)) return [];
   return [{ code: 'no-integration-task', task: null, message: 'no task is blocked by every other task (the integration task)' }];
+}
+
+function groupLinkFailures({ nodes, tasks }) {
+  const groups = new Set(nodes.filter((node) => !tasks.includes(node)).map((node) => node.number));
+  const linksGroup = (node) => (groups.has(node.number) ? node.blockedBy.length > 0 : node.blockedBy.some((blocker) => groups.has(blocker)));
+  return nodes.filter(linksGroup).map((node) => ({
+    code: 'link-on-group',
+    task: node.number,
+    message: `#${node.number} has a blocked-by link on a grouping issue; links must sit on leaf tasks`,
+  }));
 }
 
 function sizeFailures(nodes, limits) {
@@ -132,15 +194,14 @@ function sizeFailures(nodes, limits) {
     }));
 }
 
-function depthFailures(nodes, limits) {
-  const taskCount = leavesOf(nodes).length;
-  const allowed = taskCount > limits.subIssuesPerParent ? limits.hierarchyDepthWithIntermediate : limits.hierarchyDepth;
+function depthFailures({ nodes, tasks }, limits) {
+  const allowed = tasks.length > limits.subIssuesPerParent ? limits.hierarchyDepthWithIntermediate : limits.hierarchyDepth;
   return nodes
     .filter((node) => node.level > allowed)
     .map((node) => ({
       code: 'depth',
       task: node.number,
-      message: `#${node.number} is at depth ${node.level}; the limit is ${allowed} for ${taskCount} tasks`,
+      message: `#${node.number} is at depth ${node.level}; the limit is ${allowed} for ${tasks.length} tasks`,
     }));
 }
 
@@ -150,39 +211,49 @@ function sectionsOf(task) {
   return parseSections(normalizeIssueBody(type, task.body)).byName;
 }
 
-function contentFailures(task) {
+function contentFailures(task, epicCriteria) {
   const byName = sectionsOf(task);
   const failures = [];
   if (task.type !== 'Spike' && criterionIds(byName['Acceptance criteria'] ?? '', 'AC').length === 0) {
     failures.push({ code: 'missing-ac', task: task.number, message: `#${task.number} has no acceptance criterion (AC<n>)` });
   }
-  if (!SERVES_ID.test(byName.Serves ?? '')) {
-    failures.push({ code: 'missing-serves', task: task.number, message: `#${task.number} has no epic criterion in ## Serves` });
+  const served = (byName.Serves ?? '').split(/[\s,]+/).filter((token) => token !== '');
+  if (served.length === 0 || !served.every((id) => epicCriteria.includes(id))) {
+    failures.push({
+      code: 'missing-serves',
+      task: task.number,
+      message: `#${task.number} ## Serves must name epic criteria that exist (${epicCriteria.join(', ') || 'none found'})`,
+    });
   }
   return failures;
 }
 
-const trimSlashes = (value) => value.replace(/\/+$/, '');
-
-/** Paths a task names in `## Touches`; a hotspot name stands for its paths. */
-function touchedPaths(task, hotspots) {
-  const section = sectionsOf(task).Touches ?? '';
-  const quoted = [...section.matchAll(BACKTICKED)].map((match) => match[1]);
-  const tokens = quoted.length > 0 ? quoted : section.split(/[,\n]/).map((token) => token.replace(/^\s*[-*]\s*/, ''));
-  return tokens
-    .map((token) => trimSlashes(token.trim()))
-    .filter((token) => token !== '')
-    .flatMap((token) => hotspots.find((hotspot) => hotspot.name === token)?.paths.map(trimSlashes) ?? [token]);
+// Words such as `none` or `protected` are not paths, so only a token with a `/` or a file extension counts.
+function pathTokens(text) {
+  return text
+    .split(/[\s,;`()]+/)
+    .map((token) => token.replace(/:\d+$/, '').replace(/[.:;]+$/, '').replace(/\/+$/, ''))
+    .filter((token) => PATH_LIKE.test(token) && !NOT_A_PATH.test(token));
 }
 
-const pathsOverlap = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+/** What a task claims in `## Touches`: path tokens, and the hotspots held by `next.mjs` semantics. */
+function touchesOf(task, hotspots) {
+  const text = sectionsOf(task).Touches ?? '';
+  const paths = pathTokens(text);
+  const held = hotspots
+    .filter((hotspot) => namesHotspot(text, hotspot) || paths.some((token) => hotspot.paths.some((hotspotPath) => isUnder(token, hotspotPath))))
+    .map((hotspot) => hotspot.name);
+  return { paths, held };
+}
 
-function sharedPath(pathsA, pathsB) {
-  return pathsA.find((a) => pathsB.some((b) => pathsOverlap(a, b))) ?? null;
+function sharedTouch(first, second) {
+  const hotspot = first.held.find((name) => second.held.includes(name));
+  if (hotspot !== undefined) return `hotspot ${hotspot}`;
+  return first.paths.find((a) => second.paths.some((b) => isUnder(a, b) || isUnder(b, a))) ?? null;
 }
 
 function overlapFailure(first, second, { graph, touches }) {
-  const shared = sharedPath(touches.get(first.number), touches.get(second.number));
+  const shared = sharedTouch(touches.get(first.number), touches.get(second.number));
   const linked = transitiveBlockers(graph, first.number).has(second.number)
     || transitiveBlockers(graph, second.number).has(first.number);
   if (shared === null || linked) return null;
@@ -193,9 +264,9 @@ function overlapFailure(first, second, { graph, touches }) {
   };
 }
 
-function overlapFailures(tasks, { graph, hotspots }) {
+function overlapFailures({ tasks, graph }, hotspots) {
   const open = tasks.filter((task) => task.state === 'open');
-  const touches = new Map(open.map((task) => [task.number, touchedPaths(task, hotspots)]));
+  const touches = new Map(open.map((task) => [task.number, touchesOf(task, hotspots)]));
   return open
     .flatMap((first, index) => open.slice(index + 1).map((second) => overlapFailure(first, second, { graph, touches })))
     .filter((failure) => failure !== null);
@@ -203,66 +274,38 @@ function overlapFailures(tasks, { graph, hotspots }) {
 
 /**
  * The 6.2 failures of a plan.
- * @param {PlanNode[]} nodes
+ * @param {Plan} plan
  * @param {{ limits: { hierarchyDepth: number, hierarchyDepthWithIntermediate: number, subIssuesPerParent: number },
- *   hotspots: Array<{ name: string, paths: string[] }> }} rules
+ *   hotspots: Array<{ name: string, paths: string[] }>, epicCriteria: string[] }} rules
  * @returns {Failure[]}
  */
-export function lintPlan(nodes, { limits, hotspots }) {
-  const tasks = leavesOf(nodes);
-  const graph = blockerGraph(tasks);
+export function lintPlan(plan, { limits, hotspots, epicCriteria }) {
   return [
-    ...sizeFailures(nodes, limits),
-    ...depthFailures(nodes, limits),
-    ...tasks.flatMap(contentFailures),
-    ...cycleFailures(graph),
-    ...integrationFailures(tasks, graph),
-    ...overlapFailures(tasks, { graph, hotspots }),
+    ...sizeFailures(plan.nodes, limits),
+    ...depthFailures(plan, limits),
+    ...groupLinkFailures(plan),
+    ...plan.tasks.flatMap((task) => contentFailures(task, epicCriteria)),
+    ...cycleFailures(plan),
+    ...integrationFailures(plan),
+    ...overlapFailures(plan, hotspots),
   ];
 }
 
-/**
- * Tasks grouped by the longest blocker chain below them: lane 1 has no blockers, lane 2 waits on lane 1, and so on.
- * Width is the most open tasks in one lane. Null while a cycle leaves the order undefined.
- * @param {PlanNode[]} nodes
- * @returns {{ lanes: PlanNode[][], width: number }|null}
- */
-export function laneWidth(nodes) {
-  const tasks = leavesOf(nodes);
-  const graph = blockerGraph(tasks);
-  if (findCycles(graph).length > 0) return null;
-  const laneOf = new Map();
-  const place = (task) => {
-    if (laneOf.has(task.number)) return laneOf.get(task.number);
-    const blockerLanes = graph.get(task.number).map((number) => place(tasks.find((other) => other.number === number)));
-    laneOf.set(task.number, Math.max(-1, ...blockerLanes) + 1);
-    return laneOf.get(task.number);
-  };
-  const lanes = [];
-  for (const task of tasks) {
-    const lane = place(task);
-    lanes[lane] = [...(lanes[lane] ?? []), task];
-  }
-  const width = Math.max(0, ...lanes.map((lane) => lane.filter((task) => task.state === 'open').length));
-  return { lanes, width };
-}
-
-const describeTask = (task) => `#${task.number} ${task.title}${task.state === 'closed' ? ' (closed)' : ''}`;
+const describeTask = (task) => (task.title === '' ? `#${task.number}` : `#${task.number} ${task.title}`);
 
 /**
- * @param {{ epic: number, nodes: PlanNode[], failures: Failure[] }} plan
+ * @param {{ epic: number, plan: Plan, failures: Failure[] }} report
  * @param {string} template plan-comment.md
  * @returns {string} the comment body, marker included
  * @throws {PlanLintError} when the template has a placeholder this function does not fill
  */
-export function renderReport({ epic, nodes, failures }, template) {
-  const lanes = laneWidth(nodes);
-  const laneLines = (lanes?.lanes ?? []).map((lane, index) => `- Lane ${index + 1}: ${lane.map(describeTask).join('; ')}`);
+export function renderReport({ epic, plan, failures }, template) {
+  const laneLines = (plan.lanes?.lanes ?? []).map((lane, index) => `- Lane ${index + 1}: ${lane.map(describeTask).join('; ')}`);
   const failureLines = failures.map((failure) => `- ${failure.code}: ${failure.message}`);
   const { text, unfilled } = fillTemplate(template, {
     epic,
     result: failures.length === 0 ? 'pass' : `fail (${failures.length})`,
-    width: lanes === null ? 'unknown (dependency cycle)' : lanes.width,
+    width: plan.lanes === null ? 'unknown (dependency cycle)' : plan.lanes.width,
     lanes: laneLines.length > 0 ? laneLines.join('\n') : 'none',
     failures: failureLines.length > 0 ? failureLines.join('\n') : 'none',
   });
@@ -271,7 +314,7 @@ export function renderReport({ epic, nodes, failures }, template) {
 }
 
 /**
- * Creates the one marked comment on the epic, or updates it; an identical body writes nothing.
+ * Creates the one marked comment on the epic, or updates the newest one; an identical body writes nothing.
  * @param {PlanLintContext} context
  * @param {{ epic: number, body: string }} report
  * @returns {Promise<'created'|'updated'|'unchanged'>}
@@ -296,12 +339,13 @@ export async function upsertReport({ client, repo, config }, { epic, body }) {
  * @returns {Promise<{ epic: number, tasks: number, width: number|null, failures: Failure[], report: string, posted: string|null }>}
  */
 export async function planLint(context, { epic, post }) {
-  const { client, repo, config, hotspots, template } = context;
-  const nodes = await loadPlan(client, repo, epic);
-  const failures = lintPlan(nodes, { limits: config.limits, hotspots });
-  const report = renderReport({ epic, nodes, failures }, template);
+  const { config, hotspots, template } = context;
+  const { nodes, epicCriteria } = await loadPlan(context, epic);
+  const plan = analyzePlan(nodes);
+  const failures = lintPlan(plan, { limits: config.limits, hotspots, epicCriteria });
+  const report = renderReport({ epic, plan, failures }, template);
   const posted = post ? await upsertReport(context, { epic, body: report }) : null;
-  return { epic, tasks: leavesOf(nodes).length, width: laneWidth(nodes)?.width ?? null, failures, report, posted };
+  return { epic, tasks: plan.tasks.length, width: plan.lanes?.width ?? null, failures, report, posted };
 }
 
 /**
@@ -313,8 +357,8 @@ export function parseArguments(argv) {
   let parsed;
   try {
     parsed = parseArgs({ args: argv, options: { post: { type: 'boolean' }, json: { type: 'boolean' } }, allowPositionals: true });
-  } catch (error) {
-    throw new PlanLintError(`${error.message.split('\n')[0]}; ${USAGE}`);
+  } catch {
+    throw new PlanLintError(USAGE);
   }
   const epic = Number(parsed.positionals[0]);
   if (parsed.positionals.length !== 1 || !Number.isInteger(epic) || epic <= 0) throw new PlanLintError(USAGE);
@@ -334,24 +378,33 @@ function reportError(reason, { json }) {
   console.error(reason);
 }
 
-async function main(argv, env) {
+async function createContext(env) {
+  const root = repoRoot(import.meta.url);
+  return {
+    client: createClient({ env }),
+    repo: env.GITHUB_REPOSITORY ? repoFromEnv(env) : await currentRepo(),
+    config: await loadConfig({ root }),
+    hotspots: await loadHotspots({ root }),
+    template: await readFile(path.join(root, CONFIG_DIR, TEMPLATE_FILE), 'utf8'),
+  };
+}
+
+/**
+ * Exit 0 on a clean plan; 1 on a lint failure (`--json` carries `failures`) or on an error (it does not).
+ * @param {string[]} argv
+ * @param {Record<string, string|undefined>} env
+ * @param {(env: Record<string, string|undefined>) => Promise<PlanLintContext>} [buildContext]
+ * @returns {Promise<number>}
+ */
+export async function main(argv, env, buildContext = createContext) {
   const json = argv.includes('--json');
   try {
     const request = parseArguments(argv);
-    const root = repoRoot(import.meta.url);
-    const context = {
-      client: createClient({ env }),
-      repo: env.GITHUB_REPOSITORY ? repoFromEnv(env) : await currentRepo(),
-      config: await loadConfig({ root }),
-      hotspots: await loadHotspots({ root }),
-      template: await readFile(path.join(root, CONFIG_DIR, TEMPLATE_FILE), 'utf8'),
-    };
-    const result = await planLint(context, request);
+    const result = await planLint(await buildContext(env), request);
     reportResult(result, { json });
     return result.failures.length === 0 ? 0 : 1;
   } catch (error) {
-    const known = error instanceof PlanLintError || error instanceof GitHubError;
-    reportError(known ? error.message.split(/\r?\n/)[0] : 'plan-lint: failed', { json });
+    reportError(error instanceof Error ? error.message.split(/\r?\n/)[0] : 'plan-lint: failed', { json });
     return 1;
   }
 }

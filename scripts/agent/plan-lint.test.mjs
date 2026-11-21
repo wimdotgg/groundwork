@@ -4,14 +4,19 @@ import { readFile } from 'node:fs/promises';
 import { createFixtureClient } from '../lib/github.mjs';
 import { hasMarker } from '../lib/markdown.mjs';
 import {
-  PlanLintError, laneWidth, lintPlan, loadPlan, parseArguments, planLint, renderReport, upsertReport,
+  PlanLintError, analyzePlan, lintPlan, loadPlan, main, parseArguments, planLint, renderReport, upsertReport,
 } from './plan-lint.mjs';
 
 const REPO = { owner: 'o', repo: 'r' };
 const AGENT = 'o-agent[bot]';
 const EPIC = 500;
 const LIMITS = { hierarchyDepth: 2, hierarchyDepthWithIntermediate: 3, subIssuesPerParent: 12 };
-const config = { accounts: { agent: AGENT }, limits: LIMITS };
+const OWNER = 'o-owner';
+const config = {
+  accounts: { owner: OWNER, agent: AGENT },
+  trustedAuthors: [{ actor: 'owner', scope: 'any' }],
+  limits: LIMITS,
+};
 const template = await readFile(new URL('../../.github/groundwork/templates/plan-comment.md', import.meta.url), 'utf8');
 const ok = (data) => ({ status: 200, data, headers: {} });
 const created = { status: 201, data: {}, headers: {} };
@@ -27,7 +32,8 @@ function task(number, { blockedBy = [], state = 'open', type = 'Feature', parent
 }
 
 const codes = (failures) => failures.map((failure) => failure.code);
-const lint = (nodes, hotspots = []) => lintPlan(nodes, { limits: LIMITS, hotspots });
+const EPIC_CRITERIA = ['E1', 'E2'];
+const lint = (nodes, hotspots = []) => lintPlan(analyzePlan(nodes), { limits: LIMITS, hotspots, epicCriteria: EPIC_CRITERIA });
 
 /** Contract 1, lanes 2 and 3, integration 4: a plan that passes every rule. */
 const healthyPlan = () => [
@@ -108,38 +114,77 @@ test('touches-overlap: a directory prefix overlaps, a sibling path and a closed 
   assert.deepEqual(lint(tasks('`scripts/agent/next.mjs`', 'closed')), []);
 });
 
-test('touches-overlap: a link through a third task counts, plain-text Touches are read', () => {
+
+test('touches-overlap: a link through a third task counts', () => {
   const viaThird = [
-    task(1, { touches: '`a`' }), task(2, { touches: '`b`', blockedBy: [1] }), task(3, { touches: '`a`', blockedBy: [2] }),
+    task(1, { touches: '`a.mjs`' }), task(2, { touches: '`b.mjs`', blockedBy: [1] }), task(3, { touches: '`a.mjs`', blockedBy: [2] }),
   ];
   assert.deepEqual(lint(viaThird), []);
-  const plain = [task(1, { touches: 'docs, scripts' }), task(2, { touches: '- scripts' }), task(3, { blockedBy: [1, 2] })];
-  assert.deepEqual(codes(lint(plain)), ['touches-overlap']);
 });
 
-test('touches-overlap: a hotspot name stands for its paths', () => {
-  const hotspots = [{ name: 'spec', paths: ['docs/spec.md'] }];
-  const tasks = [task(1, { touches: '`spec`' }), task(2, { touches: '`docs/spec.md`' }), task(3, { blockedBy: [1, 2] })];
-  assert.deepEqual(codes(lint(tasks, hotspots)), ['touches-overlap']);
-  assert.deepEqual(lint(tasks), []);
+test('touches-overlap: empty markers and words that are no path never overlap', () => {
+  const pair = (touches) => [task(1, { touches }), task(2, { touches }), task(3, { blockedBy: [1, 2] })];
+  assert.deepEqual(lint(pair('none')), []);
+  assert.deepEqual(lint(pair('_No response_')), []);
+  assert.deepEqual(lint(pair('n/a')), []);
+  const shared = [task(1, { touches: '`a.mjs` (`protected`)' }), task(2, { touches: '`b.mjs` (`protected`)' }), task(3, { blockedBy: [1, 2] })];
+  assert.deepEqual(lint(shared), []);
+});
+
+test('touches-overlap: paths are read from the whole section, backticked or not', () => {
+  const mixed = [task(1, { touches: '`a.mjs` and docs/spec.md' }), task(2, { touches: 'docs/spec.md' }), task(3, { blockedBy: [1, 2] })];
+  assert.deepEqual(codes(lint(mixed)), ['touches-overlap']);
+  const prose = [task(1, { touches: 'scripts/agent/next.mjs (hotspot)' }), task(2, { touches: '`scripts/agent/next.mjs:166`' }), task(3, { blockedBy: [1, 2] })];
+  assert.deepEqual(codes(lint(prose)), ['touches-overlap']);
+});
+
+test('touches-overlap: hotspots follow next.mjs, by name or path in the text, or a path under a hotspot path', () => {
+  const hotspots = [{ name: 'spec', paths: ['docs/spec.md'] }, { name: 'lib', paths: ['scripts/lib'] }];
+  const withThird = (first, second) => [task(1, { touches: first }), task(2, { touches: second }), task(3, { blockedBy: [1, 2] })];
+  const byName = lint(withThird('the spec hotspot', '`docs/spec.md`'), hotspots);
+  assert.match(byName[0].message, /both touch hotspot spec/);
+  const underPath = lint(withThird('`scripts/lib/a.mjs`', '`scripts/lib/b.mjs`'), hotspots);
+  assert.match(underPath[0].message, /both touch hotspot lib/);
+  assert.deepEqual(lint(withThird('`scripts/lib/a.mjs`', '`scripts/lib/b.mjs`')), []);
 });
 
 test('lane width: the healthy plan has three lanes and width 2', () => {
-  const { lanes, width } = laneWidth(healthyPlan());
+  const { lanes, width } = analyzePlan(healthyPlan()).lanes;
   assert.deepEqual(lanes.map((lane) => lane.map((entry) => entry.number)), [[1], [2, 3], [4]]);
   assert.equal(width, 2);
 });
 
-test('lane width: closed tasks do not count, a cycle gives null', () => {
-  const plan = [task(1), task(2, { blockedBy: [1], state: 'closed' }), task(3, { blockedBy: [1] }), task(4, { blockedBy: [2, 3] })];
-  assert.equal(laneWidth(plan).width, 1);
-  assert.equal(laneWidth([task(1, { blockedBy: [2] }), task(2, { blockedBy: [1] })]), null);
+test('lane width: a closed blocker is satisfied, so its dependants start in lane 1', () => {
+  const plan = [task(1, { state: 'closed' }), task(2, { blockedBy: [1] }), task(3, { blockedBy: [1] }), task(4, { blockedBy: [2, 3] })];
+  const { lanes, width } = analyzePlan(plan).lanes;
+  assert.deepEqual(lanes.map((lane) => lane.map((entry) => entry.number)), [[2, 3], [4]]);
+  assert.equal(width, 2);
+});
+
+test('lane width: a cycle gives no lanes', () => {
+  assert.equal(analyzePlan([task(1, { blockedBy: [2] }), task(2, { blockedBy: [1] })]).lanes, null);
+});
+
+test('blocked-by links: a link on a grouping parent, or to one, fails; a cross-repo blocker is not a local task', () => {
+  const group = task(1);
+  const child = task(2, { parent: 1, level: 3 });
+  const nodes = (groupBlockers, taskBlockers) => [
+    { ...group, blockedBy: groupBlockers }, child, task(3, { blockedBy: taskBlockers }),
+  ];
+  const onGroup = lint(nodes([3], [2]), []).filter((failure) => failure.code === 'link-on-group');
+  assert.deepEqual(onGroup.map((failure) => failure.task), [1]);
+  const toGroup = lint(nodes([], [1, 2])).filter((failure) => failure.code === 'link-on-group');
+  assert.deepEqual(toGroup.map((failure) => failure.task), [3]);
+  assert.match(toGroup[0].message, /links must sit on leaf tasks/);
+  assert.deepEqual(codes(lint(nodes([], [2]))).filter((code) => code === 'link-on-group'), []);
+  const foreign = [task(1), task(2, { blockedBy: ['https://api.github.com/repos/x/y#1', 1] })];
+  assert.deepEqual(codes(lint(foreign)), []);
 });
 
 test('report: states the lane width, the lanes and each failure', () => {
   const nodes = [task(1), task(2, { ac: '', blockedBy: [1] })];
-  const report = renderReport({ epic: EPIC, nodes, failures: lint(nodes) }, template);
-  assert.match(report, /^Plan lint #500: fail \(\d\)\nLane width: 1\n/);
+  const report = renderReport({ epic: EPIC, plan: analyzePlan(nodes), failures: lint(nodes) }, template);
+  assert.match(report, /^Plan lint #500: fail \(1\)\nLane width: 1 \(most open tasks in one lane; lane 1 can start now\)\n/);
   assert.match(report, /- Lane 1: #1 task 1/);
   assert.match(report, /- missing-ac: #2/);
   assert.ok(hasMarker(report, 'plan-lint'));
@@ -147,15 +192,23 @@ test('report: states the lane width, the lanes and each failure', () => {
 });
 
 test('report: a passing plan says pass, a cycle says the width is unknown', () => {
-  const pass = renderReport({ epic: EPIC, nodes: healthyPlan(), failures: [] }, template);
-  assert.match(pass, /^Plan lint #500: pass\nLane width: 2\n/);
+  const pass = renderReport({ epic: EPIC, plan: analyzePlan(healthyPlan()), failures: [] }, template);
+  assert.match(pass, /^Plan lint #500: pass\nLane width: 2 /);
   assert.match(pass, /## Failures\nnone\n/);
-  const looped = [task(1, { blockedBy: [2] }), task(2, { blockedBy: [1] })];
-  assert.match(renderReport({ epic: EPIC, nodes: looped, failures: lint(looped) }, template), /Lane width: unknown \(dependency cycle\)/);
+  const looped = analyzePlan([task(1, { blockedBy: [2] }), task(2, { blockedBy: [1] })]);
+  assert.match(renderReport({ epic: EPIC, plan: looped, failures: [] }, template), /Lane width: unknown \(dependency cycle\)/);
 });
 
 test('report: an unknown template placeholder throws', () => {
-  assert.throws(() => renderReport({ epic: EPIC, nodes: [], failures: [] }, `${template}<other>`), PlanLintError);
+  assert.throws(() => renderReport({ epic: EPIC, plan: analyzePlan([]), failures: [] }, `${template}<other>`), PlanLintError);
+});
+
+test('report: a task title appears only for a trusted author', () => {
+  const trusted = task(1);
+  const outsider = { ...task(2, { blockedBy: [1] }), title: '' };
+  const report = renderReport({ epic: EPIC, plan: analyzePlan([trusted, outsider]), failures: [] }, template);
+  assert.match(report, /- Lane 1: #1 task 1\n/);
+  assert.match(report, /- Lane 2: #2\n/);
 });
 
 const COMMENTS = 'GET /repos/o/r/issues/500/comments?per_page=100';
@@ -202,35 +255,60 @@ test('post: a marker from another author is ignored, so a new comment is created
   assert.deepEqual(writes.map((write) => write.method), ['POST']);
 });
 
+
 const issueRoute = (number) => `GET /repos/o/r/issues/${number}`;
 const subIssuesRoute = (number) => `GET /repos/o/r/issues/${number}/sub_issues?per_page=100`;
 const blockedByRoute = (number) => `GET /repos/o/r/issues/${number}/dependencies/blocked_by?per_page=100`;
+const EPIC_BODY = '## Success criteria\n- [ ] E1 first\n- [ ] E2 second\n';
 const issueFor = (node, extra = {}) => ({
-  number: node.number, title: node.title, type: { name: node.type }, state: node.state, body: node.body, ...extra,
+  number: node.number, title: node.title, type: { name: node.type }, state: node.state, body: node.body, user: { login: OWNER }, ...extra,
 });
 
 /** Routes for an epic whose direct sub-issues are `nodes`; blockers come from each node. */
 function planRoutes(nodes, epicType = 'Epic') {
-  const routes = { [issueRoute(EPIC)]: ok({ number: EPIC, type: { name: epicType } }), [subIssuesRoute(EPIC)]: ok(nodes.map((node) => issueFor(node))) };
+  const epic = { number: EPIC, type: { name: epicType }, body: EPIC_BODY };
+  const routes = { [issueRoute(EPIC)]: ok(epic), [subIssuesRoute(EPIC)]: ok(nodes.map((node) => issueFor(node))) };
   for (const node of nodes) routes[blockedByRoute(node.number)] = ok(node.blockedBy.map((number) => ({ number })));
   return routes;
 }
 
-test('loadPlan: reads sub-issues, blockers and nested groups', async () => {
+const loadContext = (routes) => ({ client: createFixtureClient(routes), repo: REPO, config });
+
+test('loadPlan: reads sub-issues, blockers, nested groups and the epic criteria', async () => {
   const group = task(1);
   const child = task(2, { parent: 1, level: 3 });
   const routes = {
     ...planRoutes([group]),
     [subIssuesRoute(EPIC)]: ok([issueFor(group, { sub_issues_summary: { total: 1 } })]),
     [subIssuesRoute(1)]: ok([issueFor(child)]),
-    [blockedByRoute(2)]: ok([{ number: 9 }]),
+    [blockedByRoute(2)]: ok([{ number: 9 }, { number: 4, repository_url: 'https://api.github.com/repos/x/y' }]),
   };
-  const nodes = await loadPlan(createFixtureClient(routes), REPO, EPIC);
-  assert.deepEqual(nodes.map((node) => [node.number, node.parent, node.level, node.blockedBy]), [[1, EPIC, 2, []], [2, 1, 3, [9]]]);
+  const { nodes, epicCriteria } = await loadPlan(loadContext(routes), EPIC);
+  assert.deepEqual(nodes.map((node) => [node.number, node.parent, node.level, node.blockedBy]), [
+    [1, EPIC, 2, []], [2, 1, 3, [9, 'https://api.github.com/repos/x/y#4']],
+  ]);
+  assert.deepEqual(epicCriteria, ['E1', 'E2']);
 });
 
 test('loadPlan: refuses an issue that is not an epic', async () => {
-  await assert.rejects(loadPlan(createFixtureClient(planRoutes([], 'Feature')), REPO, EPIC), /#500 is not an epic/);
+  await assert.rejects(loadPlan(loadContext(planRoutes([], 'Feature')), EPIC), /#500 is not an epic/);
+});
+
+test('loadPlan: skips the blocked_by request when the summary says zero, and blanks an untrusted title', async () => {
+  const first = task(1);
+  const routes = {
+    ...planRoutes([first]),
+    [subIssuesRoute(EPIC)]: ok([issueFor(first, { issue_dependencies_summary: { total_blocked_by: 0 }, user: { login: 'stranger' } })]),
+  };
+  delete routes[blockedByRoute(1)];
+  const { nodes } = await loadPlan(loadContext(routes), EPIC);
+  assert.deepEqual([nodes[0].blockedBy, nodes[0].title], [[], '']);
+});
+
+test('serves: an ID missing from the epic criteria fails, as does text around a valid ID', () => {
+  const failures = lint([task(1, { serves: 'E99' }), task(2, { blockedBy: [1], serves: 'later than E1' })]);
+  assert.deepEqual(failures.map((failure) => [failure.code, failure.task]), [['missing-serves', 1], ['missing-serves', 2]]);
+  assert.match(failures[0].message, /E1, E2/);
 });
 
 test('planLint: lints the loaded plan and posts only with post set', async () => {
@@ -244,17 +322,65 @@ test('planLint: lints the loaded plan and posts only with post set', async () =>
   assert.equal(writes.length, 1);
 });
 
-test('planLint: reports failures from the loaded plan', async () => {
-  const nodes = [task(1), task(2)];
-  const context = { client: createFixtureClient(planRoutes(nodes)), repo: REPO, config, hotspots: [], template };
-  const result = await planLint(context, { epic: EPIC, post: false });
-  assert.deepEqual(codes(result.failures), ['no-integration-task']);
-});
-
-test('arguments: epic number, --post and --json; anything else is refused with usage', () => {
+test('arguments: epic number, --post and --json; anything else is refused with the usage line only', () => {
   assert.deepEqual(parseArguments(['75', '--post', '--json']), { epic: 75, post: true, json: true });
   assert.deepEqual(parseArguments(['75']), { epic: 75, post: false, json: false });
   for (const argv of [[], ['x'], ['0'], ['1', '2'], ['75', '--close'], ['75', '--bogus']]) {
-    assert.throws(() => parseArguments(argv), (error) => error instanceof PlanLintError && /usage: plan-lint\.mjs/.test(error.message), argv.join(' '));
+    const refused = (error) => error instanceof PlanLintError && error.message === 'usage: plan-lint.mjs <epic> [--post] [--json]';
+    assert.throws(() => parseArguments(argv), refused, argv.join(' '));
   }
+});
+
+/** Runs `main` against fixtures and returns the exit code with everything it printed. */
+async function runMain(argv, routes) {
+  const out = [];
+  const err = [];
+  const { log, error } = console;
+  console.log = (line) => out.push(line);
+  console.error = (line) => err.push(line);
+  try {
+    const exitCode = await main(argv, {}, async () => ({ client: createFixtureClient(routes), repo: REPO, config, hotspots: [], template }));
+    return { exitCode, out, err };
+  } finally {
+    Object.assign(console, { log, error });
+  }
+}
+
+test('main: a clean plan exits 0 and --json says ok with the lane width', async () => {
+  const { exitCode, out, err } = await runMain([String(EPIC), '--json'], planRoutes(healthyPlan()));
+  assert.equal(exitCode, 0);
+  assert.deepEqual(err, []);
+  const payload = JSON.parse(out[0]);
+  assert.deepEqual([payload.ok, payload.width, payload.tasks, payload.failures, 'reason' in payload], [true, 2, 4, [], false]);
+});
+
+test('main: a lint failure exits 1; --json says not ok, with a reason and the failures', async () => {
+  const { exitCode, out, err } = await runMain([String(EPIC), '--json'], planRoutes([task(1), task(2)]));
+  assert.equal(exitCode, 1);
+  const payload = JSON.parse(out[0]);
+  assert.deepEqual([payload.ok, payload.reason, codes(payload.failures)], [false, '1 planning failure', ['no-integration-task']]);
+  assert.deepEqual(err, ['1 planning failure']);
+});
+
+test('main: an API error exits 1; --json carries ok and reason but no failures', async () => {
+  const { exitCode, out, err } = await runMain([String(EPIC), '--json'], {});
+  assert.equal(exitCode, 1);
+  const payload = JSON.parse(out[0]);
+  assert.deepEqual([payload.ok, 'failures' in payload], [false, false]);
+  assert.match(payload.reason, /no fixture for GET \/repos\/o\/r\/issues\/500/);
+  assert.equal(err.length, 1);
+});
+
+test('main: a plain Error prints its first line, and a usage error prints the usage line only', async () => {
+  const boom = async () => { throw new Error('config broke\nstack detail'); };
+  const stderr = [];
+  const { error } = console;
+  console.error = (line) => stderr.push(line);
+  try {
+    assert.equal(await main([String(EPIC)], {}, boom), 1);
+    assert.equal(await main([String(EPIC), '--close'], {}, boom), 1);
+  } finally {
+    console.error = error;
+  }
+  assert.deepEqual(stderr, ['config broke', 'usage: plan-lint.mjs <epic> [--post] [--json]']);
 });
