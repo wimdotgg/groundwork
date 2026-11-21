@@ -81,6 +81,16 @@ const withCanonicalTarget = (request, controlRepo) => (isControlRepo(request.tar
 /** An op that names its own repository (`selftest`) exports `targetRepo(env)`; every other op keeps the dispatched one (12.1). */
 const withModuleTarget = (request, env) => (typeof request.module.targetRepo === 'function' ? { ...request, targetRepo: request.module.targetRepo(env) } : request);
 
+/** A module's `targetRepo(env)` throws on a bad run id; that refuses the dispatch instead of crashing. */
+function resolveRequest(dispatched, { controlRepo, env }) {
+  try {
+    return { request: withModuleTarget(withCanonicalTarget(dispatched, controlRepo), env) };
+  } catch (error) {
+    if (!(error instanceof GitHubError)) throw error;
+    return { problem: safeText(error.message) };
+  }
+}
+
 /**
  * @param {Record<string, string|undefined>} env
  * @returns {{ op: string, targetRepo: string, ref: string, scriptPath: string, argsText: string }}
@@ -279,7 +289,8 @@ export async function plan(env, overrides = {}) {
   const { problems, request: dispatched } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
-  const request = withModuleTarget(withCanonicalTarget(dispatched, controlRepo), env);
+  const { request, problem } = resolveRequest(dispatched, { controlRepo, env });
+  if (problem !== undefined) return failure(heading, problem);
   if (refusesControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   let ancestry;
   if (request.op === OP_WITH_REF) {
@@ -526,6 +537,7 @@ async function runOp(context) {
   const ctx = {
     client, token, org, repo, settingsRoot, config, env, log: (line) => logs.push(clean(line)), recordCall,
     withToken: context.withToken, setScriptPermissions: context.setScriptPermissions, writeSettings: (files) => writeSettingsFiles({ deps, directory }, files),
+    runCheck: () => checkAfterDeferred(context, ctx),
   };
   const parts = [await request.module.run(ctx)];
   if (OPS_THEN_CHECK.has(request.op) && parts[0].ok) {
@@ -610,7 +622,8 @@ export async function apply(env, overrides = {}) {
   delete process.env.ADMIN_APP_KEY;
 
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
-  const request = withModuleTarget(withCanonicalTarget(dispatched, controlRepo), env);
+  const { request, problem } = resolveRequest(dispatched, { controlRepo, env });
+  if (problem !== undefined) return failure(heading, problem);
   if (refusesControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   const calls = [];
   const logs = [];
