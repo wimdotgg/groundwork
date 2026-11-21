@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GitHubError, createFixtureClient } from '../lib/github.mjs';
 import { PROBE_IDS } from './selftest-probes.mjs';
-import { CONTROL_READ_PERMISSIONS, CREATE_PERMISSIONS, PERMISSIONS, grants, run, targetRepo, validateArgs } from './selftest.mjs';
+import { CONTROL_READ_PERMISSIONS, CREATE_PERMISSIONS, PERMISSIONS, grants, run as runSelftest, targetRepo, validateArgs } from './selftest.mjs';
 import { PERMISSIONS as CHECK_PERMISSIONS } from './check.mjs';
 
 const ORG = 'acme';
@@ -11,7 +11,8 @@ const RUN_ID = '4242';
 const REPO = `selftest-${RUN_ID}`;
 const archivePath = `/repos/${ORG}/${REPO}`;
 
-const passingProbes = async () => PROBE_IDS.map((id) => ({ id, name: id, ok: true, detail: 'fine' }));
+const run = (ctx, seams) => runSelftest(ctx, { inspect: async () => 'absent', ...seams });
+const passingProbes =async () => PROBE_IDS.map((id) => ({ id, name: id, ok: true, detail: 'fine' }));
 
 /** `withToken` records every request and hands the callback a fixture client that records each call. */
 function harness({ archiveStatus = 200, mintFails = false, checkResult = { ok: true, summary: 'check summary' } } = {}) {
@@ -22,7 +23,7 @@ function harness({ archiveStatus = 200, mintFails = false, checkResult = { ok: t
     org: ORG,
     repo: REPO,
     env: { GITHUB_RUN_ID: RUN_ID, KEEP: 'yes' },
-    config: { controlRepo: CONTROL },
+    config: { controlRepo: CONTROL, apps: { admin: 'admin-app' } },
     log: () => {},
     runCheck: async () => {
       events.push('check');
@@ -30,7 +31,7 @@ function harness({ archiveStatus = 200, mintFails = false, checkResult = { ok: t
     },
     withToken: async (request, callback) => {
       requests.push(request);
-      if (mintFails) throw new GitHubError('mint failed');
+      if (mintFails && request.repositories[0] === REPO) throw new GitHubError('mint failed');
       const client = createFixtureClient({ [`PATCH ${archivePath}`]: { status: archiveStatus, data: {} } }, { onCall: (call) => { calls.push(call); events.push(`${call.method} ${call.path}`); } });
       return callback({ client, token: 'ghs_token' });
     },
@@ -74,11 +75,12 @@ test('AC1 run: bootstrap gets the repository and the run-id description, and eve
   assert.deepEqual(seen.probeContext, { client: seen.probeContext.client, org: ORG, repo: REPO, log: ctx.log });
   const declared = grants({ env: ctx.env, controlRepo: CONTROL });
   assert.deepEqual(requests, [
+    { repositories: [CONTROL], permissions: CONTROL_READ_PERMISSIONS },
     { repositories: [REPO], permissions: PERMISSIONS },
     { repositories: [REPO], permissions: PERMISSIONS },
   ]);
   for (const request of requests) {
-    assert.ok(declared.some((grant) => grant.match === 'subset' && grant.repositories[0] === request.repositories[0]));
+    assert.ok(declared.some((grant) => grant.repositories[0] === request.repositories[0] && grant.permissions === request.permissions));
   }
 });
 
@@ -154,9 +156,51 @@ test('AC3 run: a failed archive fails the run, whether the call is rejected or t
   assert.match(unmintedResult.summary, /\| archive \| fail \| mint failed \|/);
 });
 
-test('AC3 run: a table cell never carries a pipe or a line break from a detail', async () => {
+test('AC3 run: a table cell carries no pipe, line break, backtick, tag or unbounded text from a detail', async () => {
   const { ctx } = harness();
-  const hostile = async () => [{ id: 'V3', name: 'V3', ok: false, detail: 'a | b\nc' }];
+  const hostile = async () => [{ id: 'V3', name: 'V3', ok: false, detail: 'a | b\nc `x` <details>é' }, { id: 'V11', name: 'V11', ok: false, detail: 'z'.repeat(5000) }];
   const result = await run(ctx, { runBootstrap: succeedingBootstrap, probes: hostile });
-  assert.match(result.summary, /\| V3 \| fail \| a ' b c \|/);
+  assert.match(result.summary, /\| V3 \| fail \| a ' b c 'x' 'details' \|/);
+  const longRow = result.summary.split('\n').find((line) => line.startsWith('| V11 '));
+  assert.ok(longRow.length < 300, String(longRow.length));
+});
+
+test('R3 run: a step that throws undefined or null still archives', async () => {
+  for (const thrown of [undefined, null]) {
+    const { ctx, calls } = harness();
+    const result = await run(ctx, { runBootstrap: async () => { throw thrown; }, probes: passingProbes });
+    assert.equal(result.ok, false);
+    assert.equal(calls.length, 1, String(thrown));
+    assert.match(result.summary, new RegExp(`\\| bootstrap \\| fail \\| ${thrown} \\|`));
+  }
+});
+
+test('R1 run: a repository bootstrap would refuse as foreign is never archived, and the archive row says why', async () => {
+  const { ctx, calls, requests } = harness();
+  const result = await run(ctx, {
+    inspect: async () => 'foreign',
+    runBootstrap: async () => assert.fail('bootstrap must not run'),
+    probes: async () => assert.fail('probes must not run'),
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls, [], 'no PATCH or any other call');
+  assert.deepEqual(requests, [{ repositories: [CONTROL], permissions: CONTROL_READ_PERMISSIONS }]);
+  assert.match(result.summary, /\| archive \| fail \| not archived: selftest-4242 exists and was not created by this kit \|/);
+});
+
+test('R1 run: an unreadable repository state is refused and never archived', async () => {
+  const { ctx, calls } = harness();
+  const result = await run(ctx, { inspect: async () => { throw new GitHubError('boom'); }, runBootstrap: async () => assert.fail('no'), probes: passingProbes });
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls, []);
+  assert.match(result.summary, /\| archive \| fail \| not archived: repository state unreadable: boom \|/);
+});
+
+test('R1 run: a repository this kit created (ours, fresh, absent) is bootstrapped and archived', async () => {
+  for (const state of ['absent', 'fresh', 'ours']) {
+    const { ctx, calls } = harness();
+    const result = await run(ctx, { inspect: async () => state, runBootstrap: succeedingBootstrap, probes: passingProbes });
+    assert.equal(result.ok, true, state);
+    assert.equal(calls.length, 1, state);
+  }
 });

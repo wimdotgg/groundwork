@@ -1,5 +1,6 @@
 import { GitHubError, apiPath } from '../lib/github.mjs';
 import * as bootstrap from './bootstrap.mjs';
+import { inspectRepo } from './bootstrap-repo.mjs';
 import { runProbes } from './selftest-probes.mjs';
 
 /** Op identity, read by admin-run (12.1). */
@@ -49,14 +50,18 @@ export function validateArgs(args) {
   return Object.keys(args).map((key) => `unknown argument "${key}"`);
 }
 
-const cell = (text) => String(text).replace(/\s*[\r\n]+\s*/g, ' ').replaceAll('|', "'");
+const CELL_MAX_LENGTH = 200;
+const errorText = (error) => error?.message ?? String(error);
+
+/** Detail text can carry API error text: printable ASCII, no code-span, tag or cell characters, bounded length. */
+const cell = (text) => String(text ?? '').replace(/[^\x20-\x7e]+/g, ' ').replace(/[`<>|]/g, "'").trim().slice(0, CELL_MAX_LENGTH);
 
 /** A thrown error becomes a failed row, so one failing step never skips the archive. */
 async function attempt(id, step) {
   try {
     return await step();
   } catch (error) {
-    return [{ id, ok: false, detail: error.message }];
+    return [{ id, ok: false, detail: errorText(error) }];
   }
 }
 
@@ -81,17 +86,39 @@ function renderSummary({ org, repo }, rows, checkSummary) {
   return lines.join('\n');
 }
 
+/** An existing repository this kit did not create must never be archived; an unreadable state counts as refused. */
+async function refusalReason(ctx, inspect) {
+  const read = { repositories: [ctx.config.controlRepo], permissions: CONTROL_READ_PERMISSIONS };
+  try {
+    const state = await ctx.withToken(read, ({ client }) => inspect({ client, org: ctx.org, repo: ctx.repo, adminBot: `${ctx.config.apps.admin}[bot]` }));
+    return state === 'foreign' ? `${ctx.repo} exists and was not created by this kit` : undefined;
+  } catch (error) {
+    return `repository state unreadable: ${errorText(error)}`;
+  }
+}
+
 /**
- * Bootstraps `selftest-<run id>`, checks it, runs the probes and archives it (12.1). The archive runs after any failed step.
+ * Bootstraps `selftest-<run id>`, checks it, runs the probes and archives it (12.1). The archive runs after any failed step
+ * except a refusal of a repository this kit did not create.
  * @param {object} ctx admin-run context for a `deferred` op
- * @param {{ runBootstrap?: Function, probes?: Function }} [seams] tests only
+ * @param {{ runBootstrap?: Function, probes?: Function, inspect?: Function }} [seams] tests only
  * @returns {Promise<{ ok: boolean, summary: string }>}
  */
-export async function run(ctx, { runBootstrap = bootstrap.run, probes = runProbes } = {}) {
+export async function run(ctx, { runBootstrap = bootstrap.run, probes = runProbes, inspect = inspectRepo } = {}) {
   const repo = targetRepo(ctx.env);
   // Defence in depth: admin-run names the repository from the same function, but a mismatch must never reach a mint.
   if (ctx.repo !== repo || repo.toLowerCase() === ctx.config.controlRepo.toLowerCase()) {
     throw new GitHubError(`selftest refuses ${ctx.repo}: expected ${repo}`);
+  }
+  const refusal = await refusalReason(ctx, inspect);
+  if (refusal !== undefined) {
+    const rows = [
+      { id: 'bootstrap', ok: false, detail: refusal },
+      { id: 'check', ok: false, detail: SKIPPED },
+      { id: 'probes', ok: false, detail: SKIPPED },
+      { id: 'archive', ok: false, detail: `not archived: ${refusal}` },
+    ];
+    return { ok: false, summary: renderSummary({ org: ctx.org, repo }, rows) };
   }
   const bootstrapArgs = JSON.stringify({ description: `groundwork selftest ${ctx.env.GITHUB_RUN_ID}` });
   const bootstrapRows = await attempt('bootstrap', async () => {
