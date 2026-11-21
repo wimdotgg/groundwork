@@ -71,7 +71,7 @@ function requireContent(contents, path) {
 }
 
 // A file whose text did not change keeps its blob sha; the caller then uploads nothing.
-function textEntry(source, path, text, original) {
+function textEntry(source, path, { text, original }) {
   if (text === original && source.sha) return { path, mode: source.mode, sha: source.sha };
   return { path, mode: source.mode, content: text };
 }
@@ -109,7 +109,7 @@ function keptEntry(entry, contents, names) {
   if (isUnder(entry.path, SETTINGS_DIR) || !(entry.path in contents)) return entry;
   const original = contents[entry.path];
   const text = fillPlaceholders(rewriteReusableReferences(original, names), entry.path, names);
-  return textEntry(entry, entry.path, text, original);
+  return textEntry(entry, entry.path, { text, original });
 }
 
 /**
@@ -125,7 +125,8 @@ export function buildBootstrapTree({ entries, contents, org, controlRepo, repo, 
 
   const stubEntries = stubs.map(({ source, projectPath }) => {
     const original = requireContent(contents, source.path);
-    return textEntry(source, projectPath, fillPlaceholders(original, projectPath, names), original);
+    const text = fillPlaceholders(original, projectPath, names);
+    return textEntry(source, projectPath, { text, original });
   });
   const kept = entries
     .filter((entry) => !isControlPath(entry.path) && !isReplacedByStub(entry.path, stubs, generatedPaths))
