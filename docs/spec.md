@@ -43,7 +43,7 @@ Its purpose: a solo human orchestrates, AI agents do the work (plan, implement, 
 
 | Identity | Kind | Role | Credentials on the agent machine |
 |---|---|---|---|
-| `wianvdm` | Your user | Org owner | **None.** You act in the browser or GitHub mobile app. Bootstrap and admin work go through tier 2 (section 12). Until the Phase 4 epic closes, a delegation applies (section 21, "2026-11-21: Phase 4 owner delegation"). |
+| `wianvdm` | Your user | Org owner | **None.** You act in the browser or GitHub mobile app. Bootstrap and admin work go through tier 2 (section 12). Until the Phase 4b epic (#167) closes, a delegation applies (section 21, "2026-11-21: Phase 4b owner delegation"). |
 | `wimdotgg-agent` | GitHub App (App ID 5853598, client ID `Iv23lic380KcYz17cWxi`) | Installed on all org repos, permissions in 2.2 | Key encrypted on the agent machine (2.2); installation tokens minted per command. |
 | `wimdotgg-release` | GitHub App | Installed on all org repos | None. Key only in each repo's `release` environment. |
 | `wimdotgg-admin` | GitHub App (App ID 5782869, client ID `Iv23lipUuaiDCWGAKcYI`) | Installed on all org repos | None. Key only in the control repo's `admin` environment. |
@@ -1118,7 +1118,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 1. Create the free organization; enable 2FA requirement and the settings in 2.5.
 2. Transfer `wianvdm/groundwork` into the organization (done: `wimdotgg/groundwork`); the template flag is unused, since `bootstrap` reads the release tree. Its `main` must already contain `admin-run.yml`: nothing below works before that.
-3. Create `wimdotgg-agent` as an organization-owned App (2.2; `docs/setup.md`), install it on the org with All repositories, and store its key on the agent machine. Remove your own `gh` and Git Credential Manager login for github.com from that machine (temporary exception: section 21, "2026-11-21: Phase 4 owner delegation").
+3. Create `wimdotgg-agent` as an organization-owned App (2.2; `docs/setup.md`), install it on the org with All repositories, and store its key on the agent machine. Remove your own `gh` and Git Credential Manager login for github.com from that machine (temporary exception: section 21, "2026-11-21: Phase 4b owner delegation").
 4. Create `wimdotgg-admin` and `wimdotgg-release` as organization-owned Apps (no manifests; `docs/setup.md` gives the manual form) and install both on the org with All repositories. The slugs are recorded in `config.json`.
 5. In `groundwork`, create environment `admin` (reviewer you, deployment branch `main`, selected-branches policy, "Allow administrators to bypass" off) and store both App keys and their App IDs or client IDs there.
 6. Approve `admin-run op=create-issue-types`, then `admin-run op=apply-settings --repo groundwork --ref <main sha>`. The second run creates groundwork's `release` environment with its key, sets `GROUNDWORK_READY`, applies the rulesets and ends with `check`. From here `main` is protected; the agent runs `request.mjs probe --repo groundwork` to confirm.
@@ -1249,6 +1249,20 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-21: Phase 4b owner delegation (#170)
+
+The delegation of the "2026-11-21: Phase 4 owner delegation (#141)" entry is extended to Phase 4b epic #167 under the same review rules (agent comment review on the head SHA from another session; a Fable reviewer for protected paths). It ends when #167 closes. A reopen does not revive it: any close ends it. The actions are the ones listed there, with `accepted` on #167 after you close #140.
+
+Admin approvals now also cover `groundwork`, beside the `gw-p4-*` allowlist, and only for `admin-run.yml` runs on `main` with empty `args` and these ops (op, target, ref and args read from the run name):
+
+- `bootstrap-pass2`.
+- `check` with an empty `ref`.
+- `apply-settings` with a `ref` that is a `main` SHA at most 3 commits behind the tip of `main`.
+
+The script's op and repo allowlist limits every admin approval. Tier 3 stays in person: App permission updates, secret values, deleting repositories, closing epics and editing the owner script.
+
+The owner script is a temporary bypass for the setup period. It is not part of groundwork, and no groundwork rule changes because of it; this entry records that it existed and how far it reached. In the finished kit you approve admin runs in person, and you review the whole template in person once setup is complete. 2.1 and 14.1 point here.
 
 ### 2026-11-21: Phase 4 integration (#152)
 
