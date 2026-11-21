@@ -109,6 +109,9 @@ async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
   for (const groups of [['settings'], ['rulesets'], ['variables']]) lines.push(...stepLines(await sections(groups)));
   const epic = await openSetupEpic({ client, org, repo, templates: source.templates, adminBot, sleep });
   lines.push(`- setup epic: #${epic.epic}, ${epic.created.length} issue(s) created`);
+  // GitHub seeds its default labels asynchronously after the repository is created, possibly during the first pass.
+  const cleanup = await sections(['labels']);
+  lines.push(...stepLines(cleanup).map((line) => line.replace('- labels:', '- labels (final pass):')));
   return lines;
 }
 

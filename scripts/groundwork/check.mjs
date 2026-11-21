@@ -9,8 +9,9 @@ import {
 
 export const OP = 'check';
 export const TOKEN_SCOPE = 'target';
+// GitHub returns ruleset bypass_actors and the merge-related repository fields only with write access.
 export const PERMISSIONS = {
-  administration: 'read',
+  administration: 'write',
   contents: 'read',
   environments: 'read',
   actions_variables: 'read',

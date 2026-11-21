@@ -585,12 +585,14 @@ export async function apply(env, overrides = {}) {
   return { exitCode: outcome.ok ? 0 : 1, summary, reason };
 }
 
-export async function writeSummary(env, text) {
-  if (env.GITHUB_STEP_SUMMARY) {
-    await appendFile(env.GITHUB_STEP_SUMMARY, `${text}\n`);
+/** The step summary is unreadable through the API, so a run also prints it to the log inside a group. */
+export async function writeSummary(env, text, print = (line) => process.stdout.write(line)) {
+  if (!env.GITHUB_STEP_SUMMARY) {
+    print(`${text}\n`);
     return;
   }
-  process.stdout.write(`${text}\n`);
+  await appendFile(env.GITHUB_STEP_SUMMARY, `${text}\n`);
+  print(`::group::admin-run summary\n${text}\n::endgroup::\n`);
 }
 
 const DEFAULTS = {

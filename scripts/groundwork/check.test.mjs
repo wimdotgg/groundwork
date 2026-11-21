@@ -87,11 +87,11 @@ const opContext = (client, settingsRoot) => ({
   client, token: 'minted-token', org: OWNER, repo: REPO, settingsRoot, config: CONFIG, env: {}, log: () => {},
 });
 
-test('module contract: op name, target scope and read-only permissions', () => {
+test('module contract: op name, target scope and permissions, administration write for the fields GitHub hides from read', () => {
   assert.equal(OP, 'check');
   assert.equal(TOKEN_SCOPE, 'target');
   assert.deepEqual(PERMISSIONS, {
-    administration: 'read', contents: 'read', environments: 'read', actions_variables: 'read',
+    administration: 'write', contents: 'read', environments: 'read', actions_variables: 'read',
     actions: 'read', issues: 'read', members: 'read',
   });
 });

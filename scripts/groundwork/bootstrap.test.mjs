@@ -123,7 +123,7 @@ function targetRoutes(state, files) {
     [`POST ${TARGET_PATH}/git/commits`]: reply(201, { sha: 'commit-1' }),
     [`PATCH ${TARGET_PATH}/git/refs/heads/main`]: reply(200),
     [`GET ${TARGET_PATH}/code-scanning/default-setup`]: reply(200, { state: 'not-configured' }),
-    [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, []),
+    [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, []), reply(200, LABELS)],
     [`POST ${TARGET_PATH}/labels`]: reply(201),
     [`PUT ${TARGET_PATH}/vulnerability-alerts`]: reply(204),
     [`GET ${TARGET_PATH}/rulesets?includes_parents=false&per_page=100`]: reply(200, []),
@@ -335,7 +335,10 @@ test('AC8 the last step lists labels again and deletes the defaults GitHub seede
     .map((name) => ({ name, color: 'ededed', description: '' }));
   const world = createWorld({
     state: 'absent',
-    overrides: { [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, []), reply(200, [...LABELS, ...defaults])] },
+    overrides: {
+      [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, []), reply(200, [...LABELS, ...defaults])],
+      ...Object.fromEntries(defaults.map(({ name }) => [`DELETE ${TARGET_PATH}/labels/${encodeURIComponent(name)}`, reply(204)])),
+    },
   });
   const { summary } = await run(world.ctx, world.seams);
   const deletes = world.calls.filter((call) => call.method === 'DELETE' && call.path.startsWith(`${TARGET_PATH}/labels/`));
