@@ -4,14 +4,14 @@ import { parseArgs } from 'node:util';
 import { CONFIG_DIR, loadConfig, loadHotspots, repoRoot } from '../lib/config.mjs';
 import { apiPath, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
 import { ISSUE_TYPES, normalizeIssueBody } from '../lib/issue-model.mjs';
-import { criterionIds, fillTemplate, hasMarker, parseSections, removeMarker } from '../lib/markdown.mjs';
+import { criterionIds, fillTemplate, hasMarker, parseSections, parseTable, removeMarker } from '../lib/markdown.mjs';
 import { isTrustedAuthor, sameLogin } from '../lib/trust.mjs';
 import { isUnder, namesHotspot } from './next.mjs';
 import './token.mjs'; // exits on an unsupported Node before the script runs
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ number: number, title: string, type: string|null, state: 'open'|'closed', body: string,
- *   parent: number, level: number, blockedBy: Array<number|string> }} PlanNode
+ *   stateReason: string|null, parent: number, level: number, blockedBy: Array<number|string> }} PlanNode
  *   level: the epic is 1, its sub-issues 2. title is empty for an author that is not trusted (6.7).
  *   blockedBy: a bare number for this repository, `<repository url>#<number>` for another one */
 /** @typedef {{ code: string, task: number|null, message: string }} Failure */
@@ -22,8 +22,14 @@ import './token.mjs'; // exits on an unsupported Node before the script runs
 
 const REPO_PATH = '/repos/{owner}/{repo}';
 const PLAN_MARKER = 'plan-lint';
+const ACCEPTANCE_MARKER = 'acceptance';
+const COMPLETED = 'completed';
+const WORKFLOW_LOGIN = 'github-actions[bot]';
+const NOT_PLANNED_REASON = /not planned|dropped|won'?t|superseded|duplicate|obsolete|no longer|cancel/i;
+const EMPTY_EVIDENCE = /^(none|-|n\/a|_no response_)?$/i;
+const PLACEHOLDER = /<[^>]+>/;
 const TEMPLATE_FILE = 'templates/plan-comment.md';
-const USAGE = 'usage: plan-lint.mjs <epic> [--post] [--json]';
+const USAGE = 'usage: plan-lint.mjs <epic> [--post | --close] [--json]';
 const FIRST_TASK_LEVEL = 2;
 const PATH_LIKE = /\/|\.[A-Za-z0-9]{2,}$/;
 const NOT_A_PATH = /^n\/a$/i;
@@ -54,6 +60,7 @@ async function collectNodes(context, { parent, level }, nodes) {
       title: trusted ? issue.title ?? '' : '',
       type: issue.type?.name ?? null,
       state: openOrClosed(issue.state),
+      stateReason: issue.state_reason ?? null,
       body: issue.body ?? '',
       parent,
       level,
@@ -64,10 +71,11 @@ async function collectNodes(context, { parent, level }, nodes) {
 }
 
 /**
- * Every sub-issue below the epic, closed ones included, depth first in sub-issue order, and the epic's criterion IDs.
+ * Every sub-issue below the epic, closed ones included, depth first in sub-issue order, the epic's criterion IDs
+ * and its `## Decisions` text.
  * @param {{ client: GitHubClient, repo: { owner: string, repo: string }, config: object }} context
  * @param {number} epic
- * @returns {Promise<{ nodes: PlanNode[], epicCriteria: string[] }>}
+ * @returns {Promise<{ nodes: PlanNode[], epicCriteria: string[], decisions: string }>}
  * @throws {PlanLintError|import('../lib/github.mjs').GitHubError}
  */
 export async function loadPlan(context, epic) {
@@ -76,8 +84,8 @@ export async function loadPlan(context, epic) {
   if (issue.type?.name !== 'Epic') throw new PlanLintError(`#${epic} is not an epic`);
   const nodes = [];
   await collectNodes(context, { parent: epic, level: FIRST_TASK_LEVEL }, nodes);
-  const criteria = parseSections(normalizeIssueBody('Epic', issue.body ?? '')).byName['Success criteria'] ?? '';
-  return { nodes, epicCriteria: criterionIds(criteria, 'E') };
+  const byName = parseSections(normalizeIssueBody('Epic', issue.body ?? '')).byName;
+  return { nodes, epicCriteria: criterionIds(byName['Success criteria'] ?? '', 'E'), decisions: byName.Decisions ?? '' };
 }
 
 // Tasks are the leaves: an issue with sub-issues only groups them (6.2, depth 3).
@@ -313,6 +321,9 @@ export function renderReport({ epic, plan, failures }, template) {
   return `${text.trimEnd()}\n`;
 }
 
+const findMarkedComment = (comments, marker, logins) => comments.findLast((comment) => logins.some((login) => sameLogin(comment.user?.login, login))
+  && hasMarker(comment.body ?? '', marker));
+
 /**
  * Creates the one marked comment on the epic, or updates the newest one; an identical body writes nothing.
  * @param {PlanLintContext} context
@@ -321,9 +332,7 @@ export function renderReport({ epic, plan, failures }, template) {
  */
 export async function upsertReport({ client, repo, config }, { epic, body }) {
   const commentsPath = apiPath(`${REPO_PATH}/issues/{number}/comments`, { ...repo, number: epic });
-  const comments = await client.paginate(commentsPath);
-  const existing = comments.findLast((comment) => sameLogin(comment.user?.login, config.accounts.agent)
-    && hasMarker(comment.body ?? '', PLAN_MARKER));
+  const existing = findMarkedComment(await client.paginate(commentsPath), PLAN_MARKER, [config.accounts.agent, WORKFLOW_LOGIN]);
   if (!existing) {
     await client.request('POST', commentsPath, { body: { body } });
     return 'created';
@@ -331,6 +340,78 @@ export async function upsertReport({ client, repo, config }, { epic, body }) {
   if (existing.body.trim() === body.trim()) return 'unchanged';
   await client.request('PATCH', apiPath(`${REPO_PATH}/issues/comments/{id}`, { ...repo, id: existing.id }), { body: { body } });
   return 'updated';
+}
+
+const namesIssue = (line, number) => new RegExp(`(?<![\\w/])#${number}(?!\\d)`).test(line);
+const linksDecision = (decisions, number) => decisions.includes(`docs/decisions/${number}-`);
+// A reason line names the issue and says why it left the plan; a bare mention such as "claimed by" is not one.
+const givesReason = (decisions, number) => decisions.split(/\r?\n/).some((line) => namesIssue(line, number) && NOT_PLANNED_REASON.test(line));
+
+const closeFailure = (code, task, message) => ({ code, task, message });
+
+function subIssueCloseFailures({ number, state, stateReason, type }, decisions) {
+  if (state === 'open') return [closeFailure('open-sub-issue', number, `#${number} is still open`)];
+  if (stateReason !== COMPLETED) {
+    if (givesReason(decisions, number)) return [];
+    return [closeFailure('not-planned-without-reason', number, `#${number} is closed as ${stateReason ?? 'no reason'}; the epic's ## Decisions needs a line naming #${number} with the reason`)];
+  }
+  if (type === 'Spike' && !linksDecision(decisions, number)) {
+    return [closeFailure('spike-without-decision', number, `spike #${number} has no line in the epic's ## Decisions linking docs/decisions/${number}-<slug>.md`)];
+  }
+  return [];
+}
+
+const criterionOf = (row) => /^E\d+/.exec(row.Criterion ?? '')?.[0];
+const hasEvidence = (row) => !EMPTY_EVIDENCE.test(row.Evidence ?? '') && !PLACEHOLDER.test(row.Evidence);
+
+function acceptanceFailures(acceptance, epicCriteria) {
+  if (acceptance === null) return [closeFailure('no-acceptance-comment', null, 'no acceptance comment from the agent account on the epic')];
+  const rows = parseTable(acceptance.body).filter((row) => criterionOf(row) !== undefined);
+  const mapped = new Set(rows.filter(hasEvidence).map(criterionOf));
+  const unknown = [...new Set(rows.map(criterionOf))].filter((id) => !epicCriteria.includes(id));
+  return [
+    ...epicCriteria
+      .filter((id) => !mapped.has(id))
+      .map((id) => closeFailure('unmapped-criterion', null, `epic criterion ${id} has no evidence row in the acceptance comment`)),
+    ...unknown.map((id) => closeFailure('unknown-criterion', null, `the acceptance comment maps ${id}, which the epic does not have`)),
+  ];
+}
+
+function emptyEpicFailures({ nodes, epicCriteria }) {
+  if (nodes.length > 0 && epicCriteria.length > 0) return [];
+  return [closeFailure('empty-epic', null, 'the epic has no sub-issues or no E criteria, so there is nothing to close against')];
+}
+
+/**
+ * The 4.5 epic close failures: every sub-issue closed as completed (anything else needs a reason line in
+ * `## Decisions`), every closed spike linked there, every epic criterion mapped to evidence in the acceptance comment.
+ * "Decisions log current" is otherwise left to the owner.
+ * @param {{ nodes: PlanNode[], epicCriteria: string[], decisions: string }} plan
+ * @param {{ body: string }|null} acceptance the newest acceptance comment
+ * @returns {Failure[]}
+ */
+export function lintClose(plan, acceptance) {
+  return [
+    ...emptyEpicFailures(plan),
+    ...plan.nodes.flatMap((node) => subIssueCloseFailures(node, plan.decisions)),
+    ...acceptanceFailures(acceptance, plan.epicCriteria),
+  ];
+}
+
+/**
+ * Checks an epic against the close list. Reads only; closing stays with the owner.
+ * @param {PlanLintContext} context
+ * @param {{ epic: number }} request
+ * @returns {Promise<{ epic: number, tasks: number, failures: Failure[], report: string }>}
+ */
+export async function closeLint(context, { epic }) {
+  const { client, repo, config } = context;
+  const plan = await loadPlan(context, epic);
+  const comments = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/comments`, { ...repo, number: epic }));
+  const failures = lintClose(plan, findMarkedComment(comments, ACCEPTANCE_MARKER, [config.accounts.agent]) ?? null);
+  const result = failures.length === 0 ? 'pass' : `fail (${failures.length})`;
+  const lines = failures.map((failure) => `- ${failure.code}: ${failure.message}`);
+  return { epic, tasks: plan.nodes.length, failures, report: [`Epic close #${epic}: ${result}`, ...lines].join('\n') };
 }
 
 /**
@@ -350,24 +431,29 @@ export async function planLint(context, { epic, post }) {
 
 /**
  * @param {string[]} argv
- * @returns {{ epic: number, post: boolean, json: boolean }}
+ * @returns {{ epic: number, post: boolean, close: boolean, json: boolean }}
  * @throws {PlanLintError}
  */
 export function parseArguments(argv) {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, options: { post: { type: 'boolean' }, json: { type: 'boolean' } }, allowPositionals: true });
+    parsed = parseArgs({
+      args: argv,
+      options: { post: { type: 'boolean' }, close: { type: 'boolean' }, json: { type: 'boolean' } },
+      allowPositionals: true,
+    });
   } catch {
     throw new PlanLintError(USAGE);
   }
   const epic = Number(parsed.positionals[0]);
   if (parsed.positionals.length !== 1 || !Number.isInteger(epic) || epic <= 0) throw new PlanLintError(USAGE);
-  return { epic, post: parsed.values.post === true, json: parsed.values.json === true };
+  if (parsed.values.post && parsed.values.close) throw new PlanLintError(USAGE);
+  return { epic, post: parsed.values.post === true, close: parsed.values.close === true, json: parsed.values.json === true };
 }
 
-function reportResult({ report, posted, ...fields }, { json }) {
+function reportResult({ report, posted, ...fields }, { json, close }) {
   const count = fields.failures.length;
-  const reason = `${count} planning failure${count === 1 ? '' : 's'}`;
+  const reason = `${count} ${close ? 'close' : 'planning'} failure${count === 1 ? '' : 's'}`;
   if (json) console.log(JSON.stringify({ ok: count === 0, ...(count === 0 ? {} : { reason }), ...fields, posted }));
   else console.log(removeMarker(report, PLAN_MARKER).trimEnd());
   if (count > 0) console.error(reason);
@@ -400,8 +486,9 @@ export async function main(argv, env, buildContext = createContext) {
   const json = argv.includes('--json');
   try {
     const request = parseArguments(argv);
-    const result = await planLint(await buildContext(env), request);
-    reportResult(result, { json });
+    const context = await buildContext(env);
+    const result = request.close ? await closeLint(context, request) : await planLint(context, request);
+    reportResult(result, { json, close: request.close });
     return result.failures.length === 0 ? 0 : 1;
   } catch (error) {
     reportError(error instanceof Error ? error.message.split(/\r?\n/)[0] : 'plan-lint: failed', { json });
