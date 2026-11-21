@@ -189,15 +189,15 @@ test('runChild: the child is denied an outside read, a write and a spawn', async
   const outside = path.join(directory, 'outside.txt');
   await writeFile(outside, 'data');
   const source = [
-    'export async function run() {',
+    'export async function run({ args }) {',
     '  const denied = (action) => { try { action(); return "allowed"; } catch (error) { return error.code; } };',
     '  const fs = process.getBuiltinModule("fs");',
     '  const spawnProcess = process.getBuiltinModule("child_process");',
-    `  const outcomes = [denied(() => fs.readFileSync(${JSON.stringify(outside)})), denied(() => fs.writeFileSync(${JSON.stringify(`${outside}.new`)}, "x")), denied(() => spawnProcess.spawnSync("node"))];`,
+    '  const outcomes = [denied(() => fs.readFileSync(args.outside)), denied(() => fs.writeFileSync(args.outsideNew, "x")), denied(() => spawnProcess.spawnSync("node"))];',
     '  return { ok: true, summary: outcomes.join() };',
     '}',
   ].join('\n');
-  const { stdout } = await runChild({ source, token: TOKEN, org: ORG, repo: TARGET, args: {} }, {});
+  const { stdout } = await runChild({ source, token: TOKEN, org: ORG, repo: TARGET, args: { outside, outsideNew: `${outside}.new` } }, {});
   const result = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line)).find((message) => message.type === 'result');
   assert.equal(result.summary, 'ERR_ACCESS_DENIED,ERR_ACCESS_DENIED,ERR_ACCESS_DENIED');
 });
