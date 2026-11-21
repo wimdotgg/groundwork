@@ -16,6 +16,8 @@ const BASE = '/repos/wimdotgg/widget';
 const CODE_SCANNING = { type: 'code_scanning', parameters: { code_scanning_tools: [{ tool: 'CodeQL' }] } };
 const LIVE_RULES = [{ type: 'deletion' }, { type: 'non_fast_forward' }];
 const BYPASS_ACTORS = [{ actor_type: 'OrganizationAdmin', actor_id: null, bypass_mode: 'pull_request' }];
+// Issue-event workflows also report head_branch main; only the dynamic event can hold the default-setup run within one page.
+const RUNS_PATH = `${BASE}/actions/runs?branch=main&event=dynamic&per_page=100&status=completed`;
 const CODEQL_PATH = 'dynamic/github-code-scanning/codeql';
 const codeqlRun = (overrides) => ({ name: 'CodeQL', id: 55, conclusion: 'success', path: CODEQL_PATH, ...overrides });
 const LIVE_MAIN = {
@@ -77,7 +79,7 @@ function routesFor({
     [`GET ${BASE}/contents/scripts/verify?ref=main`]: verifyRoute,
     [`GET ${BASE}/code-scanning/default-setup`]: setupStates.map((state) => ({ status: 200, data: { state } })),
     [`PATCH ${BASE}/code-scanning/default-setup`]: { status: 202, data: {} },
-    [`GET ${BASE}/actions/runs?branch=main&status=completed`]: { status: 200, data: { workflow_runs: runs } },
+    [`GET ${RUNS_PATH}`]: { status: 200, data: { workflow_runs: runs } },
     [`GET ${BASE}/rulesets?includes_parents=false&per_page=100`]: { status: 200, data: [{ id: 7, name: 'main', target: 'branch' }] },
     [`GET ${BASE}/rulesets/7`]: { status: 200, data: { ...LIVE_MAIN, rules: liveRules } },
     [`PUT ${BASE}/rulesets/7`]: { status: 200, data: {} },
@@ -122,7 +124,7 @@ test('AC2: default setup, then the run wait, then one ruleset PUT that keeps eve
   const { client, writes, calls } = recordingClient(routesFor());
   const result = await run(context(client, root), DEPENDENCIES);
   assert.equal(result.ok, true);
-  const order = [`PATCH ${BASE}/code-scanning/default-setup`, `GET ${BASE}/actions/runs?branch=main&status=completed`, `PUT ${BASE}/rulesets/7`];
+  const order = [`PATCH ${BASE}/code-scanning/default-setup`, `GET ${RUNS_PATH}`, `PUT ${BASE}/rulesets/7`];
   assert.deepEqual(order.map((call) => calls.indexOf(call)), order.map((call) => calls.indexOf(call)).toSorted((a, b) => a - b));
   assert.ok(order.every((call) => calls.includes(call)));
   const puts = writes.filter((write) => write.method === 'PUT');
@@ -244,7 +246,7 @@ test('AC4: a CodeQL conclusion other than success fails with no ruleset write', 
 
 test('waitForFirstCodeqlRun sleeps between polls until the run appears', async () => {
   const routes = routesFor();
-  routes[`GET ${BASE}/actions/runs?branch=main&status=completed`] = [
+  routes[`GET ${RUNS_PATH}`] = [
     { status: 200, data: { workflow_runs: [] } },
     { status: 200, data: { workflow_runs: [codeqlRun({ id: 9 })] } },
   ];
@@ -274,4 +276,18 @@ test('addCodeScanningRule reports added, then present', async () => {
   assert.equal(await addCodeScanningRule({ client: added.client, org: 'wimdotgg', repo: 'widget', desired }), 'added');
   const present = recordingClient(routesFor({ liveRules: [CODE_SCANNING] }));
   assert.equal(await addCodeScanningRule({ client: present.client, org: 'wimdotgg', repo: 'widget', desired }), 'present');
+});
+
+test('waitForFirstCodeqlRun matches the default-setup run by path, whatever its name', async () => {
+  const setupRun = codeqlRun({ id: 12, name: 'CodeQL Setup' });
+  const other = codeqlRun({ id: 3, name: 'CodeQL Setup', path: '.github/workflows/codeql.yml' });
+  const { client } = recordingClient(routesFor({ runs: [other, setupRun] }));
+  const found = await waitForFirstCodeqlRun({ client, org: 'wimdotgg', repo: 'widget', sleep: instantSleep });
+  assert.deepEqual(found, { runId: 12, conclusion: 'success' });
+});
+
+test('waitForFirstCodeqlRun asks for dynamic runs only, a full page, so issue-event runs cannot push it out', async () => {
+  const { client, calls } = recordingClient(routesFor());
+  await waitForFirstCodeqlRun({ client, org: 'wimdotgg', repo: 'widget', sleep: instantSleep });
+  assert.deepEqual(calls.filter((call) => call.includes('/actions/runs')), [`GET ${RUNS_PATH}`]);
 });
