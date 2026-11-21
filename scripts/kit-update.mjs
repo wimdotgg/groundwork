@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { CONFIG_DIR, loadConfig, repoRoot } from './lib/config.mjs';
@@ -44,6 +44,9 @@ const EXECUTABLE_MODE = '100755';
 const USAGE = 'usage: kit-update.mjs <vX.Y.Z> [--json]';
 const MAX_TAG_DEREFERENCES = 5;
 const KIT_PATH_MATCHERS = KIT_PATHS.map(toMatcher);
+const WORKFLOWS_DIR = '.github/workflows';
+const CI_WORKFLOW_PATH = `${WORKFLOWS_DIR}/ci.yml`;
+const LOCAL_REFERENCE = /\.\/\.github\/workflows\/(reusable-[\w-]+\.yml)([ \t]*# zizmor: ignore\[self-repository\][^\r\n]*)?/g;
 
 export class KitUpdateRefusal extends Error {}
 
@@ -84,6 +87,33 @@ function mergeValue({ base, ours, theirs }) {
   const bothObjects = isPlainObject(ours) && isPlainObject(theirs);
   if (bothObjects && (base === undefined || isPlainObject(base))) return mergeConfig({ base: base ?? {}, ours, theirs });
   return sameValue(ours, base) ? theirs : ours;
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Points every existing `uses: [quote]<org>/<controlRepo>/.github/workflows/reusable-*.yml@<ref>[quote]` at the tag's
+ * commit with the tag as the trailing comment (spec 8.6), as `bootstrap` writes it. Any other trailing comment on a
+ * pin is replaced. Other `uses:` lines, local `./.github/...` references included, are left alone.
+ * @param {{ text: string, org: string, controlRepo: string, tag: string, tagSha: string }} options
+ * @returns {string}
+ */
+export function rewritePins({ text, org, controlRepo, tag, tagSha }) {
+  const existingPin = new RegExp(
+    `(uses:[ \\t]*)(["']?)(${escapeRegExp(org)}/${escapeRegExp(controlRepo)}/\\.github/workflows/reusable-[\\w-]+\\.yml)@[^\\s#"']+\\2[ \\t]*(#[^\\r\\n]*)?`,
+    'gi',
+  );
+  return text.replace(existingPin, `$1$2$3@${tagSha}$2 # ${tag}`);
+}
+
+/** The tag's own `ci.yml` calls the reusable workflows locally; `bootstrap` writes them as pins, and so does this. */
+function pinLocalReferences({ text, org, controlRepo, tag, tagSha }) {
+  return text.replace(
+    LOCAL_REFERENCE,
+    (_match, name) => `${org}/${controlRepo}/.github/workflows/${name}@${tagSha} # ${tag}`,
+  );
 }
 
 /** @returns {string} the blob SHA git computes for `content` */
@@ -188,6 +218,34 @@ async function planConfigMerge({ client, control, root, oldTree, newTree }) {
   return { content: Buffer.from(`${JSON.stringify(merged, null, 2)}\n`), executable: false };
 }
 
+function ignoreMissing(error) {
+  if (error.code === 'ENOENT') return [];
+  throw error;
+}
+
+/** Copies the tag's `ci.yml` with its local reusable-workflow references pinned, as `bootstrap` writes it (13.1). */
+async function planCiWorkflow({ client, control, root, newTree, writes, pinTarget }) {
+  if (!newTree.has(CI_WORKFLOW_PATH)) return;
+  const original = await readBlob(client, control, newTree.get(CI_WORKFLOW_PATH));
+  const content = Buffer.from(pinLocalReferences({ text: original.toString('utf8'), ...pinTarget }));
+  const local = await readLocal(root, CI_WORKFLOW_PATH);
+  if (local !== null && content.equals(local)) return;
+  writes.set(CI_WORKFLOW_PATH, { content, executable: newTree.get(CI_WORKFLOW_PATH).mode === EXECUTABLE_MODE });
+}
+
+/** Rewrites the pins of every project workflow, on top of the copy this run already plans for it. */
+async function planPinRewrites({ root, writes, pinTarget }) {
+  const names = (await readdir(path.join(root, WORKFLOWS_DIR)).catch(ignoreMissing)).filter((name) => name.endsWith('.yml'));
+  for (const name of names) {
+    const filePath = `${WORKFLOWS_DIR}/${name}`;
+    const planned = writes.get(filePath);
+    const current = planned?.content ?? (await readLocal(root, filePath));
+    const rewritten = Buffer.from(rewritePins({ text: current.toString('utf8'), ...pinTarget }));
+    if (rewritten.equals(current)) continue;
+    writes.set(filePath, { content: rewritten, executable: planned?.executable ?? false });
+  }
+}
+
 async function applyPlan({ root, writes, removals }) {
   for (const [filePath, { content, executable }] of writes) {
     const target = path.join(root, filePath);
@@ -213,21 +271,39 @@ async function isAheadOfRemote(git, branch) {
   return Number((await git(['rev-list', '--count', `${remoteRef}..HEAD`])).trim()) > 0;
 }
 
-/** Undoes a failed run. The tree was clean, so only the plan's own new files are removed, never other untracked files. */
-async function restoreTree({ git, paths }) {
+async function exists(root, filePath) {
+  try {
+    await stat(path.join(root, filePath));
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/**
+ * Undoes a failed run. The tree was clean, so `reset` restores everything the plan touched that existed; only paths
+ * the plan created are cleaned (ignored ones included), never anything that was already there.
+ */
+async function restoreTree({ git, createdPaths }) {
   await git(['reset', '--hard', 'HEAD']);
-  await git(['clean', '-fd', '--', ...paths]);
+  if (createdPaths.length > 0) await git(['clean', '-fdx', '--', ...createdPaths]);
 }
 
 async function commitPlan({ root, git, publish, plan, tag }) {
   const paths = [...plan.writes.keys(), ...plan.removals];
+  const createdPaths = [];
+  for (const filePath of plan.writes.keys()) {
+    if (!(await exists(root, filePath))) createdPaths.push(filePath);
+  }
   try {
     await applyPlan({ root, ...plan });
-    await git(['add', '-A', '--', ...paths]);
+    // --force: a plan path the project gitignores would otherwise make `add` fail.
+    await git(['add', '-A', '--force', '--', ...paths]);
     await publish(['git', 'commit', '-m', `chore(kit): update to ${tag}`]);
   } catch (error) {
     try {
-      await restoreTree({ git, paths });
+      await restoreTree({ git, createdPaths });
     } catch (restoreError) {
       throw new AggregateError([error, restoreError], `${error.message}; restoring the tree also failed: ${restoreError.message}`);
     }
@@ -260,11 +336,14 @@ export async function run({ root, tag, client, git, publish }) {
     return { ok: true, tag, changed: [], skipped: [] };
   }
 
-  const readTagTree = async (name) => readTree({ client, control, root, commitSha: await resolveTagCommit(client, control, name) });
-  const [newTree, oldTree] = await Promise.all([readTagTree(tag), readTagTree(currentTag)]);
+  const [tagSha, currentTagSha] = await Promise.all([tag, currentTag].map((name) => resolveTagCommit(client, control, name)));
+  const [newTree, oldTree] = await Promise.all([tagSha, currentTagSha].map((commitSha) => readTree({ client, control, root, commitSha })));
   const { writes, removals, skipped } = await planFileWrites({ client, control, root, oldTree, newTree });
   const mergedConfig = await planConfigMerge({ client, control, root, oldTree, newTree });
   if (mergedConfig) writes.set(CONFIG_PATH, mergedConfig);
+  const pinTarget = { org, controlRepo, tag, tagSha };
+  await planCiWorkflow({ client, control, root, newTree, writes, pinTarget });
+  await planPinRewrites({ root, writes, pinTarget });
   writes.set(KIT_VERSION_PATH, { content: Buffer.from(`${tag}\n`), executable: false });
 
   await commitPlan({ root, git, publish, plan: { writes, removals }, tag });
