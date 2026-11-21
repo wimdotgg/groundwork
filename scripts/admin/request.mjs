@@ -1,15 +1,16 @@
 import { ConfigError, loadConfig, repoRoot } from '../lib/config.mjs';
 import { GitHubError, apiPath, createClient } from '../lib/github.mjs';
 
-/** @typedef {'apply-settings'|'check'|'create-issue-types'|'probe'} Op */
+/** @typedef {'apply-settings'|'bootstrap'|'bootstrap-pass2'|'check'|'create-issue-types'|'probe'} Op */
 /** @typedef {{ op: Op, repo: string, ref: string, args: object, json: boolean }} Request */
 /** @typedef {{ exitCode: number, stdout: string, stderr: string }} Outcome */
 
-const USAGE = 'usage: request.mjs <apply-settings|check|create-issue-types|probe> [--repo <name>] [--ref <sha>] [--args <json>] [--json]';
+const USAGE = 'usage: request.mjs <apply-settings|bootstrap|bootstrap-pass2|check|create-issue-types|probe> [--repo <name>] [--ref <sha>] [--args <json>] [--json]';
 const REPO_PATTERN = /^[A-Za-z0-9._-]+$/;
 const DOT_SEGMENTS = new Set(['.', '..']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
-const OPS_NEEDING_REPO = new Set(['apply-settings', 'check', 'probe']);
+const OPS_NEEDING_REPO = new Set(['apply-settings', 'bootstrap', 'bootstrap-pass2', 'check', 'probe']);
+const OPS_WITHOUT_ARGS = new Set(['bootstrap-pass2', 'probe']);
 const OPS = new Set([...OPS_NEEDING_REPO, 'create-issue-types']);
 const VALUE_FLAGS = new Set(['--repo', '--ref', '--args']);
 const WORKFLOW_FILE = 'admin-run.yml';
@@ -69,7 +70,7 @@ function checkFlagsForOp(op, values) {
   if (OPS_NEEDING_REPO.has(op) && !repoGiven) throw usageError(`${op} needs --repo`);
   if (!OPS_NEEDING_REPO.has(op) && repoGiven) throw usageError(`${op} takes no --repo`);
   if ('--ref' in values && op !== 'apply-settings') throw usageError('--ref only applies to apply-settings');
-  if ('--args' in values && op === 'probe') throw usageError('probe takes no --args');
+  if ('--args' in values && OPS_WITHOUT_ARGS.has(op)) throw usageError(`${op} takes no --args`);
 }
 
 /**

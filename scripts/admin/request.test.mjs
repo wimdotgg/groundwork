@@ -71,6 +71,11 @@ test('parseArgs rejects bad input before any call', () => {
     ['check', '--repo', 'demo', '--args', 'null'],
     ['probe', '--repo', 'demo', '--args', '{}'],
     ['check', '--repo', 'demo', '--json=1'],
+    ['bootstrap', '--args', '{"description":"d"}'],
+    ['bootstrap-pass2'],
+    ['bootstrap-pass2', '--repo', 'demo', '--args', '{}'],
+    ['bootstrap', '--repo', 'demo', '--ref', MAIN_SHA],
+    ['bootstrap-pass2', '--repo', 'demo', '--ref', MAIN_SHA],
   ];
   for (const argv of bad) {
     assert.throws(() => parseArgs(argv), { name: 'ConfigError' }, argv.join(' '));
@@ -120,6 +125,20 @@ test('create-issue-types sends empty target_repo and ref', async () => {
   const { done, calls } = run(['create-issue-types'], { [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } } });
   await done;
   assert.deepEqual(calls[0].body.inputs, { op: 'create-issue-types', target_repo: '', ref: '', args: '{}' });
+});
+
+test('bootstrap dispatches the description with empty ref', async () => {
+  const { done, calls } = run(['bootstrap', '--repo', 'demo', '--args', '{"description":"d"}'], {
+    [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } },
+  });
+  await done;
+  assert.deepEqual(calls[0].body.inputs, { op: 'bootstrap', target_repo: 'demo', ref: '', args: '{"description":"d"}' });
+});
+
+test('bootstrap-pass2 dispatches with empty ref and "{}" args', async () => {
+  const { done, calls } = run(['bootstrap-pass2', '--repo', 'demo'], { [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } } });
+  await done;
+  assert.deepEqual(calls[0].body.inputs, { op: 'bootstrap-pass2', target_repo: 'demo', ref: '', args: '{}' });
 });
 
 test('dispatch without run details prints the workflow page URL', async () => {

@@ -71,9 +71,23 @@ The `RELEASE_APP_CLIENT_ID` variable may hold either the App ID or the client ID
 
 Repository permissions: Administration RW, Contents RW, Environments RW, Secrets RW, Variables RW, Issues RW, Pull requests RW, Workflows RW, Actions RW, Metadata R.
 Organization permissions: Issue types RW, Members R.
-No organization Administration: `POST /repos/{template_owner}/{template_repo}/generate` is covered by repository Administration write plus Contents read on the template (V7). Team access (`PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}`) needs repository Administration write and Members read.
+No organization Administration or "Repository creation" yet (V7, below). Team access (`PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}`) needs repository Administration write and Members read.
+Permissions the Phase 4 calls need, per the [permissions reference](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps) (the endpoint pages themselves list only classic scopes). "Has" is against the App as listed above:
+
+| Call | Needs | Has | Docs |
+|---|---|---|---|
+| `POST /orgs/{org}/repos` (`auto_init: true`) | repository Administration write and organization "Repository creation" write, per the reference | repository part; the organization part is missing | [create an organization repository](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository) |
+| `GET /repos/{org}/groundwork/git/matching-refs/tags/v`, `git/trees/{tag}`, `git/blobs/{sha}` | none (public repository) | n/a | [list matching references](https://docs.github.com/en/rest/git/refs#list-matching-references) |
+| `POST /repos/{o}/{r}/git/trees`, `git/commits`; `PATCH git/refs/heads/main` | Contents write; Workflows write when the update changes workflow files | yes | [create a tree](https://docs.github.com/en/rest/git/trees#create-a-tree), [create a commit](https://docs.github.com/en/rest/git/commits#create-a-commit), [update a reference](https://docs.github.com/en/rest/git/refs#update-a-reference) |
+| `POST /repos/{o}/{r}/labels` | Issues write (the reference also lists Pull requests; `apply-settings` already syncs labels with Issues alone) | yes | [create a label](https://docs.github.com/en/rest/issues/labels#create-a-label) |
+| `POST /repos/{o}/{r}/issues` (with `type`), `issues/{n}/sub_issues`, `issues/{n}/dependencies/blocked_by` | Issues write | yes | [create an issue](https://docs.github.com/en/rest/issues/issues#create-an-issue), [add sub-issue](https://docs.github.com/en/rest/issues/sub-issues#add-sub-issue), [add a dependency](https://docs.github.com/en/rest/issues/issue-dependencies#add-a-dependency-an-issue-is-blocked-by) |
+| `PATCH` and `GET /repos/{o}/{r}/code-scanning/default-setup` | Administration write (read for `GET`); no Code scanning alerts | yes | [update default setup](https://docs.github.com/en/rest/code-scanning/code-scanning#update-a-code-scanning-default-setup-configuration) |
+| `GET /repos/{o}/{r}/actions/runs` | Actions read | yes | [list workflow runs](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository) |
+| `POST` and `PUT /repos/{o}/{r}/rulesets` | Administration write | yes | [update a ruleset](https://docs.github.com/en/rest/repos/rules#update-a-repository-ruleset) |
+
+The first row is the only gap known before a live run. Whatever the 403 on that call names in `X-Accepted-GitHub-Permissions` is what the owner adds to the App and accepts in the browser (tier 3); Phase 4 records it on epic #140. Whether default setup also needs Code scanning alerts is unconfirmed: the reference says no, the first live pass 2 decides.
 Every run mints an installation token restricted to the target repository and the permissions that operation needs (table in 12.1). Tokens last at most one hour.
-One exception, for the generate call (the target repo does not exist yet, so the token cannot name it): bootstrap first mints a token restricted to `groundwork` with Administration write and Contents read. Only if GitHub refuses the generate call with that token does it mint an installation-wide token with the same two permissions, make that single call, and revoke the token at once with `DELETE /installation/token`. V7 decides which variant ships; the other is deleted.
+One exception, for the create call (the target repo does not exist yet, so the token cannot name it): bootstrap first mints, through `ctx.withToken` (12.1), a token restricted to `groundwork` with Administration write. Only if GitHub refuses the create call with that token does it mint an installation-wide token (`repositories: "all"`) with the same permission, make that single call, and revoke the token at once with `DELETE /installation/token`. V7 decides which variant ships and whether an organization permission is needed; the other variant is deleted.
 `admin-run` mints through `scripts/groundwork/app-token.mjs` (RS256 JWT with `node:crypto`, then `POST /app/installations/{id}/access_tokens` with `repositories` and `permissions`), not through `actions/create-github-app-token`: the action has no `permission-*` input for Variables or Issue types, and the permission set varies per op.
 
 ### 2.5 Org settings (one-time, by you)
@@ -746,7 +760,9 @@ Inputs (all strings; passed to steps through `env`):
 | `target_repo` | repository name without owner, `^[A-Za-z0-9._-]+$`; empty for `create-issue-types`. The owner is always this org. |
 | `ref` | 40-character commit SHA. `apply-settings`: a commit in `target_repo` that is `main` or an ancestor of it; the settings files are read at that commit. `script`: a commit in `groundwork` that is `main` or an ancestor of it. Empty for other ops. `plan` verifies ancestry with the compare API and fails otherwise. This input is data, not the workflow's run ref. |
 | `script_path` | `op=script` only; must match `admin-ops/*.mjs` |
-| `args` | JSON object, validated per op against a fixed schema; unknown keys fail |
+| `args` | JSON object, validated per op against a fixed schema; unknown keys fail. `bootstrap`: `{"description": string}`, required, 1 to 350 printable ASCII characters. Every other op, `bootstrap-pass2` included: `{}` |
+
+`admin-run.yml` carries `run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} args=${{ inputs.args }}` (Phase 4 task #143), so the owner delegation (21) reads op, target, ref and args from the run name. That script approves only `args={}` or `{"description":"[A-Za-z0-9 .,_-]{0,100}"}`; live `gw-p4-*` runs use that narrower description, the schema above stays wider.
 
 Jobs:
 1. `plan` (no environment, no secrets, `contents: read`): validates inputs; for `op=script` fetches the file at `ref`, prints it, its SHA-256 and its exported `permissions` to the run summary; for built-in ops prints the operation, target, args and requested token permissions. Outputs the SHA-256.
@@ -754,7 +770,7 @@ Jobs:
 
 | Op | Token repositories | Token permissions | Does |
 |---|---|---|---|
-| `bootstrap` | step 1: `groundwork` (fallback: installation-wide for the generate call only, revoked at once; 2.4); step 2: `target_repo` | step 1: Administration write, Contents read. Step 2: Administration, Contents, Workflows, Environments, Variables, Issues write; Members, Actions read | 14.2 pass 1, then `check` |
+| `bootstrap` | none up front (`TOKEN_SCOPE` `deferred`). Create call: `groundwork`, fallback installation-wide, revoked at once (2.4). Everything after: `target_repo` | Create call: Administration write. After: Administration, Contents, Workflows, Environments, Variables, Issues write; Members, Actions read (`PERMISSIONS`; `CREATE_PERMISSIONS` is the create call's) | 14.2 pass 1, then `check` |
 | `bootstrap-pass2` | `target_repo` | Administration, Variables write; Contents, Environments, Actions, Issues, Members read | 14.2 step 4, then `check` |
 | `apply-settings` | `target_repo` | Administration, Environments, Variables, Issues write; Contents, Members, Actions read | Syncs `settings.json`, `labels.json`, environments and rulesets from `ref`, then `check`. On every target, `groundwork` included, it writes the `release` environment secret `RELEASE_APP_KEY` and variable `RELEASE_APP_CLIENT_ID`, and deletes live repository-level rulesets the settings do not declare. Refuses before any write when no `main` ruleset is desired, or when the desired `main` lacks `code_scanning` while pass 2 has run or its state is unreadable. |
 | `check` | `target_repo` | Administration, Contents, Environments, Variables, Actions, Issues, Members read | Read-only comparison (section 13); stays a standalone op for drift checks |
@@ -762,7 +778,14 @@ Jobs:
 | `script` | `target_repo` | the script's exported `permissions` | Runs `admin-ops/<name>.mjs` |
 | `selftest` | step 1 as `bootstrap`; then the throwaway repo | as `bootstrap` | Bootstraps `selftest-<run id>`, runs `check` and the section 19 probes that need admin rights, archives the repo. Deleting it is tier 3. |
 
-Ops available now: `apply-settings`, `check` and `create-issue-types`; `bootstrap`, `bootstrap-pass2`, `script` and `selftest` arrive in Phase 4.
+Ops available now: `apply-settings`, `check` and `create-issue-types`. `bootstrap` and `bootstrap-pass2` exist as skeletons that validate args and return `{ ok: false, summary: 'not implemented' }`; `request.mjs` dispatches both (`bootstrap` needs `--repo` and takes `--args`; `bootstrap-pass2` needs `--repo`, takes no `--args`; neither takes `--ref`). `script` and `selftest` stay later (21, Phase 4 decisions).
+
+Token scopes (`TOKEN_SCOPE`): `target` (token restricted to `target_repo`), `org` (all repositories, no target) and `deferred` (no token up front; the target may not exist). A `deferred` op gets `ctx.client` and `ctx.token` as `null` and mints through `ctx.withToken({ repositories, permissions }, callback)`:
+- `repositories`: `string[]` or `"all"`; `permissions`: snake_case keys as above.
+- `admin-run` signs the JWT (the key never reaches the op), mints through `mintInstallationToken` (granted scope must equal requested), masks the token, awaits `callback({ client, token })` with a client that records every call into the summary table, and revokes the token in a `finally` with `DELETE /installation/token`. A failed revoke fails the run.
+- Resolves to the callback's value; a callback error is rethrown after the revoke. Calls do not nest.
+
+`check` after a `deferred` op: `admin-run` calls `withToken({ repositories: [target_repo], permissions: check.PERMISSIONS })` itself, reads settings from the target's `main` head as the standalone `check` does, and runs `check`. `OP_THEN_CHECK` covers `apply-settings`, `bootstrap` and `bootstrap-pass2`. A `deferred` op's `ctx.settingsRoot` and `ctx.config` are groundwork's own (as for `org` ops); `bootstrap` takes the project's settings from the release tree. `bootstrap-pass2` and `check` read settings from the target's `main` head; only `apply-settings` reads at `ref`.
 
 
 Access-token request keys are the snake_case names GitHub reports in `X-Accepted-GitHub-Permissions` (repository Variables is `actions_variables`; Issue types is `issue_types`).
@@ -843,12 +866,40 @@ Conventions for every module under `scripts/lib/` and `scripts/ci/`:
 
 #### Admin op modules
 
-Each module under `scripts/groundwork` exports `OP`, `PERMISSIONS`, `TOKEN_SCOPE` (`target` or `org`), `validateArgs(args) -> string[]` and `run(ctx) -> { ok, summary }` with `ctx { client, token, org, repo, settingsRoot, config, env, log, recordCall }`; `recordCall({ method, path, status })` adds a row to the call table for work that bypasses `client`, and `status` is `null` when the call never ran to an exit code. `check` also exports `runCheck`, which fails on zero rows and adds an `unreadable` row per unreadable live section.
+Each module under `scripts/groundwork` exports `OP`, `PERMISSIONS`, `TOKEN_SCOPE` (`target`, `org` or `deferred`), `validateArgs(args) -> string[]` and `run(ctx) -> { ok, summary }` with `ctx { client, token, org, repo, settingsRoot, config, env, log, recordCall, withToken }`; `withToken({ repositories, permissions }, async ({ client, token }) => T) -> Promise<T>` is the 12.1 hook, and `client` and `token` are `null` for `deferred` ops; `recordCall({ method, path, status })` adds a row to the call table for work that bypasses `client`, and `status` is `null` when the call never ran to an exit code. `check` also exports `runCheck`, which fails on zero rows and adds an `unreadable` row per unreadable live section.
 
 `app-token.mjs` exports:
 - `createAppJwt({ clientId, privateKey, now? })`: RS256 JWT, RSA keys only.
 - `mintInstallationToken({ client, org, repositories: string[]|"all", permissions, env? })`: the granted scope must equal the requested one except one extra `metadata: read`; any mismatch revokes the token and throws; a failed revoke is reported.
 - `revokeInstallationToken(client)`.
+
+`bootstrap.mjs` exports `OP` (`'bootstrap'`), `TOKEN_SCOPE` (`'deferred'`), `PERMISSIONS` (12.1, after the repository exists), `CREATE_PERMISSIONS` (`{ administration: 'write' }`), `DESCRIPTION_MAX_LENGTH` (350), `validateArgs` and `run`. `bootstrap-pass2.mjs` exports `OP`, `TOKEN_SCOPE` (`'target'`), `PERMISSIONS`, `validateArgs` (any key is an error) and `run`. Both `run` functions are skeletons until the lane tasks fill them. The helper modules below are `node:`-only, take one options object, throw `GitHubError` on API failure and `ConfigError` on malformed release content, and never read the environment.
+
+`bootstrap-tree.mjs` (pure, no `client`):
+- `CONTROL_PATHS: string[]`: exact paths or directory prefixes (ending `/`) removed from projects: `admin-ops/`, `scripts/groundwork/`, `.github/workflows/reusable-verify.yml`, `.github/workflows/reusable-security.yml`, `.github/workflows/admin-run.yml`. Stub paths live under `scripts/groundwork/stubs/`, so the builder reads them before dropping the prefix.
+- `KIT_VERSION_PATH = '.github/groundwork/kit-version.txt'`.
+- `contentPaths(entries) -> string[]`: the blob paths whose text the builder needs: every blob under `.github/` and under `scripts/groundwork/stubs/`.
+- `buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag }) -> TreeEntry[]`. `entries` is the release tree's blobs `{ path, mode, sha }`; `contents` maps each `contentPaths(entries)` path to its UTF-8 text; `tag` is `vX.Y.Z`. Returns blob entries only, sorted by path, as `{ path, mode, sha }` (kept) or `{ path, mode, content }` (new or changed), ready for `POST git/trees` without `base_tree`. Rules: drop `CONTROL_PATHS`; in `.github/` files replace `__ORG__`, `__REPO__`, `__DESCRIPTION__` literally and rewrite `./.github/workflows/reusable-<name>.yml` to `<org>/<controlRepo>/.github/workflows/reusable-<name>.yml@<tag>`; write `KIT_VERSION_PATH` as `<tag>\n`, `.release-please-manifest.json` as `{}\n`, `version.txt` as `0.0.0\n` and `CHANGELOG.md` empty; replace `scripts/verify` and `scripts/verify.cmd` with `scripts/groundwork/stubs/verify` and `verify.cmd`, `README.md` with `stubs/README.md`, and all of `docs/` with `stubs/docs/**`. A missing stub throws `ConfigError`.
+
+`bootstrap-repo.mjs` (all functions take `{ client, org, ... }`):
+- `latestReleaseTag({ client, controlRepo }) -> Promise<string>`: the highest `vMAJOR.MINOR.PATCH` among `git/matching-refs/tags/v`; throws when none exists (14.1 step 7).
+- `readReleaseTree({ client, controlRepo, tag }) -> Promise<Entry[]>`: recursive tree, blobs only; throws when GitHub truncates it. `readBlobTexts({ client, controlRepo, entries, paths }) -> Promise<Record<string, string>>`.
+- `inspectRepo({ client, repo }) -> Promise<'absent'|'fresh'|'ours'|'foreign'>`: `absent` on 404; `ours` when `KIT_VERSION_PATH` exists on the default branch; `fresh` when the default branch has one commit and its root holds only `README.md` (the `auto_init` state after a crash before the bootstrap commit); otherwise `foreign`. `foreign` fails the run (14.2).
+- `createRepo({ client, repo, description }) -> Promise<void>`: `POST /orgs/{org}/repos` with `{ name, description, private: false, auto_init: true }`. Runs inside `withToken` with `CREATE_PERMISSIONS`.
+- `commitBootstrapTree({ client, repo, tag, treeEntries }) -> Promise<{ sha: string, created: boolean }>`: creates the tree and the commit `chore: bootstrap from groundwork <tag>` on the current `main` head, then `PATCH git/refs/heads/main` with `force: false`. `created: false` when `KIT_VERSION_PATH` already exists (resume).
+
+`setup-epic.mjs`:
+- `SETUP_EPIC_MARKER = '<!-- groundwork:setup-epic -->'`; each task body carries `<!-- groundwork:setup-task NN -->`.
+- Templates live in `scripts/groundwork/stubs/setup-epic/` of the release tree: `epic.md` and `NN-<slug>.md`. The first line of each is `# <title>`. A task file's next lines may be `<!-- type: Chore -->` (default `Feature`) and `<!-- blocked-by: NN, NN -->`. Bodies follow 4.3 and keep their markers.
+- `parseSetupTemplates(files: Record<string, string>) -> { epic: { title, body }, tasks: Array<{ number: string, title, type, body, blockedBy: string[] }> }` (pure; `ConfigError` on a missing title, an unknown type or a `blocked-by` naming no task).
+- `openSetupEpic({ client, repo, templates }) -> Promise<{ epic: number, created: number[] }>`: finds the epic by marker (`GET issues?state=all`) and creates only what is missing (`POST issues` with `type`, `sub_issues` with the issue's numeric `id`, `dependencies/blocked_by`), so a rerun adds nothing. The epic carries no `accepted` label.
+
+`bootstrap-pass2.mjs` also exports, for the lane task:
+- `STUB_MARKER = 'GROUNDWORK_STUB'`; `readVerifyState({ client, repo }) -> Promise<'stub'|'real'|'missing'>` reads `scripts/verify` on `main`; `run` refuses unless it returns `real`.
+- `enableDefaultSetup({ client, repo }) -> Promise<void>`: `PATCH code-scanning/default-setup` with `{ state: 'configured' }`, then reads back until `configured`.
+- `waitForFirstCodeqlRun({ client, repo, timeoutMs, sleep }) -> Promise<{ runId: number, conclusion: string }>`: polls `actions/runs?branch=main&status=completed` for a run named `CodeQL`; defaults 10 minutes and a 15 second poll; throws `GitHubError` on timeout.
+- `withCodeScanningRule(ruleset) -> object` (pure; adds the 9.1 rule once) and `addCodeScanningRule({ client, repo }) -> Promise<'added'|'present'>` (GET the live `main` ruleset, PUT it back).
+- `deployChecklist({ org, repo }) -> string[]`: summary lines naming the `production` environment page where the owner enters deploy secrets.
 
 #### `lib/github.mjs`: one client over `gh api`, `fetch` and fixtures
 
@@ -1069,16 +1120,17 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 1. Agent runs `scripts/admin/request.mjs bootstrap --repo <name> --args '{"description":"..."}'`. You approve.
    Bootstrap pass 1, in this order:
-   1. Fail if the repo exists and has no `kit-version.txt` (not ours). If it exists with one, resume: every later step is idempotent.
-   2. Generate the repo from the template (`POST /repos/{org}/groundwork/generate` with `owner`, `name`, `description`, `private: false`). Generation copies `main`, which may be ahead of the latest release.
-   3. Push one commit `chore: bootstrap from groundwork vX.Y.Z` to `main` whose tree is the latest release tag's tree with these changes: `[control]` paths removed; placeholders `__ORG__`, `__REPO__`, `__DESCRIPTION__` replaced; `./.github/workflows/reusable-*.yml` references rewritten to `<org>/groundwork/.github/workflows/reusable-*.yml@vX.Y.Z`; `kit-version.txt` written; manifest `{}`, `version.txt` `0.0.0`, empty `CHANGELOG.md`; `scripts/verify` and `scripts/verify.cmd` replaced by the stub from `scripts/groundwork/stubs/` (read before `[control]` paths are dropped); README and `docs/` replaced by project stubs. Needs Workflows write because workflow files change.
-   4. Apply settings, labels, environments (`release` with its key, `production` without deploy secrets), Actions and security settings.
-   5. Apply rulesets **last** (they would reject step 3).
-   6. Set `GROUNDWORK_READY=true`.
-   7. Open the "Project setup" epic with its sub-issues from templates, typed, linked as sub-issues, unaccepted.
-   8. Run `check`; any failed row fails the run.
-   Known gap (Phase 4 bootstrap): `dependabot.yml` arrives in step 3 and labels in step 4, so Dependabot can open a PR before `dependencies` exists and the PR then lacks the label; `@dependabot recreate` does not add it afterwards (PR #14). The Phase 4 bootstrap must close it.
-   Runs triggered by steps 2 and 3 before step 6: `ci.yml` passes on the stub, `release-please.yml` is skipped by its `if`.
+   1. Inspect the repo (`inspectRepo`, 13.1). `foreign` (it exists, has no `kit-version.txt` and is not the `auto_init` state) fails the run. `ours` or `fresh` resumes: every later step is idempotent.
+   2. Resolve the latest release tag and read its tree (`latestReleaseTag`, `readReleaseTree`).
+   3. If `absent`, create the repo with `POST /orgs/{org}/repos` (`name`, `description`, `private: false`, `auto_init: true`) through `withToken` and the 2.4 token variants. `generate` is not used.
+   4. Create the labels from `labels.json` of the release tree, `dependencies` included. This precedes step 5 so Dependabot never opens a PR before the label exists.
+   5. Push one commit `chore: bootstrap from groundwork vX.Y.Z` to `main` whose tree is the latest release tag's tree with these changes: `[control]` paths removed; placeholders `__ORG__`, `__REPO__`, `__DESCRIPTION__` replaced; `./.github/workflows/reusable-*.yml` references rewritten to `<org>/groundwork/.github/workflows/reusable-*.yml@vX.Y.Z`; `kit-version.txt` written; manifest `{}`, `version.txt` `0.0.0`, empty `CHANGELOG.md`; `scripts/verify` and `scripts/verify.cmd` replaced by the stub from `scripts/groundwork/stubs/` (read before `[control]` paths are dropped); README and `docs/` replaced by project stubs (`buildBootstrapTree`, `commitBootstrapTree`). It replaces the `auto_init` commit's tree and needs Workflows write because workflow files change.
+   6. Apply settings, environments (`release` with its key, `production` without deploy secrets), Actions and security settings, from the built tree's `.github/groundwork/`.
+   7. Apply rulesets **last** (they would reject step 5).
+   8. Set `GROUNDWORK_READY=true`.
+   9. Open the "Project setup" epic with its sub-issues from the release tree's setup templates, typed, linked as sub-issues, unaccepted (`openSetupEpic`).
+   10. Run `check`; any failed row fails the run.
+   Workflows triggered by step 5 before step 8: `ci.yml` passes on the stub, `release-please.yml` is skipped by its `if`. The `auto_init` commit carries no workflows (V13 covers the rest).
 2. Agent runs `request.mjs probe --repo <name>` (section 13, no approval). The push to `main` must be rejected.
 3. You apply `accepted` to "Project setup". Agents choose the stack, fill `scripts/verify`, add ecosystems to Dependabot, define hotspots, and write the README. If the project deploys, they write `scripts/deploy`, `scripts/smoke`, `scripts/rollback`; otherwise they set `"deploy": "none"` in `config.json`.
 4. Agent requests `bootstrap-pass2`; you approve once. It fails if `scripts/verify` is still the stub. Then: CodeQL default setup, wait until the first CodeQL run on `main` completes (Actions read), add the `code_scanning` rule to the live `main` ruleset, and, unless `"deploy": "none"`, set `DEPLOY_ENABLED=true` and print the deploy secrets you must enter (tier 3 checklist) in the run summary. The `code_scanning` rule is also committed to the project's `rulesets/main.json` by an agent PR beforehand, so `check` and later `apply-settings` runs agree with live; until CodeQL default setup is `configured`, `apply-settings` leaves that rule out and `check` reports it `deferred` (9.1). Once the live rule exists, `check` fails closed on default setup and `DEPLOY_ENABLED` (10). The run ends with `check`.
@@ -1155,7 +1207,7 @@ Phase 0 ran on `wimdotgg/probe` (archived; links stay valid). Result values: ver
 | V4 | Rulesets are readable with Metadata read (documented); environments and Actions settings are readable enough for tier 1 plans with the PR `GITHUB_TOKEN` | API test from a PR run | Redesigned: rulesets readable; environments, `actions/permissions`, team access, security and variables return 403 to the PR `GITHUB_TOKEN`, even with `actions: read` (V17), so `settings-plan` shows those sections as a file diff (8.2). Environments are treated like Actions settings; the `check` at the end of each `apply-settings` run is their live verification. |
 | V5 | A fine-grained PAT for a machine user, resource owner the org, can hold Workflows and Actions write; it can set issue types, sub-issues and dependencies with Issues write; check runs are readable without a Checks permission | Create the PAT, run `claim` and the planner once | Verified: the agent PAT set an issue type, `--parent`, `--blocked-by`, read check runs and enqueued a PR. |
 | V6 | Org-admin `pull_request` bypass lets you merge your own protected-path PR without lifting rules for agents | Throwaway repo test | Verified: [probe#6](https://github.com/wimdotgg/probe/pull/6) merged by the owner through the bypass; the bypass also skips the merge queue (9.1). |
-| V7 | A `wimdotgg-admin` installation token with repository Administration write and Contents read (no organization Administration) can generate a repo from the template while members cannot create repositories; whether that token may be repository-scoped (to `groundwork`) or must be installation-wide; the request-body key for the Issue types organization permission | `selftest`, first bootstrap | Partial (Phase 2): the permission key `issue_types` is confirmed by the API `X-Accepted-GitHub-Permissions` header; the generate call is still pending Phase 4. Decides which 2.4 token variant ships. The tier 2 elevation path itself is verified: PAT 403 on admin calls, owner approval gate, reject stops the run, non-`main` dispatch refused, no self-approval, minted token cannot reach another repo. |
+| V7 | A `wimdotgg-admin` installation token with repository Administration write and Contents read (no organization Administration) can generate a repo from the template while members cannot create repositories; whether that token may be repository-scoped (to `groundwork`) or must be installation-wide; the request-body key for the Issue types organization permission | `selftest`, first bootstrap | Partial (Phase 2): the permission key `issue_types` is confirmed by the API `X-Accepted-GitHub-Permissions` header; the generate call is still pending Phase 4. Phase 4 contract (#142): the call is now `POST /orgs/{org}/repos` (14.2), documented as needing an organization permission the App lacks (2.4); the first live bootstrap decides the token variant and the owner step. Decides which 2.4 token variant ships. The tier 2 elevation path itself is verified: PAT 403 on admin calls, owner approval gate, reject stops the run, non-`main` dispatch refused, no self-approval, minted token cannot reach another repo. |
 | V8 | Check names: caller-level jobs report under their own name (`Check`, `PR metadata`, `pr-size`); jobs calling reusable workflows report as `<caller job> / <called job>` | First CI run in `groundwork` | Verified on `probe`: `Check`, `PR metadata`, `pr-size`; a reusable call reports as `called / inner`. |
 | V9 | `issues: labeled` and `pull_request_target: labeled` events triggered by the agent PAT start `protected-labels`; `github.event.sender.login` is the labeling actor | Label test | Verified: both events fired for labels applied by the agent; sender login printed. |
 | V10 | The `code_scanning` ruleset rule works with the merge queue (CodeQL default setup analyses `merge_group` refs or the rule is satisfied by the PR analysis). Not found in the docs. If it blocks the queue, drop the rule and keep CodeQL alerts as advisory | Throwaway repo with pass 2 applied | Verified: rule `CodeQL` `high_or_higher`/`errors` with the merge queue; [probe#7](https://github.com/wimdotgg/probe/pull/7) merged through the queue. No analysis runs for the queue ref; the PR analysis satisfies the rule. |
@@ -1186,6 +1238,10 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-21: Phase 4 contract (#142)
+
+Pass 1 creates the repo with `POST /orgs/{org}/repos` (`auto_init: true`), creates labels, then pushes the bootstrap commit; `generate` is gone, which closes the Dependabot label gap. `TOKEN_SCOPE` gains `deferred` with `ctx.withToken`, so `bootstrap` mints its create-call token itself; `bootstrap-pass2` stays `target`. The reference lists an organization permission for the create call that the admin App lacks (2.4); the first live run confirms it. `script` and `selftest` stay out of Phase 4. 12.1, 13.1 and 14.2 carry the module contracts the lane tasks build against.
 
 ### 2026-11-21: Phase 4 owner delegation (#141)
 
