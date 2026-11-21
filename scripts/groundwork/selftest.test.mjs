@@ -11,7 +11,7 @@ const REPO = `selftest-${RUN_ID}`;
 const archivePath = `/repos/${ORG}/${REPO}`;
 
 const run = (ctx, seams) => runSelftest(ctx, { inspect: async () => 'absent', ...seams });
-const passingProbes =async () => PROBE_IDS.map((id) => ({ id, name: id, ok: true, detail: 'fine' }));
+const passingProbes = async () => PROBE_IDS.map((id) => ({ id, name: id, ok: true, detail: 'fine' }));
 
 /** `withToken` records every request and hands the callback a fixture client that records each call. */
 function harness({ archiveStatus = 200, mintFails = false, checkResult = { ok: true, summary: 'check summary' } } = {}) {
@@ -159,15 +159,28 @@ test('R3 run: a step that throws undefined or null still archives', async () => 
 
 test('R1 run: a repository bootstrap would refuse as foreign is never archived, and the archive row says why', async () => {
   const { ctx, calls, requests } = harness();
+  const inspected = [];
   const result = await run(ctx, {
-    inspect: async () => 'foreign',
+    inspect: async (options) => { inspected.push(options); return 'foreign'; },
     runBootstrap: async () => assert.fail('bootstrap must not run'),
     probes: async () => assert.fail('probes must not run'),
   });
   assert.equal(result.ok, false);
   assert.deepEqual(calls, [], 'no PATCH or any other call');
   assert.deepEqual(requests, [{ repositories: [CONTROL], permissions: CONTROL_READ_PERMISSIONS }]);
+  assert.deepEqual(inspected.map(({ org, repo, adminBot }) => ({ org, repo, adminBot })), [{ org: ORG, repo: REPO, adminBot: 'admin-app[bot]' }]);
   assert.match(result.summary, /\| archive \| fail \| not archived: selftest-4242 exists and was not created by this kit \|/);
+});
+
+test('R1 run: an ours or fresh repository is still bootstrapped and archived', async () => {
+  for (const state of ['ours', 'fresh']) {
+    const { ctx, calls } = harness();
+    let bootstrapRuns = 0;
+    const result = await run(ctx, { inspect: async () => state, runBootstrap: async () => { bootstrapRuns += 1; }, probes: passingProbes });
+    assert.equal(result.ok, true, state);
+    assert.equal(bootstrapRuns, 1, state);
+    assert.deepEqual(calls.map(({ method, path }) => `${method} ${path}`), [`PATCH ${archivePath}`], state);
+  }
 });
 
 test('R1 run: an unreadable repository state is refused and never archived', async () => {
