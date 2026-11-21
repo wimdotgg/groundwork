@@ -888,10 +888,6 @@ test('admin-run.yml: lists script and selftest, declares script_path and carries
 });
 
 const SCRIPT_PATH = 'admin-ops/example.mjs';
-const SKELETON_ENVS = {
-  selftest: { INPUT_OP: 'selftest', INPUT_TARGET_REPO: '' },
-};
-
 test('validateRequest: script needs a SHA ref and an admin-ops path, selftest takes neither target nor ref', () => {
   const script = inputs({ op: 'script', ref: REF, scriptPath: SCRIPT_PATH });
   const rejected = [
@@ -907,25 +903,10 @@ test('validateRequest: script needs a SHA ref and an admin-ops path, selftest ta
     ['selftest with ref', inputs({ op: 'selftest', targetRepo: '', ref: REF })],
   ];
   for (const [label, candidate] of rejected) assert.ok(validateRequest(candidate, REGISTRY).problems.length > 0, label);
-  const onlySkeletonProblem = (candidate) => validateRequest(candidate, REGISTRY).problems;
-  assert.deepEqual(onlySkeletonProblem(script), []);
-  assert.deepEqual(onlySkeletonProblem(inputs({ op: 'selftest', targetRepo: '' })), ['args: not implemented']);
+  assert.deepEqual(validateRequest(script, REGISTRY).problems, []);
+  assert.deepEqual(validateRequest(inputs({ op: 'selftest', targetRepo: '' }), REGISTRY).problems, []);
+  assert.deepEqual(validateRequest(inputs({ op: 'selftest', targetRepo: '', argsText: '{"a":1}' }), REGISTRY).problems, ['args: unknown argument "a"']);
 });
-
-for (const [op, env] of Object.entries(SKELETON_ENVS)) {
-  test(`plan and apply: ${op} refuses not implemented before any call, mint or write`, async () => {
-    const calls = [];
-    const planned = await plan(dispatchEnv({ INPUT_TARGET_REPO: TARGET, ...env }), { ...planOverrides({}, calls), registry: REGISTRY });
-    assert.equal(planned.exitCode, 1);
-    assert.match(planned.reason, /not implemented/);
-    assert.deepEqual(calls, []);
-    const { overrides, mints, jwts, tempDirs } = deferredHarness(async () => assert.fail('op must not run'));
-    const applied = await apply(dispatchEnv({ INPUT_TARGET_REPO: '', ...env }), { ...overrides, registry: REGISTRY });
-    assert.equal(applied.exitCode, 1);
-    assert.match(applied.reason, /not implemented/);
-    assert.deepEqual([mints.length, jwts.length, tempDirs.length], [0, 0, 0]);
-  });
-}
 
 test('apply: a deferred op mints nothing before run and gets no client, token or target settings', async () => {
   let seen;
@@ -1218,8 +1199,67 @@ test('selftest targetRepo builds selftest-<run id> from digits only', () => {
   }
 });
 
-test('the selftest skeleton exports an empty grant list', () => {
-  assert.deepEqual(REGISTRY.selftest.grants({}), []);
+const SELFTEST_ENV = { INPUT_OP: 'selftest', INPUT_TARGET_REPO: '', GITHUB_RUN_ID: '4242' };
+const SELFTEST = REGISTRY.selftest;
+
+test('plan: selftest names selftest-<run id> and lists its three grants, none on another repository', async () => {
+  const result = await plan(dispatchEnv(SELFTEST_ENV), { ...planOverrides({}), registry: REGISTRY });
+  assert.equal(result.exitCode, 0, result.reason);
+  assert.ok(result.summary.includes('`acme/selftest-4242`'));
+  assert.equal(result.summary.match(/Token grant,/g).length, 3);
+  assert.ok(!result.summary.includes(`\`${TARGET}\``));
+});
+
+test('plan and apply: a non-digit GITHUB_RUN_ID is a refusal before any call, mint or write, not a crash', async () => {
+  for (const runId of [undefined, '', '12a', '../1']) {
+    const env = { ...SELFTEST_ENV, GITHUB_RUN_ID: runId };
+    const calls = [];
+    const planned = await plan(dispatchEnv(env), { ...planOverrides({}, calls), registry: REGISTRY });
+    assert.equal(planned.exitCode, 1, String(runId));
+    assert.match(planned.reason, /GITHUB_RUN_ID must be digits/);
+    assert.deepEqual(calls, []);
+    const { overrides, mints, jwts, tempDirs } = deferredHarness(async () => assert.fail('op must not run'));
+    overrides.registry.selftest = SELFTEST;
+    const applied = await apply(dispatchEnv(env), overrides);
+    assert.equal(applied.exitCode, 1);
+    assert.match(applied.reason, /GITHUB_RUN_ID must be digits/);
+    assert.deepEqual([mints.length, jwts.length, tempDirs.length], [0, 0, 0]);
+  }
+});
+
+test('withToken: selftest mints only its declared grants, keyed on selftest-<run id>', async () => {
+  const request = (repository, permissions) => ({ repositories: [repository], permissions });
+  const throwaway = 'selftest-4242';
+  const attempts = [
+    ['control read', request(CONTROL_REPO, SELFTEST.CONTROL_READ_PERMISSIONS), true],
+    ['create', request(CONTROL_REPO, SELFTEST.CREATE_PERMISSIONS), true],
+    ['throwaway full', request(throwaway, SELFTEST.PERMISSIONS), true],
+    ['throwaway check subset', request(throwaway, REGISTRY.check.PERMISSIONS), true],
+    ['throwaway archive subset', request(throwaway, { administration: 'write' }), true],
+    ['existing project', request(TARGET, SELFTEST.PERMISSIONS), false],
+    ['other selftest repository', request('selftest-1', SELFTEST.PERMISSIONS), false],
+    ['control full', request(CONTROL_REPO, SELFTEST.PERMISSIONS), false],
+    ['throwaway extra permission', request(throwaway, { ...SELFTEST.PERMISSIONS, pages: 'write' }), false],
+    ['throwaway and control', { repositories: [throwaway, CONTROL_REPO], permissions: SELFTEST.PERMISSIONS }, false],
+  ];
+  const outcomes = [];
+  const registry = { ...stubRegistry(), selftest: { ...SELFTEST, run: async (ctx) => {
+    for (const [label, grant] of attempts) outcomes.push([label, await ctx.withToken(grant, async () => 'minted').catch(() => 'refused')]);
+    return { ok: true, summary: 'done' };
+  } } };
+  const { overrides, mints } = harness({ registry, routes: revokeRoute });
+  await apply(dispatchEnv(SELFTEST_ENV), overrides);
+  assert.deepEqual(outcomes, attempts.map(([label, , allowed]) => [label, allowed ? 'minted' : 'refused']));
+  assert.ok(mints.every(({ repositories }) => repositories.length === 1 && [CONTROL_REPO, throwaway].includes(repositories[0])));
+});
+
+test('apply: selftest runs the check only through ctx.runCheck, with the check grant on the throwaway repository', async () => {
+  const registry = { ...stubRegistry(), selftest: { ...SELFTEST, run: (ctx) => ctx.runCheck() } };
+  const routes = Object.fromEntries(Object.entries(withTokenRoutes()).map(([key, route]) => [key.replace(`/repos/${ORG}/${TARGET}`, `/repos/${ORG}/selftest-4242`), route]));
+  const { overrides, mints } = harness({ registry, routes });
+  const result = await apply(dispatchEnv(SELFTEST_ENV), overrides);
+  assert.equal(result.exitCode, 0, result.reason);
+  assert.deepEqual(mints.map(({ repositories, permissions }) => ({ repositories, permissions })), [{ repositories: ['selftest-4242'], permissions: REGISTRY.check.PERMISSIONS }]);
 });
 
 // --- script op and the grants seam ---------------------------------------------------------------------------------
