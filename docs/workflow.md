@@ -54,7 +54,7 @@ Planner and reviewer sessions use two more scripts, driven by the `groundwork-pl
 |---|---|---|
 | Planner | `plan-lint N [--post]` | Lints the epic's plan and prints lane width; `--post` creates or updates the one report comment. `plan-lint.yml` posts it on epic events too |
 | Planner | `plan-lint N --close` | Checks the epic against the close list (4.5) before you close it; writes nothing |
-| Reviewer | `review-queue` | Ready PRs with no review from the agent account on the current head, and Dependabot PRs |
+| Reviewer | `review-queue` | Ready PRs with no review from the agent account on the current head, and Dependabot PRs. A review counts with a `Reviewer:` line first or last, on the current head. It does not exclude your own session |
 
 Sections: planning [6.2](spec.md), worker loop [6.3](spec.md), PR contract [7](spec.md), CI [8](spec.md), rulesets [9](spec.md), releases [11](spec.md).
 
