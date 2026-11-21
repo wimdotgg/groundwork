@@ -15,7 +15,7 @@ Every GitHub write goes through the App helper:
 node scripts/agent/token.mjs exec -- <command>
 ```
 
-That covers review posts and `gh pr merge`. Bare writes are denied in `.claude/settings.json`; `gh api` with `-f`, `-F`, `--field`, `--method` or `--input` is denied bare, so run it through the wrapper. Reads (`gh pr view`, `gh pr diff`, `gh pr checks`) run bare. Node 24+ must come first on PATH. The session id is the harness session id (Claude Code's `session_id`). Reviews come from the agent App; a separate reviewer App applies only when `config.json` names `apps.reviewer`.
+That covers review posts and `gh pr merge`. Bare writes are denied in `.claude/settings.json`; `gh api` with `-f`, `-F`, `--field`, `--method` or `--input` is denied bare, so run it through the wrapper. Reads (`gh pr view`, `gh pr diff`, `gh pr checks`) run bare. Node 24+ must come first on PATH. The session id is the harness session id (Claude Code's `session_id`). Reviews come from the agent App; a separate reviewer App applies only when `config.json` names `apps.reviewer`. `review-queue` counts only reviews from `accounts.agent`, so that App needs a `review-queue` change first.
 
 Pace: at most 10 comments per minute. No polling loops.
 
@@ -34,10 +34,10 @@ Pace: at most 10 comments per minute. No polling loops.
 3. Write the review body to a file. First line: `Reviewer: <model>/<harness> · session <id>` (`review-queue` reads it from the first or last line; without it the PR stays queued). Then numbered findings, each with a severity (`blocker`, `major`, `minor`, `nit`), the file and line, and the fix. No findings: say so.
 4. Post one review on the current head:
    ```
-   node scripts/agent/token.mjs exec -- gh api /repos/{owner}/{repo}/pulls/N/reviews -X POST -f event=COMMENT -f commit_id=<head sha> -F body=@<file>
+   node scripts/agent/token.mjs exec -- gh api repos/{owner}/{repo}/pulls/N/reviews -X POST -f event=COMMENT -f commit_id=<head sha> -F body=@<file>
    ```
-   A new push moves the head, so the PR returns to the queue.
-5. Rounds are capped at 3 per PR. If they do not converge, comment on the PR and raise `needs-decision`.
+   The path has no leading slash: Git Bash rewrites one into a Windows path. A new push moves the head, so the PR returns to the queue.
+5. Rounds are capped at 3 per PR. If they do not converge, say so in the review. The worker raises `needs-decision` and runs `release.mjs N --decision` (6.3 step 6); the reviewer applies no label.
 
 The worker resolves each thread after fixing or answering it. Do not hold the PR for it.
 
