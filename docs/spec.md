@@ -1080,7 +1080,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 - `AGENTS.md` is canonical; `CLAUDE.md` is `@AGENTS.md`.
 - `.claude/settings.json`:
   - Hooks: `Stop` and `PreCompact` run `node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --auto`. They need Node 24 first on PATH and learn the session from `GROUNDWORK_SESSION` or their stdin `session_id` (13). The hooks fire in the top-level session only, not in subagents.
-  - Deny rules for the dangerous forms: `git push` with `-f`, any `--force` flag (including its lease variant) or a `+` refspec; `git rebase` and `git pull --rebase`; `git push` to `main`; `--no-verify` and `git commit -n`; `gh pr merge --admin`; `gh api` calls with `-X` or `--method` against `rulesets`, `environments`, `secrets`. Each has a bare form, and a `token.mjs exec --` wrapped form with these exceptions: no wrapped deny for `git -C * push --force` or `-f`, and the wrapped `gh api` denies cover only the `-X` and `--method` forms with a space (`-XDELETE`, `-XPUT` and `--method=DELETE` have none). A bare `git -C * push` is denied outright. Closing those gaps means editing `.claude/settings.json`, an owner-path follow-up outside #122.
+  - Deny rules for the dangerous forms: `git push` with `-f`, any `--force` flag (including its lease variant) or a `+` refspec; `git rebase` and `git pull --rebase`; `git push` to `main`; `--no-verify` and `git commit -n`; `gh pr merge --admin`; `gh api` calls with `-X` or `--method` against `rulesets`, `environments`, `secrets`. Each has a bare form and a `token.mjs exec --` wrapped form. The `gh api` denies match the method flag (`-X*`, `--method*`, any method) before or after the path. The `git -C * push` wrapped denies cover `--force`, `-f`, `main` and `+` refspecs. A bare `git -C * push` is denied outright. Not covered: a `gh api` call against those paths that defaults to POST through `-f`, `-F`, `--field`, `--raw-field` or `--input` without a method flag; the bare deny blocks it, the wrapped form is open (follow-up).
   - Deny rules for bare writes, so a write cannot skip the wrapper: `git push` (also `git -C * push`); `gh pr create|merge|ready|edit|comment|review`; `gh issue create|edit|comment`; `gh api` with `-X`, `--method`, `-f`, `-F`, `--field`, `--raw-field` or `--input`. The `gh api` rule cannot tell a GraphQL read from a write, so read-only GraphQL runs through the wrapper too (the wrapper form is not denied except the dangerous forms above).
   - Agents write only through `node scripts/agent/token.mjs exec -- <command>`, including `claim`, `checkpoint` and `release`, `gh pr ready` and the enqueue; `AGENTS.md` also caps write pace (5 issue creations and 10 comments per minute).
   - Allow rules for `node scripts/agent/*`, `node scripts/human/*`, read-only `gh`.
@@ -1176,6 +1176,10 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-21: wrapped deny rules (#130)
+
+15: `.claude/settings.json` gains the wrapped `git -C * push * --force*` and `-f*` denies, and the wrapped `gh api` denies for `-XDELETE`, `-XPUT`, `--method=DELETE` and `--method=PUT` against `rulesets`, `environments` and `secrets`. Review round 1 added the wrapped `git -C * push` forms for `--force` and `-f` right after `push`, `main` and `+` refspecs, the wrapped `gh api` method-first order, and any-method `-X*` and `--method*` rules (bare and wrapped) against the three paths. Every dangerous form now has a bare and a wrapped deny. The #122 gap (R5 of the #126 review) is closed. Follow-up: wrapped `gh api` writes against those paths through `-f` or `--input` without a method flag.
 
 ### 2026-11-21: live claim-loop run (#91)
 
