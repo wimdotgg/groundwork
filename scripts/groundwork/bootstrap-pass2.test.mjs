@@ -30,7 +30,7 @@ const DEPENDENCIES = { sleep: instantSleep, timeoutMs: 30, pollMs: 10 };
 
 const temporaryRoots = [];
 
-/** The shipped settings, with `code_scanning` added to main.json and the production secrets filled in. */
+/** The shipped settings, with main.json's `code_scanning` rule kept or dropped per `withRule` and the production secrets filled in. */
 async function makeRoot({ withRule = true } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'bootstrap-pass2-'));
   temporaryRoots.push(root);
@@ -38,6 +38,7 @@ async function makeRoot({ withRule = true } = {}) {
   await cp(path.join(REAL_ROOT, '.github', 'groundwork'), directory, { recursive: true });
   const mainFile = path.join(directory, 'rulesets', 'main.json');
   const main = JSON.parse(await readFile(mainFile, 'utf8'));
+  main.rules = main.rules.filter((rule) => rule.type !== CODE_SCANNING.type);
   if (withRule) main.rules.push(CODE_SCANNING);
   await writeFile(mainFile, JSON.stringify(main));
   const settingsFile = path.join(directory, 'settings.json');

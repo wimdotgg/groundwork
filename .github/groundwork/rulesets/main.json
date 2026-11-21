@@ -35,6 +35,11 @@
         "max_entries_to_merge": 3,
         "min_entries_to_merge_wait_minutes": 1,
         "check_response_timeout_minutes": 30
+    } },
+    { "type": "code_scanning", "parameters": {
+        "code_scanning_tools": [
+          { "tool": "CodeQL", "security_alerts_threshold": "high_or_higher", "alerts_threshold": "errors" }
+        ]
     } }
   ]
 }
