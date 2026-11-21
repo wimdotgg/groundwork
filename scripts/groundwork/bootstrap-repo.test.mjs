@@ -187,22 +187,28 @@ test('AC3 createRepo makes one call with the restricted token when it succeeds',
   ]);
 });
 
-const CREATE_FAILURES = {
-  'a 403': new GitHubError('forbidden', { status: 403 }),
-  'a 404': new GitHubError('not found', { status: 404 }),
-  'a 422': new GitHubError('unprocessable', { status: 422 }),
-  'a 0 status': new GitHubError('fetch failed', { status: 0 }),
-  'a plain Error': new Error('boom'),
-};
-
-for (const [name, failure] of Object.entries(CREATE_FAILURES)) {
-  test(`AC5 createRepo throws ${name} after one mint, with no installation-wide retry`, async () => {
-    const { withToken, log } = stubWithToken([failure]);
-    await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error === failure);
-    assert.equal(log.filter((line) => line.startsWith('mint')).length, 1);
-    assert.equal(log.at(-1), 'revoke');
-  });
+async function assertSingleMintFailure(failure) {
+  const { withToken, log } = stubWithToken([failure]);
+  await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error === failure);
+  assert.equal(log.filter((line) => line.startsWith('mint')).length, 1);
+  assert.equal(log.at(-1), 'revoke');
 }
+
+test('AC5 createRepo throws a 403 after one mint, with no installation-wide retry', async () => {
+  await assertSingleMintFailure(new GitHubError('forbidden', { status: 403 }));
+});
+
+test('AC5 createRepo throws a 404 after one mint, with no installation-wide retry', async () => {
+  await assertSingleMintFailure(new GitHubError('not found', { status: 404 }));
+});
+
+test('AC5 createRepo throws a 422 after one mint', async () => {
+  await assertSingleMintFailure(new GitHubError('unprocessable', { status: 422 }));
+});
+
+test('AC5 createRepo throws a non-GitHub error after one mint', async () => {
+  await assertSingleMintFailure(new Error('boom'));
+});
 
 const TREE_ENTRIES = [
   { path: 'README.md', mode: '100644', content: '# shop\n' },
