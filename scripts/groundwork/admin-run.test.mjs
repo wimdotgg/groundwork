@@ -37,7 +37,7 @@ const dispatchEnv = (overrides = {}) => ({
   ...overrides,
 });
 
-const inputs = (overrides = {}) => ({ op: 'check', targetRepo: TARGET, ref: '', argsText: '{}', ...overrides });
+const inputs = (overrides = {}) => ({ op: 'check', targetRepo: TARGET, ref: '', scriptPath: '', argsText: '{}', ...overrides });
 
 /** Real contract values (scope, permissions, validateArgs) with a stubbed run. */
 function stubRegistry(runs = {}) {
@@ -186,7 +186,7 @@ test('admin-run.yml: no expression in run lines, admin environment only on apply
   assert.match(applyJob, /environment: admin/);
   assert.match(applyJob, /timeout-minutes:/);
   assert.match(planJob, /timeout-minutes:/);
-  for (const name of ['INPUT_OP', 'INPUT_TARGET_REPO', 'INPUT_REF', 'INPUT_ARGS']) {
+  for (const name of ['INPUT_OP', 'INPUT_TARGET_REPO', 'INPUT_REF', 'INPUT_SCRIPT_PATH', 'INPUT_ARGS']) {
     assert.match(planJob, new RegExp(`${name}: \\$\\{\\{ inputs\\.`));
     assert.match(applyJob, new RegExp(`${name}: \\$\\{\\{ inputs\\.`));
   }
@@ -874,8 +874,59 @@ const stopHere = { ok: false, summary: 'stop' };
 
 test('admin-run.yml: run-name carries every input for the owner delegation', async () => {
   const lines = (await readFile(WORKFLOW_FILE, 'utf8')).split(/\r?\n/);
-  assert.ok(lines.includes('run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} args=${{ inputs.args }}'));
+  assert.ok(lines.includes('run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} args=${{ inputs.args }} script=${{ inputs.script_path }}'));
 });
+
+test('admin-run.yml: lists script and selftest, declares script_path and carries it in run-name', async () => {
+  const text = await readFile(WORKFLOW_FILE, 'utf8');
+  const options = text.slice(text.indexOf('options:'), text.indexOf('target_repo:')).split(/\r?\n/).map((line) => line.trim());
+  assert.ok(options.includes('- script') && options.includes('- selftest'));
+  assert.match(text, /^\s+script_path:$/m);
+  assert.match(text, /^run-name: .*inputs\.script_path/m);
+  assert.match(text, /script_sha256: \$\{\{ steps\.plan\.outputs\.script_sha256 \}\}/);
+  assert.match(text, /PLAN_SCRIPT_SHA256: \$\{\{ needs\.plan\.outputs\.script_sha256 \}\}/);
+});
+
+const SCRIPT_PATH = 'admin-ops/example.mjs';
+const SKELETON_ENVS = {
+  script: { INPUT_OP: 'script', INPUT_REF: REF, INPUT_SCRIPT_PATH: SCRIPT_PATH },
+  selftest: { INPUT_OP: 'selftest', INPUT_TARGET_REPO: '' },
+};
+
+test('validateRequest: script needs a SHA ref and an admin-ops path, selftest takes neither target nor ref', () => {
+  const script = inputs({ op: 'script', ref: REF, scriptPath: SCRIPT_PATH });
+  const rejected = [
+    ['script without ref', { ...script, ref: '' }],
+    ['script without path', { ...script, scriptPath: '' }],
+    ['script path outside admin-ops', { ...script, scriptPath: 'scripts/example.mjs' }],
+    ['script path nested', { ...script, scriptPath: 'admin-ops/sub/example.mjs' }],
+    ['script path traversal', { ...script, scriptPath: 'admin-ops/../x.mjs' }],
+    ['script path not mjs', { ...script, scriptPath: 'admin-ops/example.js' }],
+    ['script without target', { ...script, targetRepo: '' }],
+    ['script path given to check', inputs({ scriptPath: SCRIPT_PATH })],
+    ['selftest with target', inputs({ op: 'selftest' })],
+    ['selftest with ref', inputs({ op: 'selftest', targetRepo: '', ref: REF })],
+  ];
+  for (const [label, candidate] of rejected) assert.ok(validateRequest(candidate, REGISTRY).problems.length > 0, label);
+  const onlySkeletonProblem = (candidate) => validateRequest(candidate, REGISTRY).problems;
+  assert.deepEqual(onlySkeletonProblem(script), ['args: not implemented']);
+  assert.deepEqual(onlySkeletonProblem(inputs({ op: 'selftest', targetRepo: '' })), ['args: not implemented']);
+});
+
+for (const [op, env] of Object.entries(SKELETON_ENVS)) {
+  test(`plan and apply: ${op} refuses not implemented before any call, mint or write`, async () => {
+    const calls = [];
+    const planned = await plan(dispatchEnv({ INPUT_TARGET_REPO: TARGET, ...env }), { ...planOverrides({}, calls), registry: REGISTRY });
+    assert.equal(planned.exitCode, 1);
+    assert.match(planned.reason, /not implemented/);
+    assert.deepEqual(calls, []);
+    const { overrides, mints, jwts, tempDirs } = deferredHarness(async () => assert.fail('op must not run'));
+    const applied = await apply(dispatchEnv({ INPUT_TARGET_REPO: op === 'script' ? TARGET : '', ...env }), { ...overrides, registry: REGISTRY });
+    assert.equal(applied.exitCode, 1);
+    assert.match(applied.reason, /not implemented/);
+    assert.deepEqual([mints.length, jwts.length, tempDirs.length], [0, 0, 0]);
+  });
+}
 
 test('apply: a deferred op mints nothing before run and gets no client, token or target settings', async () => {
   let seen;

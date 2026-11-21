@@ -1,6 +1,6 @@
 name: admin-run
 
-run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} args=${{ inputs.args }}
+run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} args=${{ inputs.args }} script=${{ inputs.script_path }}
 
 # Tier 2 admin operations (spec 12.1). Dispatched on main only: the `admin`
 # environment admits no other ref, so a modified copy of this file on another
@@ -18,13 +18,20 @@ on:
           - bootstrap-pass2
           - check
           - create-issue-types
+          - script
+          - selftest
       target_repo:
-        description: Repository name without owner; empty for create-issue-types
+        description: Repository name without owner; empty for create-issue-types and selftest
         type: string
         required: false
         default: ''
       ref:
-        description: 40-character commit SHA in target_repo (apply-settings only)
+        description: 40-character commit SHA (apply-settings in target_repo, script in the control repository)
+        type: string
+        required: false
+        default: ''
+      script_path:
+        description: admin-ops/<name>.mjs (script only)
         type: string
         required: false
         default: ''
@@ -47,6 +54,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      script_sha256: ${{ steps.plan.outputs.script_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,11 +64,13 @@ jobs:
         with:
           node-version: 24
       - name: Validate and plan
+        id: plan
         env:
           GITHUB_TOKEN: ${{ github.token }}
           INPUT_OP: ${{ inputs.op }}
           INPUT_TARGET_REPO: ${{ inputs.target_repo }}
           INPUT_REF: ${{ inputs.ref }}
+          INPUT_SCRIPT_PATH: ${{ inputs.script_path }}
           INPUT_ARGS: ${{ inputs.args }}
         run: node scripts/groundwork/admin-run.mjs plan
 
@@ -83,8 +94,10 @@ jobs:
           ADMIN_APP_KEY: ${{ secrets.ADMIN_APP_KEY }}
           RELEASE_APP_CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
           RELEASE_APP_KEY: ${{ secrets.RELEASE_APP_KEY }}
+          PLAN_SCRIPT_SHA256: ${{ needs.plan.outputs.script_sha256 }}
           INPUT_OP: ${{ inputs.op }}
           INPUT_TARGET_REPO: ${{ inputs.target_repo }}
           INPUT_REF: ${{ inputs.ref }}
+          INPUT_SCRIPT_PATH: ${{ inputs.script_path }}
           INPUT_ARGS: ${{ inputs.args }}
         run: node scripts/groundwork/admin-run.mjs apply
