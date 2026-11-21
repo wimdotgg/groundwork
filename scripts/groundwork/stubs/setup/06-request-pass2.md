@@ -5,7 +5,7 @@
 
 ## Outcome
 
-`bootstrap-pass2` is requested and the owner can approve it with every setup task merged.
+`bootstrap-pass2` has run and its closing `check` passed, with every setup task merged.
 
 ## Serves
 
@@ -34,4 +34,4 @@ low
 
 ## Context
 
-`bootstrap-pass2` refuses to run while `scripts/verify` is still the stub.
+`bootstrap-pass2` refuses to run while `scripts/verify` is still the stub. The task waits for the owner's approval of the admin run; pass 2 also enables CodeQL and waits for its first run on `main`.
