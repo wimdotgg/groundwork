@@ -1,5 +1,7 @@
 name: admin-run
 
+run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} args=${{ inputs.args }}
+
 # Tier 2 admin operations (spec 12.1). Dispatched on main only: the `admin`
 # environment admits no other ref, so a modified copy of this file on another
 # branch never reaches a secret.
@@ -12,6 +14,8 @@ on:
         required: true
         options:
           - apply-settings
+          - bootstrap
+          - bootstrap-pass2
           - check
           - create-issue-types
       target_repo:
@@ -62,7 +66,7 @@ jobs:
   apply:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment: admin
     permissions:
       contents: read
