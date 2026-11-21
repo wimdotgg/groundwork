@@ -10,9 +10,9 @@ Owner gates are the dark boxes.
 flowchart TD
   G([Owner delegates a goal]):::gate --> P[Planner opens epic and sub-issues]
   P --> A{{Owner applies accepted}}:::gate
-  A --> N[Workers: next, then claim]
+  A --> N[Workers: next.mjs, then claim.mjs]
   N --> D[Draft PR on issue/N]
-  D --> C[Checks and advisory review]
+  D --> C[Checkpoints, checks and advisory review]
   C --> R[Ready for review]
   R --> PP{{Protected paths? Owner approves}}:::gate
   PP --> Q[Merge queue]
@@ -32,6 +32,21 @@ flowchart TD
 
   classDef gate fill:#1f2937,stroke:#f59e0b,color:#ffffff,stroke-width:2px
 ```
+
+## The worker scripts
+
+A worker session runs these as `node scripts/agent/<name>.mjs` on Node 24+. Everything that writes goes through `node scripts/agent/token.mjs exec -- `, so GitHub sees the agent App and never your login.
+
+| Step | Command | Does |
+|---|---|---|
+| Pick | `next` | Next ready task or takeover candidate, with the reason for every skipped one |
+| Take | `claim N --session <id> --agent <model>/<harness>` | Claim commit, `issue/N`, pointer comment, draft PR; or a takeover of an expired or released draft |
+| Brief | `resume N --session <id>` | Bounded briefing for a takeover or a revived worker; no writes |
+| Save | `checkpoint --session <id>` | Push, rewrite the PR `## State`, post the journal comment. The `Stop` and `PreCompact` hooks run `checkpoint --auto`, which only pushes |
+| Hand back | `release N --decision` | Draft again, released marker; for a `needs-decision` |
+| Close out | `release N --merged` | Handover comment on the issue after the merge |
+
+Marking ready and enqueueing (`gh pr ready`, `gh pr merge N --auto --squash`) also run through the wrapper. The session id is the harness session id, so the hooks match the PR footer. Subagents share their parent's id and fire no hooks; parallel workers are separate top-level sessions. Exit 3 from `resume`, `checkpoint` or `release --decision` means the PR footer names another session: stop. Exit 3 from `claim` means held or not ready: run `next` again. Details in [6.3, 6.4](spec.md) and [13](spec.md).
 
 Sections: planning [6.2](spec.md), worker loop [6.3](spec.md), PR contract [7](spec.md), CI [8](spec.md), rulesets [9](spec.md), releases [11](spec.md).
 
