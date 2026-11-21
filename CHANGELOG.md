@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/wimdotgg/groundwork/compare/v0.4.0...v0.5.0) (2026-11-21)
+
+
+### Features
+
+* **groundwork:** bootstrap-pass2 CodeQL default setup, code_scanning rule and DEPLOY_ENABLED ([#161](https://github.com/wimdotgg/groundwork/issues/161)) ([e94da42](https://github.com/wimdotgg/groundwork/commit/e94da4202b696d6d350085bd10b013e906b67d5e))
+* **groundwork:** bootstrap-repo module for repo creation and the bootstrap commit ([#158](https://github.com/wimdotgg/groundwork/issues/158)) ([19bcd1f](https://github.com/wimdotgg/groundwork/commit/19bcd1ffca3f49e8313312633745b7a4595fb7a3))
+* **groundwork:** build the project tree from a release tag ([#157](https://github.com/wimdotgg/groundwork/issues/157)) ([05c3836](https://github.com/wimdotgg/groundwork/commit/05c38369b1a88d9fc78517c24569dd3c4c779079))
+* **groundwork:** open the Project setup epic from setup templates ([#159](https://github.com/wimdotgg/groundwork/issues/159)) ([8c885f7](https://github.com/wimdotgg/groundwork/commit/8c885f7e32a718ec768afb8a984873c955814a26))
+* **groundwork:** register bootstrap ops and add the withToken hook ([#156](https://github.com/wimdotgg/groundwork/issues/156)) ([7c4c3ad](https://github.com/wimdotgg/groundwork/commit/7c4c3adb058715ad8f9b2fe4ebfdbb93bb0a253a))
+* **groundwork:** run bootstrap pass 1 with labels before dependabot.yml ([#163](https://github.com/wimdotgg/groundwork/issues/163)) ([88736e0](https://github.com/wimdotgg/groundwork/commit/88736e023fdde8a30892ece26049195772cec12c))
+
 ## [0.4.0](https://github.com/wimdotgg/groundwork/compare/v0.3.0...v0.4.0) (2026-11-21)
 
 
