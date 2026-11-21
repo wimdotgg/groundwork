@@ -346,7 +346,8 @@ test('AC8 the last step lists labels again and deletes the defaults GitHub seede
   const deletes = world.calls.filter((call) => call.method === 'DELETE' && call.path.startsWith(`${TARGET_PATH}/labels/`));
   assert.equal(deletes.length, defaults.length);
   const lastLabelsStep = world.calls.findLastIndex((call) => call.path === `${TARGET_PATH}/labels` && call.method === 'GET');
-  assert.ok(lastLabelsStep > indexOfLine(world, `POST ${TARGET_PATH}/issues`), 'the cleanup runs after the setup epic');
+  const lastEpicWrite = world.calls.findLastIndex((call) => call.method === 'POST' && /\/(sub_issues|dependencies\/blocked_by)$/.test(call.path));
+  assert.ok(lastEpicWrite > -1 && lastLabelsStep > lastEpicWrite, 'the cleanup runs after the last setup epic write');
   assert.ok(summary.split('\n').includes('- labels (final pass): 10 deleted'));
 });
 
