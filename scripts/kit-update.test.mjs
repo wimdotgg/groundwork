@@ -396,10 +396,40 @@ test('AC2 an annotated tag resolves to its commit, not the tag object', async ()
   });
 });
 
-test('R11 a plan path the project gitignores is still committed', async () => {
+test('a plan path the project gitignores is still committed', async () => {
   const files = { ...PROJECT_FILES, '.gitignore': 'scripts/agent/\n' };
   await withProject(files, {}, async (project) => {
     await execute(project, releasesClient(OLD_TREE, NEW_TREE));
     assert.match(await project.git(['show', '--name-only', '--format=', 'HEAD']), /scripts\/agent\/fresh\.mjs/);
+  });
+});
+
+test('a failed commit removes an ignored file the plan created and keeps other ignored files', async () => {
+  const files = { ...PROJECT_FILES, '.gitignore': 'scripts/agent/\nscratch/\n' };
+  await withProject(files, {}, async (project) => {
+    await mkdir(path.join(project.root, 'scratch'));
+    await writeFile(path.join(project.root, 'scratch/keep.txt'), 'mine\n');
+    project.failPublishWhen = ([, subcommand]) => subcommand === 'commit';
+    await assert.rejects(execute(project, releasesClient(OLD_TREE, NEW_TREE)), /commit failed/);
+    await assert.rejects(readProject(project, 'scripts/agent/fresh.mjs'), { code: 'ENOENT' });
+    assert.equal(await readProject(project, 'scratch/keep.txt'), 'mine\n');
+  });
+});
+
+test('rewritePins keeps the quotes around a quoted pin', () => {
+  const options = { org: realConfig.org, controlRepo: realConfig.controlRepo, tag: NEW_TAG, tagSha: COMMITS[NEW_TAG] };
+  const pinned = `${REUSABLE}/reusable-verify.yml@${COMMITS[NEW_TAG]}`;
+  assert.equal(rewritePins({ text: `uses: "${REUSABLE}/reusable-verify.yml@${OLD_SHA}" # ${OLD_TAG}\n`, ...options }), `uses: "${pinned}" # ${NEW_TAG}\n`);
+  assert.equal(rewritePins({ text: `uses: '${REUSABLE}/reusable-verify.yml@${OLD_SHA}'\n`, ...options }), `uses: '${pinned}' # ${NEW_TAG}\n`);
+});
+
+test('R1 run copies the new tag ci.yml with its local reusable-workflow references pinned', async () => {
+  const localReference = './.github/workflows/reusable-verify.yml # zizmor: ignore[self-repository] bootstrap rewrites it';
+  const tagCi = `jobs:\n  verify:\n    uses: ${localReference}\n  extra:\n    runs-on: ubuntu-latest\n`;
+  const expected = `jobs:\n  verify:\n    uses: ${REUSABLE}/reusable-verify.yml@${COMMITS[NEW_TAG]} # ${NEW_TAG}\n  extra:\n    runs-on: ubuntu-latest\n`;
+  await withProject({ ...PROJECT_FILES, '.github/workflows/ci.yml': CI_BEFORE }, {}, async (project) => {
+    const result = await execute(project, releasesClient(OLD_TREE, { ...NEW_TREE, '.github/workflows/ci.yml': tagCi }));
+    assert.equal(await readProject(project, '.github/workflows/ci.yml'), expected);
+    assert.ok(result.changed.includes('.github/workflows/ci.yml'));
   });
 });

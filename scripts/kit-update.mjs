@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { CONFIG_DIR, loadConfig, repoRoot } from './lib/config.mjs';
@@ -45,6 +45,8 @@ const USAGE = 'usage: kit-update.mjs <vX.Y.Z> [--json]';
 const MAX_TAG_DEREFERENCES = 5;
 const KIT_PATH_MATCHERS = KIT_PATHS.map(toMatcher);
 const WORKFLOWS_DIR = '.github/workflows';
+const CI_WORKFLOW_PATH = `${WORKFLOWS_DIR}/ci.yml`;
+const LOCAL_REFERENCE = /\.\/\.github\/workflows\/(reusable-[\w-]+\.yml)([ \t]*# zizmor: ignore\[self-repository\][^\r\n]*)?/g;
 
 export class KitUpdateRefusal extends Error {}
 
@@ -92,17 +94,23 @@ function escapeRegExp(text) {
 }
 
 /**
- * Points every `uses: <org>/<controlRepo>/.github/workflows/reusable-*.yml@<ref>` at the tag's commit, with the tag as
- * the trailing comment (spec 8.6). Other `uses:` lines are left alone.
+ * Points every reusable-workflow reference at the tag's commit with the tag as the trailing comment (spec 8.6),
+ * the output `bootstrap` writes: a local `./.github/workflows/reusable-*.yml` (and its `# zizmor: ignore[self-repository]`
+ * comment) and an existing `uses: [quote]<org>/<controlRepo>/.github/workflows/reusable-*.yml@<ref>[quote]`. Any other
+ * trailing comment on a pin is replaced. Other `uses:` lines are left alone.
  * @param {{ text: string, org: string, controlRepo: string, tag: string, tagSha: string }} options
  * @returns {string}
  */
 export function rewritePins({ text, org, controlRepo, tag, tagSha }) {
-  const reference = new RegExp(
-    `(uses:[ \\t]*${escapeRegExp(org)}/${escapeRegExp(controlRepo)}/\\.github/workflows/reusable-[\\w-]+\\.yml)@[^\\s#]+[ \\t]*(#[^\\r\\n]*)?`,
+  const existingPin = new RegExp(
+    `(uses:[ \\t]*)(["']?)(${escapeRegExp(org)}/${escapeRegExp(controlRepo)}/\\.github/workflows/reusable-[\\w-]+\\.yml)@[^\\s#"']+\\2[ \\t]*(#[^\\r\\n]*)?`,
     'gi',
   );
-  return text.replace(reference, `$1@${tagSha} # ${tag}`);
+  const pinned = text.replace(existingPin, `$1$2$3@${tagSha}$2 # ${tag}`);
+  return pinned.replace(
+    LOCAL_REFERENCE,
+    (_match, name) => `${org}/${controlRepo}/.github/workflows/${name}@${tagSha} # ${tag}`,
+  );
 }
 
 /** @returns {string} the blob SHA git computes for `content` */
@@ -212,6 +220,16 @@ function ignoreMissing(error) {
   throw error;
 }
 
+/** Copies the tag's `ci.yml` with its local reusable-workflow references pinned, as `bootstrap` writes it (13.1). */
+async function planCiWorkflow({ client, control, root, newTree, writes, pinTarget }) {
+  if (!newTree.has(CI_WORKFLOW_PATH)) return;
+  const original = await readBlob(client, control, newTree.get(CI_WORKFLOW_PATH));
+  const content = Buffer.from(rewritePins({ text: original.toString('utf8'), ...pinTarget }));
+  const local = await readLocal(root, CI_WORKFLOW_PATH);
+  if (local !== null && content.equals(local)) return;
+  writes.set(CI_WORKFLOW_PATH, { content, executable: newTree.get(CI_WORKFLOW_PATH).mode === EXECUTABLE_MODE });
+}
+
 /** Rewrites the pins of every project workflow, on top of the copy this run already plans for it. */
 async function planPinRewrites({ root, writes, pinTarget }) {
   const names = (await readdir(path.join(root, WORKFLOWS_DIR)).catch(ignoreMissing)).filter((name) => name.endsWith('.yml'));
@@ -250,14 +268,31 @@ async function isAheadOfRemote(git, branch) {
   return Number((await git(['rev-list', '--count', `${remoteRef}..HEAD`])).trim()) > 0;
 }
 
-/** Undoes a failed run. The tree was clean, so only the plan's own new files are removed, never other untracked files. */
-async function restoreTree({ git, paths }) {
+async function exists(root, filePath) {
+  try {
+    await stat(path.join(root, filePath));
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/**
+ * Undoes a failed run. The tree was clean, so `reset` restores everything the plan touched that existed; only paths
+ * the plan created are cleaned (ignored ones included), never anything that was already there.
+ */
+async function restoreTree({ git, createdPaths }) {
   await git(['reset', '--hard', 'HEAD']);
-  await git(['clean', '-fdx', '--', ...paths]);
+  if (createdPaths.length > 0) await git(['clean', '-fdx', '--', ...createdPaths]);
 }
 
 async function commitPlan({ root, git, publish, plan, tag }) {
   const paths = [...plan.writes.keys(), ...plan.removals];
+  const createdPaths = [];
+  for (const filePath of plan.writes.keys()) {
+    if (!(await exists(root, filePath))) createdPaths.push(filePath);
+  }
   try {
     await applyPlan({ root, ...plan });
     // --force: a plan path the project gitignores would otherwise make `add` fail.
@@ -265,7 +300,7 @@ async function commitPlan({ root, git, publish, plan, tag }) {
     await publish(['git', 'commit', '-m', `chore(kit): update to ${tag}`]);
   } catch (error) {
     try {
-      await restoreTree({ git, paths });
+      await restoreTree({ git, createdPaths });
     } catch (restoreError) {
       throw new AggregateError([error, restoreError], `${error.message}; restoring the tree also failed: ${restoreError.message}`);
     }
@@ -303,7 +338,9 @@ export async function run({ root, tag, client, git, publish }) {
   const { writes, removals, skipped } = await planFileWrites({ client, control, root, oldTree, newTree });
   const mergedConfig = await planConfigMerge({ client, control, root, oldTree, newTree });
   if (mergedConfig) writes.set(CONFIG_PATH, mergedConfig);
-  await planPinRewrites({ root, writes, pinTarget: { org, controlRepo, tag, tagSha } });
+  const pinTarget = { org, controlRepo, tag, tagSha };
+  await planCiWorkflow({ client, control, root, newTree, writes, pinTarget });
+  await planPinRewrites({ root, writes, pinTarget });
   writes.set(KIT_VERSION_PATH, { content: Buffer.from(`${tag}\n`), executable: false });
 
   await commitPlan({ root, git, publish, plan: { writes, removals }, tag });
