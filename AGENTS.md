@@ -2,7 +2,7 @@
 
 Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/spec.md); section numbers below point into it. The spec wins over this file.
 
-`scripts/agent/*` runs the worker loop (6.3): `next`, `claim`, `checkpoint`, `resume`, `release`. `plan-lint` and `review-queue` arrive in Phase 3b.
+`scripts/agent/*` runs the worker loop (6.3): `next`, `claim`, `checkpoint`, `resume`, `release`. Planning and review use `plan-lint` and `review-queue`; `scripts/human/inbox.mjs` is the owner's inbox (spec 13).
 
 - Node 24+ first on PATH, for agents and hooks. An older `node` makes every agent script exit 1 with one stderr line; `token.mjs` checks it.
 - Session id: your harness session id (Claude Code's `session_id`), for `--session` and `GROUNDWORK_SESSION`. The hooks read the same id, so it matches the PR footer. Never invent one.
@@ -41,7 +41,8 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 - Reviewer: reviews PRs from another session with comment reviews. Never approves or requests changes.
 - All roles act as the agent App (see Identity); the session id separates them. Skills live in `.claude/skills/groundwork-*`.
 - Worker resolves each review thread after fixing or answering and logs it in `## Review log`.
-- Reviewer also enqueues Dependabot PRs with green checks (minor and patch only; majors need a Chore issue). `review-queue` lists them (10.2).
+- Reviewer starts each review with `Reviewer: <model>/<harness> · session <id>` as the first line (the last also counts). Without it, or after a later push, the PR stays in `review-queue`. Only reviews from the agent App count, so a separate reviewer App needs a `review-queue` change first.
+- Reviewer also enqueues Dependabot PRs with green checks (minor and patch only; majors need a Chore issue). `review-queue` lists them with the PRs awaiting review (10.2). It does not exclude your own session: drop your own entries.
 
 ## Planning for width (6.2)
 
@@ -49,7 +50,9 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 - Overlapping `## Touches` means a `blocked-by` link or one merged task. Name hotspots in `## Touches`. `hotspots.json` paths are exact paths or directory prefixes, not globs.
 - Plan comment on the epic lists lanes and lane width.
 - `plan-lint` fails on: cycle, task without AC (spikes excepted), task without `## Serves`, epic without integration task, over 12 sub-issues, depth over limit, overlapping Touches without a link.
-- Run `plan-lint` locally as the last step and post its report; adding sub-issues fires no event.
+- Run `plan-lint <epic> --post` locally as the last step; adding sub-issues fires no event. `--post` updates the one `plan-lint` marker comment. Exit 1 is a lint failure or an error; with `--json`, only a lint failure carries `failures`.
+- Before the owner closes an epic run `plan-lint <epic> --close`. It reads only and checks 4.5: sub-issues closed as completed, other closes and spikes explained in `## Decisions`, every E criterion in the acceptance comment (`acceptance-comment.md`). Closing stays with the owner.
+- `plan-lint.yml` posts the same report on epic events. Skills: `groundwork-planner` and `groundwork-reviewer`.
 
 ## Issue model (4)
 
