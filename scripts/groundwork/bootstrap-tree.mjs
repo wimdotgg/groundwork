@@ -1,0 +1,149 @@
+import { SettingsError } from '../lib/settings.mjs';
+
+/** @typedef {{ path: string, mode: string, sha: string }} ReleaseEntry */
+/** @typedef {{ path: string, mode: string, sha?: string, content?: string }} TreeEntry */
+
+/** Exact paths or directory prefixes (ending "/") that stay in the control repo (spec 13.1). */
+export const CONTROL_PATHS = [
+  'admin-ops/',
+  'scripts/groundwork/',
+  '.github/workflows/reusable-verify.yml',
+  '.github/workflows/reusable-security.yml',
+  '.github/workflows/admin-run.yml',
+];
+
+export const KIT_VERSION_PATH = '.github/groundwork/kit-version.txt';
+
+const STUBS_DIR = 'scripts/groundwork/stubs/';
+const SETTINGS_DIR = '.github/groundwork/';
+const FILE_MODE = '100644';
+const FIRST_VERSION = '0.0.0';
+
+// Paths whose project copy comes from a stub: [stub path, project path].
+const FIXED_STUBS = [
+  ['verify', 'scripts/verify'],
+  ['verify.cmd', 'scripts/verify.cmd'],
+  ['README.md', 'README.md'],
+];
+const STUB_DOCS_DIR = `${STUBS_DIR}docs/`;
+const PROJECT_DOCS_DIR = 'docs/';
+
+const REUSABLE_REFERENCE = /\.\/\.github\/workflows\/(reusable-[\w-]+\.yml)([ \t]*# zizmor: ignore\[self-repository\][^\r\n]*)?/g;
+
+const isUnder = (path, prefix) => path.startsWith(prefix);
+
+function isControlPath(path) {
+  return CONTROL_PATHS.some((entry) => (entry.endsWith('/') ? isUnder(path, entry) : path === entry));
+}
+
+/**
+ * @param {ReleaseEntry[]} entries blobs of the release tree
+ * @returns {string[]} blobs whose text the builder needs
+ */
+export function contentPaths(entries) {
+  return entries
+    .map((entry) => entry.path)
+    .filter((path) => isUnder(path, '.github/') || isUnder(path, STUBS_DIR));
+}
+
+const replaceLiteral = (text, token, value) => text.split(token).join(value);
+
+function fillPlaceholders(text, path, { org, repo, description }) {
+  const withNames = replaceLiteral(replaceLiteral(text, '__ORG__', org), '__REPO__', repo);
+  if (!withNames.includes('__DESCRIPTION__')) return withNames;
+  if (!path.endsWith('.md')) {
+    throw new SettingsError(`__DESCRIPTION__ is only allowed in .md files: ${path}`, path);
+  }
+  return replaceLiteral(withNames, '__DESCRIPTION__', description);
+}
+
+function rewriteReusableReferences(text, { org, controlRepo, tag }) {
+  return text.replace(
+    REUSABLE_REFERENCE,
+    (_match, name) => `${org}/${controlRepo}/.github/workflows/${name}@${tag}`,
+  );
+}
+
+function requireContent(contents, path) {
+  const text = Object.hasOwn(contents, path) ? contents[path] : undefined;
+  if (typeof text !== 'string') throw new SettingsError(`missing release content: ${path}`, path);
+  return text;
+}
+
+// A file whose text did not change keeps its blob sha; the caller then uploads nothing.
+function textEntry(source, path, { text, original }) {
+  if (text === original && source.sha) return { path, mode: source.mode, sha: source.sha };
+  return { path, mode: source.mode, content: text };
+}
+
+function stubSources(entries) {
+  const byPath = new Map(entries.map((entry) => [entry.path, entry]));
+  const fixed = FIXED_STUBS.map(([stub, projectPath]) => {
+    const source = byPath.get(STUBS_DIR + stub);
+    if (!source) throw new SettingsError(`missing stub: ${STUBS_DIR}${stub}`, STUBS_DIR + stub);
+    return { source, projectPath };
+  });
+  const docs = entries
+    .filter((entry) => isUnder(entry.path, STUB_DOCS_DIR))
+    .map((entry) => ({ source: entry, projectPath: PROJECT_DOCS_DIR + entry.path.slice(STUB_DOCS_DIR.length) }));
+  if (docs.length === 0) throw new SettingsError(`missing stub: ${STUB_DOCS_DIR}`, STUB_DOCS_DIR);
+  return [...fixed, ...docs];
+}
+
+function generatedFiles(tag) {
+  const files = {
+    [KIT_VERSION_PATH]: `${tag}\n`,
+    '.release-please-manifest.json': '{}\n',
+    'version.txt': `${FIRST_VERSION}\n`,
+    'CHANGELOG.md': '',
+  };
+  return Object.entries(files).map(([path, content]) => ({ path, mode: FILE_MODE, content }));
+}
+
+function isReplacedByStub(path, stubs, generated) {
+  if (isUnder(path, PROJECT_DOCS_DIR)) return true;
+  return stubs.some((stub) => stub.projectPath === path) || generated.has(path);
+}
+
+function keptEntry(entry, contents, names) {
+  if (isUnder(entry.path, SETTINGS_DIR) || !isUnder(entry.path, '.github/')) return entry;
+  const original = requireContent(contents, entry.path);
+  const text = fillPlaceholders(rewriteReusableReferences(original, names), entry.path, names);
+  return textEntry(entry, entry.path, { text, original });
+}
+
+/**
+ * @param {{ entries: ReleaseEntry[], contents: Record<string, string>, org: string,
+ *   controlRepo: string, repo: string, description: string, tag: string }} options
+ * @returns {TreeEntry[]} blob entries sorted by path, ready for POST git/trees without base_tree
+ */
+export function buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag }) {
+  const names = { org, controlRepo, repo, description, tag };
+  const stubs = stubSources(entries);
+  const generated = generatedFiles(tag);
+  const generatedPaths = new Set(generated.map((entry) => entry.path));
+
+  const stubEntries = stubs.map(({ source, projectPath }) => {
+    const original = requireContent(contents, source.path);
+    const text = fillPlaceholders(original, projectPath, names);
+    return textEntry(source, projectPath, { text, original });
+  });
+  const kept = entries
+    .filter((entry) => !isControlPath(entry.path) && !isReplacedByStub(entry.path, stubs, generatedPaths))
+    .map((entry) => keptEntry(entry, contents, names));
+
+  return [...kept, ...stubEntries, ...generated].sort((a, b) => (a.path < b.path ? -1 : 1));
+}
+
+/**
+ * @param {TreeEntry[]} treeEntries output of buildBootstrapTree
+ * @param {Record<string, string>} contents the release contents the tree was built from
+ * @returns {Record<string, string>} the .github/groundwork/ files of the built tree as text
+ */
+export function settingsFiles(treeEntries, contents) {
+  const files = {};
+  for (const entry of treeEntries.filter((candidate) => isUnder(candidate.path, SETTINGS_DIR))) {
+    files[entry.path] = entry.content ?? requireContent(contents, entry.path);
+  }
+  return files;
+}
