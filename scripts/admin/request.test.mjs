@@ -17,6 +17,8 @@ const PROBE_KEYS = {
   'POST /repos/wimdotgg/demo/git/commits': { status: 201, data: { sha: PROBE_SHA } },
 };
 const PATCH_KEY = 'PATCH /repos/wimdotgg/demo/git/refs/heads/main';
+const SCRIPT = 'admin-ops/example.mjs';
+const CONTROL_REF_KEY = 'GET /repos/wimdotgg/groundwork/git/ref/heads/main';
 
 /** The fixture client never exposes bodies, so record them around it. */
 function recordingClient(routes) {
@@ -36,12 +38,12 @@ function run(argv, routes) {
 
 test('parseArgs reads op, repo, ref, args and --json', () => {
   const request = parseArgs(['apply-settings', '--repo', 'demo', '--ref', OTHER_SHA, '--args', '{"a":1}', '--json']);
-  assert.deepEqual(request, { op: 'apply-settings', repo: 'demo', ref: OTHER_SHA, args: { a: 1 }, json: true });
+  assert.deepEqual(request, { op: 'apply-settings', repo: 'demo', ref: OTHER_SHA, scriptPath: '', args: { a: 1 }, json: true });
 });
 
 test('parseArgs accepts --flag=value and defaults args to {}', () => {
   const request = parseArgs(['check', '--repo=my.repo_1-x']);
-  assert.deepEqual(request, { op: 'check', repo: 'my.repo_1-x', ref: '', args: {}, json: false });
+  assert.deepEqual(request, { op: 'check', repo: 'my.repo_1-x', ref: '', scriptPath: '', args: {}, json: false });
 });
 
 test('parseArgs accepts create-issue-types without a repo', () => {
@@ -76,6 +78,17 @@ test('parseArgs rejects bad input before any call', () => {
     ['bootstrap-pass2', '--repo', 'demo', '--args', '{}'],
     ['bootstrap', '--repo', 'demo', '--ref', MAIN_SHA],
     ['bootstrap-pass2', '--repo', 'demo', '--ref', MAIN_SHA],
+    ['script', '--script', SCRIPT],
+    ['script', '--repo', 'demo'],
+    ['script', '--repo', 'demo', '--script', 'scripts/x.mjs'],
+    ['script', '--repo', 'demo', '--script', 'admin-ops/sub/x.mjs'],
+    ['script', '--repo', 'demo', '--script', 'admin-ops/x.js'],
+    ['script', '--repo', 'demo', '--script', SCRIPT, '--ref', 'abc'],
+    ['check', '--repo', 'demo', '--script', SCRIPT],
+    ['selftest', '--repo', 'demo'],
+    ['selftest', '--ref', MAIN_SHA],
+    ['selftest', '--script', SCRIPT],
+    ['selftest', '--args', '{}'],
   ];
   for (const argv of bad) {
     assert.throws(() => parseArgs(argv), { name: 'ConfigError' }, argv.join(' '));
@@ -92,7 +105,7 @@ test('apply-settings with --ref dispatches the exact body on main', async () => 
     path: '/repos/wimdotgg/groundwork/actions/workflows/admin-run.yml/dispatches',
     body: {
       ref: 'main',
-      inputs: { op: 'apply-settings', target_repo: 'demo', ref: OTHER_SHA, args: '{"k":"v"}' },
+      inputs: { op: 'apply-settings', target_repo: 'demo', ref: OTHER_SHA, script_path: '', args: '{"k":"v"}' },
       return_run_details: true,
     },
   }]);
@@ -118,13 +131,13 @@ test('apply-settings fails when the main head response has no SHA', async () => 
 test('check sends empty ref and "{}" args', async () => {
   const { done, calls } = run(['check', '--repo', 'demo'], { [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } } });
   await done;
-  assert.deepEqual(calls[0].body.inputs, { op: 'check', target_repo: 'demo', ref: '', args: '{}' });
+  assert.deepEqual(calls[0].body.inputs, { op: 'check', target_repo: 'demo', ref: '', script_path: '', args: '{}' });
 });
 
 test('create-issue-types sends empty target_repo and ref', async () => {
   const { done, calls } = run(['create-issue-types'], { [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } } });
   await done;
-  assert.deepEqual(calls[0].body.inputs, { op: 'create-issue-types', target_repo: '', ref: '', args: '{}' });
+  assert.deepEqual(calls[0].body.inputs, { op: 'create-issue-types', target_repo: '', ref: '', script_path: '', args: '{}' });
 });
 
 test('bootstrap dispatches the description with empty ref', async () => {
@@ -132,13 +145,36 @@ test('bootstrap dispatches the description with empty ref', async () => {
     [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } },
   });
   await done;
-  assert.deepEqual(calls[0].body.inputs, { op: 'bootstrap', target_repo: 'demo', ref: '', args: '{"description":"d"}' });
+  assert.deepEqual(calls[0].body.inputs, { op: 'bootstrap', target_repo: 'demo', ref: '', script_path: '', args: '{"description":"d"}' });
 });
 
 test('bootstrap-pass2 dispatches with empty ref and "{}" args', async () => {
   const { done, calls } = run(['bootstrap-pass2', '--repo', 'demo'], { [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } } });
   await done;
-  assert.deepEqual(calls[0].body.inputs, { op: 'bootstrap-pass2', target_repo: 'demo', ref: '', args: '{}' });
+  assert.deepEqual(calls[0].body.inputs, { op: 'bootstrap-pass2', target_repo: 'demo', ref: '', script_path: '', args: '{}' });
+});
+
+test('script defaults --ref to the groundwork main head and dispatches script_path', async () => {
+  const { done, calls } = run(['script', '--repo', 'demo', '--script', SCRIPT, '--args', '{"k":1}'], {
+    [CONTROL_REF_KEY]: { status: 200, data: { object: { sha: OTHER_SHA } } },
+    [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } },
+  });
+  await done;
+  assert.equal(calls[0].path, '/repos/wimdotgg/groundwork/git/ref/heads/main');
+  assert.deepEqual(calls[1].body.inputs, { op: 'script', target_repo: 'demo', ref: OTHER_SHA, script_path: SCRIPT, args: '{"k":1}' });
+});
+
+test('script keeps an explicit --ref and makes no lookup', async () => {
+  const { done, calls } = run(['script', '--repo', 'demo', '--script', SCRIPT, '--ref', MAIN_SHA], { [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } } });
+  await done;
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].body.inputs, { op: 'script', target_repo: 'demo', ref: MAIN_SHA, script_path: SCRIPT, args: '{}' });
+});
+
+test('selftest dispatches with empty target_repo, ref and script_path', async () => {
+  const { done, calls } = run(['selftest'], { [DISPATCH_KEY]: { status: 200, data: { html_url: RUN_URL } } });
+  await done;
+  assert.deepEqual(calls[0].body.inputs, { op: 'selftest', target_repo: '', ref: '', script_path: '', args: '{}' });
 });
 
 test('dispatch without run details prints the workflow page URL', async () => {

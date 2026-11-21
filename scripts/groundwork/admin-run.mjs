@@ -9,6 +9,8 @@ import * as check from './check.mjs';
 import * as bootstrap from './bootstrap.mjs';
 import * as bootstrapPass2 from './bootstrap-pass2.mjs';
 import * as createIssueTypes from './create-issue-types.mjs';
+import * as script from './script.mjs';
+import * as selftest from './selftest.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {import('../lib/github.mjs').CallRecord} CallRecord */
@@ -25,6 +27,8 @@ export const REGISTRY = {
   'bootstrap-pass2': bootstrapPass2,
   check,
   'create-issue-types': createIssueTypes,
+  script,
+  selftest,
 };
 
 const MAIN_REF = 'refs/heads/main';
@@ -32,6 +36,9 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9._-]+$/;
 const DOT_SEGMENTS = new Set(['.', '..']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const OP_WITH_REF = 'apply-settings';
+const OP_SCRIPT = 'script';
+const OPS_NEEDING_REF = new Set([OP_WITH_REF, OP_SCRIPT]);
+const SCRIPT_PATH_PATTERN = /^admin-ops\/[A-Za-z0-9._-]+\.mjs$/;
 const OPS_THEN_CHECK = new Set(['apply-settings', 'bootstrap', 'bootstrap-pass2']);
 const OP_CHECK = 'check';
 const SCOPE_DEFERRED = 'deferred';
@@ -73,19 +80,22 @@ const withCanonicalTarget = (request, controlRepo) => (isControlRepo(request.tar
 
 /**
  * @param {Record<string, string|undefined>} env
- * @returns {{ op: string, targetRepo: string, ref: string, argsText: string }}
+ * @returns {{ op: string, targetRepo: string, ref: string, scriptPath: string, argsText: string }}
  */
 export function readInputs(env) {
   return {
     op: env.INPUT_OP ?? '',
     targetRepo: env.INPUT_TARGET_REPO ?? '',
     ref: env.INPUT_REF ?? '',
+    scriptPath: env.INPUT_SCRIPT_PATH ?? '',
     argsText: env.INPUT_ARGS ?? '',
   };
 }
 
 function targetProblems(module, targetRepo) {
-  if (module.TOKEN_SCOPE === 'org') return targetRepo === '' ? [] : ['target_repo must be empty for this op'];
+  if (module.TOKEN_SCOPE === 'org' || module.TAKES_TARGET_REPO === false) {
+    return targetRepo === '' ? [] : ['target_repo must be empty for this op'];
+  }
   if (targetRepo === '') return ['target_repo is required for this op'];
   if (!REPOSITORY_PATTERN.test(targetRepo) || DOT_SEGMENTS.has(targetRepo)) {
     return ['target_repo must match [A-Za-z0-9._-]+ and not be . or ..'];
@@ -94,8 +104,13 @@ function targetProblems(module, targetRepo) {
 }
 
 function refProblems(op, ref) {
-  if (op !== OP_WITH_REF) return ref === '' ? [] : ['ref must be empty for this op'];
+  if (!OPS_NEEDING_REF.has(op)) return ref === '' ? [] : ['ref must be empty for this op'];
   return SHA_PATTERN.test(ref) ? [] : ['ref must be a 40-character lowercase hex SHA'];
+}
+
+function scriptPathProblems(op, scriptPath) {
+  if (op !== OP_SCRIPT) return scriptPath === '' ? [] : ['script_path must be empty for this op'];
+  return SCRIPT_PATH_PATTERN.test(scriptPath) ? [] : ['script_path must match admin-ops/<name>.mjs'];
 }
 
 /** @returns {{ args?: object, problems: string[] }} */
@@ -113,9 +128,9 @@ function parseArgs(module, argsText) {
 
 /**
  * Pure input validation, run by both jobs. Never echoes raw input: reasons name the rule, not the value.
- * @param {{ op: string, targetRepo: string, ref: string, argsText: string }} inputs
+ * @param {{ op: string, targetRepo: string, ref: string, scriptPath: string, argsText: string }} inputs
  * @param {Record<string, OpModule>} registry
- * @returns {{ problems: string[], request?: { op: string, module: OpModule, targetRepo: string, ref: string, args: object } }}
+ * @returns {{ problems: string[], request?: { op: string, module: OpModule, targetRepo: string, ref: string, scriptPath: string, args: object } }}
  */
 export function validateRequest(inputs, registry) {
   if (!Object.hasOwn(registry, inputs.op)) {
@@ -126,10 +141,12 @@ export function validateRequest(inputs, registry) {
   const problems = [
     ...targetProblems(module, inputs.targetRepo),
     ...refProblems(inputs.op, inputs.ref),
+    ...scriptPathProblems(inputs.op, inputs.scriptPath),
     ...argsProblems,
   ];
   if (problems.length > 0) return { problems };
-  return { problems, request: { op: inputs.op, module, targetRepo: inputs.targetRepo, ref: inputs.ref, args } };
+  const { targetRepo, ref, scriptPath } = inputs;
+  return { problems, request: { op: inputs.op, module, targetRepo, ref, scriptPath, args } };
 }
 
 /**

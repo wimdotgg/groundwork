@@ -1,18 +1,21 @@
 import { ConfigError, loadConfig, repoRoot } from '../lib/config.mjs';
 import { GitHubError, apiPath, createClient } from '../lib/github.mjs';
 
-/** @typedef {'apply-settings'|'bootstrap'|'bootstrap-pass2'|'check'|'create-issue-types'|'probe'} Op */
-/** @typedef {{ op: Op, repo: string, ref: string, args: object, json: boolean }} Request */
+/** @typedef {'apply-settings'|'bootstrap'|'bootstrap-pass2'|'check'|'create-issue-types'|'probe'|'script'|'selftest'} Op */
+/** @typedef {{ op: Op, repo: string, ref: string, scriptPath: string, args: object, json: boolean }} Request */
 /** @typedef {{ exitCode: number, stdout: string, stderr: string }} Outcome */
 
-const USAGE = 'usage: request.mjs <apply-settings|bootstrap|bootstrap-pass2|check|create-issue-types|probe> [--repo <name>] [--ref <sha>] [--args <json>] [--json]';
+const USAGE = 'usage: request.mjs <apply-settings|bootstrap|bootstrap-pass2|check|create-issue-types|probe|script|selftest> [--repo <name>] [--ref <sha>] [--script <admin-ops/name.mjs>] [--args <json>] [--json]';
 const REPO_PATTERN = /^[A-Za-z0-9._-]+$/;
 const DOT_SEGMENTS = new Set(['.', '..']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
-const OPS_NEEDING_REPO = new Set(['apply-settings', 'bootstrap', 'bootstrap-pass2', 'check', 'probe']);
-const OPS_WITHOUT_ARGS = new Set(['bootstrap-pass2', 'probe']);
-const OPS = new Set([...OPS_NEEDING_REPO, 'create-issue-types']);
-const VALUE_FLAGS = new Set(['--repo', '--ref', '--args']);
+const OPS_NEEDING_REPO = new Set(['apply-settings', 'bootstrap', 'bootstrap-pass2', 'check', 'probe', 'script']);
+const OPS_WITHOUT_ARGS = new Set(['bootstrap-pass2', 'probe', 'selftest']);
+const OPS = new Set([...OPS_NEEDING_REPO, 'create-issue-types', 'selftest']);
+const OPS_WITH_REF = new Set(['apply-settings', 'script']);
+const OP_SCRIPT = 'script';
+const SCRIPT_PATTERN = /^admin-ops\/[A-Za-z0-9._-]+\.mjs$/;
+const VALUE_FLAGS = new Set(['--repo', '--ref', '--script', '--args']);
 const WORKFLOW_FILE = 'admin-run.yml';
 const DISPATCH_REF = 'main';
 const PROBE_MESSAGE = 'chore(check): probe';
@@ -69,8 +72,10 @@ function checkFlagsForOp(op, values) {
   const repoGiven = '--repo' in values;
   if (OPS_NEEDING_REPO.has(op) && !repoGiven) throw usageError(`${op} needs --repo`);
   if (!OPS_NEEDING_REPO.has(op) && repoGiven) throw usageError(`${op} takes no --repo`);
-  if ('--ref' in values && op !== 'apply-settings') throw usageError('--ref only applies to apply-settings');
+  if ('--ref' in values && !OPS_WITH_REF.has(op)) throw usageError('--ref only applies to apply-settings and script');
   if ('--args' in values && OPS_WITHOUT_ARGS.has(op)) throw usageError(`${op} takes no --args`);
+  if (op === OP_SCRIPT && !('--script' in values)) throw usageError('script needs --script');
+  if (op !== OP_SCRIPT && '--script' in values) throw usageError('--script only applies to script');
 }
 
 /**
@@ -89,8 +94,17 @@ export function parseArgs(argv) {
   }
   const ref = values['--ref'] ?? '';
   if ('--ref' in values && !SHA_PATTERN.test(ref)) throw usageError('--ref must be a 40-character lowercase hex SHA');
+  const scriptPath = values['--script'] ?? '';
+  if ('--script' in values && !SCRIPT_PATTERN.test(scriptPath)) throw usageError('--script must match admin-ops/<name>.mjs');
   const args = '--args' in values ? parseArgsObject(values['--args']) : {};
-  return { op, repo, ref, args, json };
+  return { op, repo, ref, scriptPath, args, json };
+}
+
+/** `apply-settings` defaults to the target's `main` head, `script` to the control repository's (the script lives there). */
+async function defaultRef({ request, client, config }) {
+  if (request.ref !== '' || !OPS_WITH_REF.has(request.op)) return request.ref;
+  const repo = request.op === OP_SCRIPT ? config.controlRepo : request.repo;
+  return currentMainSha(client, config.org, repo);
 }
 
 async function currentMainSha(client, org, repo) {
@@ -102,9 +116,8 @@ async function currentMainSha(client, org, repo) {
 
 async function dispatchAdminRun({ request, client, config }) {
   const { org, controlRepo } = config;
-  const needsRef = request.op === 'apply-settings';
-  const ref = needsRef && request.ref === '' ? await currentMainSha(client, org, request.repo) : request.ref;
-  const inputs = { op: request.op, target_repo: request.repo, ref, args: JSON.stringify(request.args) };
+  const ref = await defaultRef({ request, client, config });
+  const inputs = { op: request.op, target_repo: request.repo, ref, script_path: request.scriptPath, args: JSON.stringify(request.args) };
   const path = apiPath('/repos/{org}/{repo}/actions/workflows/{file}/dispatches', { org, repo: controlRepo, file: WORKFLOW_FILE });
   const response = await client.request('POST', path, { body: { ref: DISPATCH_REF, inputs, return_run_details: true } });
   const runUrl = response.data?.html_url;
