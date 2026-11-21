@@ -39,6 +39,8 @@ const ALL_REPOSITORIES = 'all';
 const LEVEL_RANK = { read: 1, write: 2 };
 const SETTINGS_SEGMENTS = ['.github', 'groundwork'];
 const CHECK_SETTINGS_DIR = 'check';
+const BOOTSTRAP_OPS = new Set(['bootstrap', 'bootstrap-pass2']);
+const CONTROL_TARGET_REASON = 'target_repo must not be the control repository for this op';
 const SECRET_ENV_NAMES = ['ADMIN_APP_KEY', 'RELEASE_APP_KEY'];
 const MIN_SCRUBBED_LINE_LENGTH = 17;
 const BLOB_MODE_PREFIX = '100';
@@ -59,14 +61,11 @@ function safeText(text) {
     .slice(0, TEXT_MAX_LENGTH);
 }
 
-const BOOTSTRAP_OPS = new Set(['bootstrap', 'bootstrap-pass2']);
-const CONTROL_TARGET_REASON = 'target_repo must not be the control repository for this op';
+const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Bootstrap ops hold a write grant on the target: aimed at `groundwork` it would be write access to the control repo. */
 const targetsControlRepo = (request, controlRepo) => BOOTSTRAP_OPS.has(request.op)
   && request.targetRepo.toLowerCase() === String(controlRepo).toLowerCase();
-
-const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
  * @param {Record<string, string|undefined>} env
@@ -327,11 +326,14 @@ export async function materialiseSettings(client, { org, repo, sha, directory })
   }
 }
 
+/** Bootstrap ops read the target's `main` head (12.1); standalone `check` keeps the default branch head. */
+const readSettingsHead = (client, target, op) => (BOOTSTRAP_OPS.has(op) ? readMainSha(client, target) : readDefaultBranchHead(client, target));
+
 /** Resolves where the op reads settings from and the commit they were read at. */
 async function prepareSettings({ deps, request, client, org, directory }) {
   if (request.module.TOKEN_SCOPE !== 'target') return { settingsRoot: deps.controlRoot };
   const target = { org, repo: request.targetRepo };
-  const sha = request.op === OP_WITH_REF ? request.ref : await readDefaultBranchHead(client, target);
+  const sha = request.op === OP_WITH_REF ? request.ref : await readSettingsHead(client, target, request.op);
   await materialiseSettings(client, { ...target, sha, directory });
   return { settingsRoot: directory };
 }
@@ -354,7 +356,7 @@ async function writeSettingsFiles({ deps, directory }, files) {
 }
 
 const samePermissionSets = (first, second) => Object.keys(first).length === Object.keys(second).length
-  && Object.keys(first).every((key) => first[key] === second[key]);
+  && Object.keys(first).every((key) => Object.hasOwn(second, key) && first[key] === second[key]);
 
 const isRepositoryList = (repositories, expected) => Array.isArray(repositories) && repositories.length === 1 && repositories[0] === expected;
 
@@ -394,17 +396,26 @@ async function mintScopedToken({ deps, env, org, repositories, permissions, reco
   return minted.token;
 }
 
+function snapshotRequest(requested) {
+  const { repositories, permissions } = requested ?? {};
+  return {
+    repositories: Array.isArray(repositories) ? Object.freeze([...repositories]) : repositories,
+    permissions: isPlainObject(permissions) ? Object.freeze({ ...permissions }) : permissions,
+  };
+}
+
 /** `ctx.withToken`: one grant at a time, revoked in a `finally`. A failed revoke is collected, so it fails the run even if the op swallows the error. */
 function createWithToken({ deps, env, opEnv, org, record, mask, clean, grants }) {
   const revokeProblems = [];
   let active = false;
   const withToken = async (requested, callback) => {
     if (active) throw new GitHubError('withToken calls do not nest');
-    const problem = grantProblem(requested, grants);
+    // Validate and mint the same frozen copy: the caller's objects can change while the mint awaits.
+    const { repositories, permissions } = snapshotRequest(requested);
+    const problem = grantProblem({ repositories, permissions }, grants);
     if (problem !== undefined) throw new GitHubError(`withToken refused: ${problem}`);
     active = true;
     try {
-      const { repositories, permissions } = requested;
       const token = await mintScopedToken({ deps, env, org, repositories, permissions, record, mask });
       try {
         return await callback({ client: deps.createClient({ env: opEnv, token, onCall: record }), token });
@@ -419,13 +430,13 @@ function createWithToken({ deps, env, opEnv, org, record, mask, clean, grants })
   return { withToken, revokeProblems };
 }
 
-/** `check` for a `deferred` op: its own token and the target's default branch head as the settings source. */
+/** `check` for a `deferred` op: its own token and the target's `main` head as the settings source. */
 async function checkAfterDeferred({ deps, request, org, directory, withToken }, ctx) {
   const checkModule = deps.registry[OP_CHECK];
   const target = { org, repo: request.targetRepo };
   return withToken({ repositories: [request.targetRepo], permissions: checkModule.PERMISSIONS }, async ({ client, token }) => {
     const settingsRoot = path.join(directory, CHECK_SETTINGS_DIR);
-    await materialiseSettings(client, { ...target, sha: await readDefaultBranchHead(client, target), directory: settingsRoot });
+    await materialiseSettings(client, { ...target, sha: await readMainSha(client, target), directory: settingsRoot });
     const config = await deps.loadConfig({ root: settingsRoot });
     return checkModule.run({ ...ctx, client, token, settingsRoot, config });
   });
@@ -457,7 +468,7 @@ async function runOp(context) {
   return { ok: parts.every((part) => part.ok), parts, ancestry };
 }
 
-/** Runs the op (and `check` after apply-settings) with the minted client, then removes the temp directory. */
+/** Runs the op (and its trailing `check`) with the minted client, then removes the temp directory. */
 async function executeOp(context) {
   const directory = await context.deps.makeTempDir();
   try {

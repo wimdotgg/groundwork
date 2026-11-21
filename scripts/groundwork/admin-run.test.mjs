@@ -824,7 +824,7 @@ test('apply: a non-GitHub error from the ancestry check fails the run and still 
 
 const BOOTSTRAP_ENV = { INPUT_OP: 'bootstrap', INPUT_ARGS: '{"description":"demo"}' };
 const BOOTSTRAP = REGISTRY.bootstrap;
-const withTokenRoutes = () => ({ ...settingsRoutes(HEAD), ...revokeRoute });
+const withTokenRoutes = () => ({ ...settingsRoutes(HEAD), [`GET ${mainRefPath}`]: ok({ object: { sha: HEAD } }), ...revokeRoute });
 const nonStdout = (events) => events.filter((event) => !event.startsWith('stdout'));
 
 function deferredHarness(run, { routes = withTokenRoutes(), checkRun, ...rest } = {}) {
@@ -945,6 +945,7 @@ const refusals = [
   ['create permissions plus an extra key', { repositories: [CONTROL_REPO], permissions: { administration: 'write', contents: 'read' } }],
   ['all with control read', { repositories: 'all', permissions: BOOTSTRAP.CONTROL_READ_PERMISSIONS }],
   ['all with the op permissions', { repositories: 'all', permissions: BOOTSTRAP.PERMISSIONS }],
+  ['an undeclared key with an undefined value', { repositories: [CONTROL_REPO], permissions: { foo: undefined } }],
   ['no request', undefined],
 ];
 
@@ -961,6 +962,26 @@ test('withToken: every undeclared grant is refused before any mint', async () =>
   for (const [label, message] of messages) assert.match(message, /^withToken refused/, label);
   assert.equal(mints.length, 0);
   assert.equal(jwts.length, 0);
+});
+
+test('withToken: the request is copied at call time, later mutation never reaches the mint', async () => {
+  const { overrides, mints } = deferredHarness(async (ctx) => {
+    const request = { repositories: [TARGET], permissions: { contents: 'read' } };
+    const pending = ctx.withToken(request, async () => 1);
+    request.permissions.secrets = 'write';
+    request.repositories[0] = CONTROL_REPO;
+    await pending;
+    const swapped = { repositories: [TARGET], permissions: { ...BOOTSTRAP.PERMISSIONS } };
+    const second = ctx.withToken(swapped, async () => 1);
+    swapped.repositories[0] = CONTROL_REPO;
+    await second;
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.deepEqual(mints.map(({ repositories, permissions }) => ({ repositories, permissions })), [
+    { repositories: [TARGET], permissions: { contents: 'read' } },
+    { repositories: [TARGET], permissions: BOOTSTRAP.PERMISSIONS },
+  ]);
 });
 
 test('withToken: a nested call is refused and the outer token is still revoked', async () => {
@@ -1000,6 +1021,7 @@ test('apply: after a passing deferred op, check runs with its own token against 
   assert.equal(checkCtx.token, TOKEN);
   assert.ok(checkCtx.settingsRoot.startsWith(tempDirs[0]));
   assert.match(result.summary, new RegExp(`git/trees/${HEAD}\` \\| 200`));
+  assert.ok(result.summary.includes(`git/ref/heads/main`) && !result.summary.includes('/branches/'), 'settings come from the main ref, not the default branch');
   assert.ok(result.summary.indexOf('bootstrapped') < result.summary.indexOf('verified'));
 });
 
@@ -1024,6 +1046,7 @@ test('apply: bootstrap-pass2 mints for the target and ends with check on the tar
   assert.deepEqual(seen, ['pass2', 'check']);
   assert.deepEqual(mints.map(({ repositories }) => repositories), [[TARGET]]);
   assert.match(result.summary, new RegExp(`git/trees/${HEAD}\` \\| 200`));
+  assert.ok(!result.summary.includes('/branches/'));
 });
 
 test('apply: ctx.writeSettings writes under the temp directory, loads config from it, and the directory is removed', async () => {

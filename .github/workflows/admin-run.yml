@@ -66,7 +66,7 @@ jobs:
   apply:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     environment: admin
     permissions:
       contents: read
