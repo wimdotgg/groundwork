@@ -9,6 +9,7 @@ const STATUS_OK = 200;
 const STATUS_CREATED = 201;
 const STATUS_ALREADY_EXISTS = 422;
 const REJECTED_STATUSES = [409, 422];
+const CLEANUP_OK_STATUSES = [404, 422];
 const V3_BRANCH = 'selftest-v3';
 const V16_BRANCH = 'issue/1';
 const TAG_RULESET_NAME = 'release-tag-immutability';
@@ -34,9 +35,13 @@ function shaOf(response, label) {
   return typeof value === 'string' ? value : fail(`${label}: response has no SHA`);
 }
 
-async function readMain(context) {
+async function readMainHead(context) {
   const ref = await context.client.request('GET', repoPath(context, '/git/ref/heads/main'));
-  const head = shaOf(ref, 'GET ref main');
+  return shaOf(ref, 'GET ref main');
+}
+
+async function readMain(context) {
+  const head = await readMainHead(context);
   const commit = await context.client.request('GET', repoPath(context, `/git/commits/${head}`));
   const tree = commit.data?.tree?.sha;
   return { head, tree: typeof tree === 'string' ? tree : fail('GET commit: response has no tree SHA') };
@@ -73,7 +78,7 @@ async function probeV3(context) {
   expectStatus('first create', first.status, [STATUS_CREATED]);
   const second = await createBranch(context, { branch: V3_BRANCH, head });
   expectStatus('second create', second.status, [STATUS_ALREADY_EXISTS]);
-  await context.client.request('DELETE', branchRefPath(context, V3_BRANCH));
+  await context.client.request('DELETE', branchRefPath(context, V3_BRANCH), { okStatuses: CLEANUP_OK_STATUSES });
   return `create ${first.status}, repeat ${second.status}`;
 }
 
@@ -105,6 +110,8 @@ async function probePushMain(context) {
   const dangling = await createCommit(context, { tree, parent: head });
   const update = await updateBranch(context, { branch: 'main', target: dangling, force: false });
   expectStatus('push to main', update.status, REJECTED_STATUSES);
+  // An unprotected main that moved after the first read also answers 422 (non-fast-forward), so a moved head proves nothing.
+  if ((await readMainHead(context)) !== head) fail('push probe inconclusive: main moved during the probe; rerun');
   return `push rejected with ${update.status}`;
 }
 
@@ -125,14 +132,14 @@ export async function runProbes({ client, org, repo, log }) {
   const rows = [];
   for (const id of PROBE_IDS) {
     const { name, run } = PROBES[id];
-    const row = await runProbe(id, name, run, context);
+    const row = await runProbe({ id, name, run }, context);
     log(`${row.ok ? 'pass' : 'FAIL'} ${id}: ${row.detail}`);
     rows.push(row);
   }
   return rows;
 }
 
-async function runProbe(id, name, run, context) {
+async function runProbe({ id, name, run }, context) {
   try {
     return { id, name, ok: true, detail: await run(context) };
   } catch (error) {

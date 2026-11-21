@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createFixtureClient } from '../lib/github.mjs';
 import { PROBE_IDS, runProbes } from './selftest-probes.mjs';
 
-const ORG = 'wimdotgg';
+const ORG = 'example-org';
 const REPO = 'selftest-1';
 const BASE = `/repos/${ORG}/${REPO}`;
 
@@ -105,15 +105,50 @@ test('a probe whose request has no fixture becomes a failed row', async () => {
   assert.ok(rows.every((row) => row.ok === false && row.detail.includes('no fixture')));
 });
 
-test('every call stays under the selftest repository', async () => {
+const CONFINEMENT_FIXTURES = {
+  'all pass': {},
+  'push accepted': { [`PATCH ${BASE}/git/refs/heads/main`]: reply(200) },
+  'repeat create accepted': { [`POST ${BASE}/git/refs`]: [reply(201), reply(201), reply(201)] },
+  'rewind accepted': { [`PATCH ${BASE}/git/refs/heads/issue/1`]: [reply(200), reply(200)] },
+};
+const ALLOWED_WRITES = [/\/git\/commits$/, /\/git\/refs$/, /\/git\/refs\/heads\/(selftest-v3|issue\/1|main)$/];
+
+for (const [label, overrides] of Object.entries(CONFINEMENT_FIXTURES)) {
+  test(`every call stays under the selftest repository (${label})`, async () => {
+    const { calls } = await probe(overrides);
+    assert.ok(calls.length > 0);
+    for (const call of calls) assert.ok(call.split(' ')[1].startsWith(`${BASE}/`), call);
+  });
+
+  test(`writes touch only the probe branches and main (${label})`, async () => {
+    const { calls } = await probe(overrides);
+    for (const write of calls.filter((call) => !call.startsWith('GET '))) {
+      assert.ok(ALLOWED_WRITES.some((pattern) => pattern.test(write)), write);
+    }
+  });
+}
+
+test('V16 deletes the issue branch', async () => {
   const { calls } = await probe();
-  assert.ok(calls.length > 0);
-  for (const call of calls) assert.ok(call.split(' ')[1].startsWith(`${BASE}/`), call);
+  assert.ok(calls.includes(`DELETE ${BASE}/git/refs/heads/issue/1`));
 });
 
-test('writes touch only the probe branches and main', async () => {
-  const { calls } = await probe();
-  const writes = calls.filter((call) => !call.startsWith('GET '));
-  const allowed = [/\/git\/commits$/, /\/git\/refs$/, /\/git\/refs\/heads\/(selftest-v3|issue\/1|main)$/];
-  for (const write of writes) assert.ok(allowed.some((pattern) => pattern.test(write)), write);
+test('V16 fails when the delete is rejected', async () => {
+  const { rows } = await probe({ [`DELETE ${BASE}/git/refs/heads/issue/1`]: reply(422, { message: 'protected' }) });
+  assert.equal(rowFor(rows, 'V16').ok, false);
+  assert.match(rowFor(rows, 'V16').detail, /DELETE .*issue\/1: 422/);
+});
+
+test('V3 still passes when the cleanup delete finds the branch gone', async () => {
+  const { rows } = await probe({ [`DELETE ${BASE}/git/refs/heads/selftest-v3`]: reply(404) });
+  assert.equal(rowFor(rows, 'V3').ok, true);
+});
+
+test('push-main is inconclusive when main moved during the probe', async () => {
+  const head = reply(200, { object: { sha: 'm1' } });
+  const moved = reply(200, { object: { sha: 'm2' } });
+  // Reads: V3, V16, push-main before the PATCH, push-main after it.
+  const { rows } = await probe({ [`GET ${BASE}/git/ref/heads/main`]: [head, head, head, moved] });
+  assert.equal(rowFor(rows, 'push-main').ok, false);
+  assert.match(rowFor(rows, 'push-main').detail, /inconclusive/);
 });
