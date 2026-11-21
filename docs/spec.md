@@ -1177,6 +1177,20 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 
 ## 21. Review notes
 
+### 2026-11-21: live claim-loop run (#91)
+
+Run on throwaway task #127 (PR #128), two top-level Claude Code sessions in separate worktrees (A `1ce6b81a-43ca-4a4e-85dd-0e2ced24d283`, B `c7c7de56-c010-4588-87df-03194dd78608`). Run note: `docs/runs/2026-11-21-claim-loop.md`.
+
+AC1: both ran `claim.mjs 127` at 05:50:00Z by the local clock (B 05:50:00.0430Z, A 05:50:00.0433Z; GitHub stamped claim commit 7c1fb65 at 05:49:50Z). B exited 0 (`issue/127`, PR 128; [claim commit](https://github.com/wimdotgg/groundwork/commit/7c1fb6528f647400b0f6047b0141f0b94d4cc5d9), [claim comment](https://github.com/wimdotgg/groundwork/pull/128#issuecomment-7058196926)); A exited 3 (`issue/127 is already claimed`).
+
+AC2: B ran `release 127 --decision` (exit 0, PR stayed draft with the released marker). `next` offered the takeover; A's `claim.mjs 127` exited 0 in mode takeover ([b8d754b](https://github.com/wimdotgg/groundwork/commit/b8d754b1ad47170702edd09d2d86198a807a7954), [comment](https://github.com/wimdotgg/groundwork/pull/128#issuecomment-7058219780)). B's next `checkpoint` exited 3: `PR footer names session 1ce6b81a-43ca-4a4e-85dd-0e2ced24d283`.
+
+AC3: A ran `resume 127 --session` (exit 0, 78 lines), then checkpoints [1](https://github.com/wimdotgg/groundwork/pull/128#issuecomment-7058240701) and [2](https://github.com/wimdotgg/groundwork/pull/128#issuecomment-7058272887). #128 merged through the queue as [7715796](https://github.com/wimdotgg/groundwork/commit/7715796c796936a0c289fbf958e94bca17b797eb); `release 127 --merged` posted the [handover](https://github.com/wimdotgg/groundwork/issues/127#issuecomment-7058315429).
+
+AC4: B committed 14dbf8a without pushing and ended its turn. Its Stop hook (`token.mjs exec -- checkpoint.mjs --auto`, session from hook stdin) pushed it: `issue/127` moved to [14dbf8a](https://github.com/wimdotgg/groundwork/commit/14dbf8a).
+
+Gotchas: two worktrees of one clone cannot both check out `issue/N`, so a released worker detaches before the taker checks out; the local clock ran about 10 s ahead of GitHub (claim commit stamped 05:49:50Z), and leases use only server timestamps, so they are unaffected.
+
 ### 2026-11-21: scripted claim loop decisions (#122)
 
 6.2, 13.1: `hotspots.json` paths are exact paths or directory prefixes, not globs; `findFooterBreak` and `parseFooter` documented as the only footer copies. 6.3, 6.4: the loop runs through the scripts and the wrapper; `release --decision` turns a ready PR back to draft; a takeover commit by another session younger than `claimWithoutPrMinutes` holds the PR; `next` offers a takeover only while the task passes every status check except `claimed` (format and size are not re-checked), and a direct `claim N` does not re-check it (accepted gap). 8.2: `base_ref_changed` is issue-events-only like `automatic_base_change_succeeded`. 13: session id is the harness session id; subagents share it and fire no Stop hook, so concurrent workers are separate top-level sessions or use distinct ids; Node 24 first on PATH; `checkpoint --auto` session from env or hook stdin; a checkpoint rerun after a failed journal post bumps the number and keeps the input file; non-auto `checkpoint` on a ready PR is allowed; exit 3 and exit 1 lists complete (Definition of Ready, rival takeover, footer-less PR, closed PR). 15: hooks run through the wrapper; bare-write and wrapped-form denies listed; read-only GraphQL goes through the wrapper. Known gap, owner-path follow-up: no wrapped deny for `git -C * push --force` or `-f`, and the wrapped `gh api` denies miss `-XDELETE`, `-XPUT` and `--method=DELETE`. 14.1: step 4 no longer lists team access (`teamAccess` is `[]`, #115).
