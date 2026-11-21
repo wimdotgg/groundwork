@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubError, createFixtureClient } from '../lib/github.mjs';
 import { SettingsError } from '../lib/settings.mjs';
-import { OP, PERMISSIONS, TOKEN_SCOPE, run, validateArgs } from './apply-settings.mjs';
+import { OP, PERMISSIONS, SECTION_GROUPS, TOKEN_SCOPE, applySections, run, validateArgs } from './apply-settings.mjs';
 
 const REAL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CONFIG = {
@@ -85,7 +85,7 @@ const writeLines = (events) => events.filter((event) => !event.gh).map((event) =
  * Runs the op with a fixture client. Non-GET requests are served from `writes` ("METHOD path" lines, 200 by default,
  * or a response object) and recorded with their bodies, together with every `gh` invocation, in call order.
  */
-async function runOp({ root, repo = CONTROL, reads, writes = {}, env = RELEASE_ENV, config = CONFIG }) {
+async function runOp({ root, repo = CONTROL, reads, writes = {}, env = RELEASE_ENV, config = CONFIG, groups }) {
   const events = [];
   const logs = [];
   const inner = createFixtureClient({ ...reads, ...writes });
@@ -102,7 +102,8 @@ async function runOp({ root, repo = CONTROL, reads, writes = {}, env = RELEASE_E
   };
   const context = { client, token: TOKEN, org: 'wimdotgg', repo, settingsRoot: root, config, env, log: (line) => logs.push(line) };
   try {
-    return { events, logs, result: await run(context, { spawnGh }) };
+    const result = groups ? await applySections(context, groups, { spawnGh }) : await run(context, { spawnGh });
+    return { events, logs, result };
   } catch (error) {
     return { events, logs, error };
   }
@@ -600,4 +601,86 @@ test('rulesets: a live summary without source_type is kept, not deleted', async 
   const outcome = succeeded(await runOp({ root, reads: readRoutes(CONTROL, { liveRulesets: live }), writes: okWrites([`PUT ${base}/rulesets/5`]) }));
   assert.deepEqual(writeLines(outcome.events), [`PUT ${base}/rulesets/5`]);
   assert.match(outcome.result.summary, /rulesets: 1 updated$/m);
+});
+
+const PROJECT_BASE = repoPath(PROJECT);
+const SECTION_WRITES = {
+  labels: [`POST ${PROJECT_BASE}/labels`],
+  settings: [
+    `PATCH ${PROJECT_BASE}`,
+    `PUT ${PROJECT_BASE}/private-vulnerability-reporting`,
+    `PUT ${PROJECT_BASE}/vulnerability-alerts`,
+    `PUT ${PROJECT_BASE}/automated-security-fixes`,
+    `PUT ${PROJECT_BASE}/actions/permissions`,
+    `PUT ${PROJECT_BASE}/actions/permissions/workflow`,
+    `PUT ${PROJECT_BASE}/actions/permissions/fork-pr-contributor-approval`,
+    `PUT ${PROJECT_BASE}/environments/release`,
+    `POST ${PROJECT_BASE}/environments/release/deployment-branch-policies`,
+    `PUT ${PROJECT_BASE}/environments/production`,
+    `POST ${PROJECT_BASE}/environments/production/deployment-branch-policies`,
+    `gh secret set RELEASE_APP_KEY --env release --repo wimdotgg/${PROJECT}`,
+    `gh variable set RELEASE_APP_CLIENT_ID --env release --repo wimdotgg/${PROJECT}`,
+  ],
+  variables: [`POST ${PROJECT_BASE}/actions/variables`],
+  rulesets: Array(4).fill(`POST ${PROJECT_BASE}/rulesets`),
+};
+
+async function runGroups(groups) {
+  const root = await makeShippedRoot(SMALL_LABELS);
+  const expected = groups.flatMap((group) => SECTION_WRITES[group]);
+  return succeeded(await runOp({
+    root, repo: PROJECT, groups, reads: readRoutes(PROJECT, { setupState: 'not_configured' }), writes: okWrites(expected),
+  }));
+}
+
+for (const group of SECTION_GROUPS) {
+  test(`applySections: the ${group} group makes only its own calls`, async () => {
+    const outcome = await runGroups([group]);
+    assert.deepEqual(outcome.events.map((event) => event.line), SECTION_WRITES[group]);
+    assert.match(outcome.logs.at(-1), /^step \d\/\d /);
+  });
+}
+
+test('applySections: groups run in the step order of run, whatever order they are named in', async () => {
+  const outcome = await runGroups(['rulesets', 'labels']);
+  assert.deepEqual(outcome.events.map((event) => event.line), [...SECTION_WRITES.labels, ...SECTION_WRITES.rulesets]);
+  assert.deepEqual(outcome.logs.slice(1), ['step 1/2 labels', 'step 2/2 rulesets']);
+});
+
+test('applySections: every group together makes the calls of run', async () => {
+  const everything = await runGroups(SECTION_GROUPS);
+  const root = await makeShippedRoot(SMALL_LABELS);
+  const expected = SECTION_GROUPS.flatMap((group) => SECTION_WRITES[group]);
+  const viaRun = succeeded(await runOp({
+    root, repo: PROJECT, reads: readRoutes(PROJECT, { setupState: 'not_configured' }), writes: okWrites(expected),
+  }));
+  assert.deepEqual(everything.events.map((event) => event.line), viaRun.events.map((event) => event.line));
+  assert.equal(everything.result.summary, viaRun.result.summary);
+});
+
+test('applySections: unknown or empty groups throw before any call', async () => {
+  const root = await makeRoot();
+  for (const groups of [['labels', 'teams'], []]) {
+    const outcome = await runOp({ root, groups, reads: readRoutes(CONTROL) });
+    assert.ok(outcome.error instanceof SettingsError);
+    assert.equal(outcome.events.length, 0);
+  }
+});
+
+test('applySections: the pass 2 gate guards only a rulesets run', async () => {
+  const root = await makeRoot({ rulesets: [mainRuleset([{ type: 'deletion' }])] });
+  const base = repoPath(CONTROL);
+  const reads = {
+    ...readRoutes(CONTROL, { liveRulesets: [{ id: 5, name: 'main', target: 'branch', source_type: 'Repository' }] }),
+    [`GET ${base}/rulesets/5`]: { status: 403, data: { message: 'Forbidden' } },
+  };
+  assert.ok((await runOp({ root, reads, groups: ['rulesets'] })).error instanceof SettingsError);
+  succeeded(await runOp({ root, reads, groups: ['labels'] }));
+});
+
+test('applySections: a settings run needs the release values, a labels run does not', async () => {
+  const root = await makeRoot();
+  const reads = readRoutes(CONTROL);
+  assert.ok((await runOp({ root, reads, env: {}, groups: ['settings'] })).error instanceof SettingsError);
+  succeeded(await runOp({ root, reads, env: {}, groups: ['labels'] }));
 });
