@@ -14,7 +14,7 @@ const agentPull = (number, session, overrides = {}) => ({
 const dependabotPull = (number, title, overrides = {}) => ({
   number, title, draft: false, user: { login: 'dependabot[bot]' }, body: '', head: { sha: `sha${number}` }, auto_merge: null, ...overrides,
 });
-const review = (body, overrides = {}) => ({ state: 'COMMENTED', user: { login: 'agent-bot[bot]' }, body, ...overrides });
+const review = (body, overrides = {}) => ({ state: 'COMMENTED', user: { login: 'agent-bot[bot]' }, commit_id: 'sha7', body, ...overrides });
 const reviewsRoute = (number, reviews) => ({ [`GET ${REPO}/pulls/${number}/reviews?per_page=100`]: found(reviews) });
 const checksRoute = (number, runs) => ({ [`GET ${REPO}/commits/sha${number}/check-runs?per_page=100`]: found({ check_runs: runs }) });
 const passing = { id: 1, name: 'Check', status: 'completed', conclusion: 'success' };
@@ -41,12 +41,24 @@ test('AC1: a ready PR reviewed by another session is not listed', async () => {
 test('AC1: a review without the closing Reviewer line, from another login, pending or dismissed does not count', async () => {
   const reviews = [
     review('Reviewer: c/d · session s2 and more words'),
-    review('Reviewer: c/d · session s2\nthen trailing prose'),
+    review('intro\nReviewer: c/d · session s2\ntrailing prose'),
     review('Reviewer: c/d · session s2', { user: { login: 'intruder' } }),
     review('Reviewer: c/d · session s2', { state: 'PENDING' }),
     review('Reviewer: c/d · session s2', { state: 'DISMISSED' }),
   ];
   const { review: listed } = await run([agentPull(7, 's1')], reviewsRoute(7, reviews));
+  assert.deepEqual(listed.map((entry) => entry.number), [7]);
+});
+
+test('AC1: the Reviewer line on the first line counts, as in the live reviews on PRs #124 and #129', async () => {
+  const live = review('Reviewer: fable/claude-code · session r124-20261121\n\nReviewed df0f080. Suite 1021 pass.');
+  const { review: listed } = await run([agentPull(7, 's1')], reviewsRoute(7, [live]));
+  assert.deepEqual(listed, []);
+});
+
+test('AC1: a push after the review puts the PR back in the queue', async () => {
+  const stale = review('Reviewer: c/d · session s2', { commit_id: 'sha-before-push' });
+  const { review: listed } = await run([agentPull(7, 's1')], reviewsRoute(7, [stale]));
   assert.deepEqual(listed.map((entry) => entry.number), [7]);
 });
 
@@ -63,7 +75,7 @@ test('AC2: draft PRs are in neither list', async () => {
 });
 
 test('AC3: Dependabot minor and patch PRs with green checks are listed apart from the review list', async () => {
-  const pulls = [dependabotPull(9, 'build(deps): bump x from 1.2.3 to 1.3.0'), dependabotPull(10, 'build(deps): bump the npm group with 3 updates')];
+  const pulls = [dependabotPull(9, 'build(deps): bump x from 1.2.3 to 1.3.0'), dependabotPull(10, 'build(deps): bump the minor-and-patch group with 3 updates')];
   const routes = { ...checksRoute(9, [passing]), ...checksRoute(10, [passing]) };
   const result = await run(pulls, routes);
   assert.deepEqual(result.review, []);
@@ -101,6 +113,9 @@ test('isMinorOrPatchBump reads version bumps and group titles', () => {
   assert.equal(isMinorOrPatchBump('bump actions/checkout from v4.1.0 to v4.2.2'), true);
   assert.equal(isMinorOrPatchBump('bump actions/checkout from 3 to 4'), false);
   assert.equal(isMinorOrPatchBump('bump the minor-and-patch group across 1 directory with 2 updates'), true);
+  assert.equal(isMinorOrPatchBump('bump the major group with 2 updates'), false);
+  assert.equal(isMinorOrPatchBump('bump actions/checkout from 3d3c42e to 3fa1b0c'), false);
+  assert.equal(isMinorOrPatchBump('bump actions/checkout from 3d3c42e1f0a9 to 3fa1b0c7d2e4'), false);
   assert.equal(isMinorOrPatchBump('update something'), false);
 });
 

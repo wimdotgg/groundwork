@@ -14,18 +14,25 @@ const DEPENDABOT_LOGIN = 'dependabot[bot]';
 const PASSING_CONCLUSIONS = ['success', 'skipped', 'neutral'];
 const IGNORED_REVIEW_STATES = ['PENDING', 'DISMISSED'];
 const REVIEWER_LINE = /^Reviewer: \S+ · session ([A-Za-z0-9._-]+)$/;
-const VERSION_BUMP = /\bfrom v?(\d+)\S* to v?(\d+)/i;
-const GROUPED_BUMP = /\bthe .+ group\b/i;
+// A version is digits with an optional dotted tail, so a SHA digest ("3d3c42e") is not one.
+const VERSION_BUMP = /\bfrom v?(\d+)(?:\.[\w.+-]*)?\s+to v?(\d+)(?:\.[\w.+-]*)?(?:\s|$)/i;
+// The group in `.github/dependabot.yml` that holds minor and patch updates only.
+const MINOR_AND_PATCH_GROUP = /\bthe minor-and-patch group\b/i;
 
-function lastLine(text) {
-  return String(text ?? '').replace(/\r\n?/g, '\n').trimEnd().split('\n').at(-1).trim();
+function edgeLines(text) {
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n').map((line) => line.trim()).filter(Boolean);
+  return [lines.at(0), lines.at(-1)];
 }
 
-/** The session named by a review's closing `Reviewer:` line, only when the agent account wrote the review. */
-function reviewerSession(review, config) {
-  if (IGNORED_REVIEW_STATES.includes(review.state)) return null;
+/**
+ * The session named by a review's `Reviewer:` line, first or last non-empty line. Only a review of the PR's
+ * current head by the agent account counts, so a later push puts the PR back in the queue.
+ */
+function reviewerSession(review, { config, headSha }) {
+  if (IGNORED_REVIEW_STATES.includes(review.state) || review.commit_id !== headSha) return null;
   if (!sameLogin(review.user?.login, config.accounts.agent)) return null;
-  return REVIEWER_LINE.exec(lastLine(review.body))?.[1] ?? null;
+  const line = edgeLines(review.body).find((candidate) => REVIEWER_LINE.test(candidate));
+  return line ? REVIEWER_LINE.exec(line)[1] : null;
 }
 
 /**
@@ -36,7 +43,7 @@ function reviewerSession(review, config) {
 export function isMinorOrPatchBump(title) {
   const bump = VERSION_BUMP.exec(title);
   if (bump) return bump[1] === bump[2];
-  return GROUPED_BUMP.test(title);
+  return MINOR_AND_PATCH_GROUP.test(title);
 }
 
 function latestPerName(runs) {
@@ -53,11 +60,11 @@ async function checksAreGreen(client, repoRef, sha) {
   return latest.length > 0 && latest.every((run) => run.status === 'completed' && PASSING_CONCLUSIONS.includes(run.conclusion));
 }
 
-async function awaitsReview(client, repoRef, pull, config) {
+async function awaitsReview(client, repoRef, { pull, config }) {
   const session = parseFooter(pull.body)?.session ?? null;
   const reviews = await client.paginate(apiPath(`${REPO_PATH}/pulls/{number}/reviews`, { ...repoRef, number: pull.number }));
   const reviewedElsewhere = reviews.some((review) => {
-    const reviewer = reviewerSession(review, config);
+    const reviewer = reviewerSession(review, { config, headSha: pull.head.sha });
     return reviewer !== null && reviewer !== session;
   });
   return reviewedElsewhere ? null : { number: pull.number, title: pull.title, session };
@@ -79,13 +86,18 @@ async function readyDependabotPull(client, repoRef, pull) {
  */
 export async function reviewQueue(client, repoRef, { config }) {
   const pulls = await client.paginate(apiPath(`${REPO_PATH}/pulls`, repoRef), { query: { state: 'open' } });
-  const ready = pulls.filter((pull) => !pull.draft);
-  const isDependabot = (pull) => sameLogin(pull.user?.login, DEPENDABOT_LOGIN);
-  const [review, dependabot] = await Promise.all([
-    Promise.all(ready.filter((pull) => !isDependabot(pull)).map((pull) => awaitsReview(client, repoRef, pull, config))),
-    Promise.all(ready.filter(isDependabot).map((pull) => readyDependabotPull(client, repoRef, pull))),
-  ]);
-  return { review: review.filter(Boolean), dependabot: dependabot.filter(Boolean) };
+  const queue = { review: [], dependabot: [] };
+  // One request at a time: concurrent calls per PR are what trips GitHub's secondary rate limits.
+  for (const pull of pulls.filter((candidate) => !candidate.draft)) {
+    if (sameLogin(pull.user?.login, DEPENDABOT_LOGIN)) {
+      const entry = await readyDependabotPull(client, repoRef, pull);
+      if (entry) queue.dependabot.push(entry);
+      continue;
+    }
+    const entry = await awaitsReview(client, repoRef, { pull, config });
+    if (entry) queue.review.push(entry);
+  }
+  return queue;
 }
 
 /**
