@@ -59,7 +59,7 @@ Common fields:
 For each App, then:
 
 1. Generate a private key (App settings, Private keys). The browser downloads a `.pem`; keep it for step 5.
-2. Note the client ID from the App settings page.
+2. Note the App ID and the client ID from the App settings page. The release App variable holds either (10.1).
 3. Install it: App settings, Install App, choose `wimdotgg`, "All repositories". New project repos are then covered with no extra step.
 
 Verify: https://github.com/organizations/wimdotgg/settings/installations lists both Apps with "All repositories".
