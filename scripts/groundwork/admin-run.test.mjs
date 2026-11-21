@@ -1123,6 +1123,8 @@ test('plan: a deferred op lists every mintable grant', async () => {
   assert.equal(result.exitCode, 0, result.reason);
   assert.match(result.summary, /create call on `groundwork`/);
   assert.match(result.summary, /control repository `groundwork` read/);
+  assert.equal(result.summary.match(/Token grant,/g).length, 3, 'target, create on the control repository, control read');
+  assert.doesNotMatch(result.summary, /installation-wide|\ball\b/i);
   const { PERMISSIONS, CREATE_PERMISSIONS, CONTROL_READ_PERMISSIONS } = BOOTSTRAP;
   for (const [name, level] of [PERMISSIONS, CREATE_PERMISSIONS, CONTROL_READ_PERMISSIONS].flatMap(Object.entries)) {
     assert.ok(result.summary.includes(`| ${name} | ${level} |`), name);

@@ -180,7 +180,7 @@ function describeScope(module, targetRepo) {
     : `restricted to \`${targetRepo}\``;
 }
 
-/** A deferred op lists every grant `withToken` can mint, the create fallback included, so the owner approves all of them. */
+/** A deferred op lists every grant `withToken` can mint, the create grant included, so the owner approves all of them. */
 function renderRequestedPermissions(module, { controlRepo, targetRepo }) {
   if (module.TOKEN_SCOPE !== SCOPE_DEFERRED) return ['Requested token permissions:', '', ...renderPermissions(module.PERMISSIONS)];
   const grants = [
