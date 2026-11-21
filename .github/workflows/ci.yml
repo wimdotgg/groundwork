@@ -16,10 +16,10 @@ concurrency:
 
 jobs:
   verify:
-    uses: ./.github/workflows/reusable-verify.yml # zizmor: ignore[self-repository] bootstrap rewrites to <org>/groundwork@vX.Y.Z
+    uses: ./.github/workflows/reusable-verify.yml # zizmor: ignore[self-repository] bootstrap rewrites to <org>/groundwork@<tag commit sha> # vX.Y.Z
 
   security:
-    uses: ./.github/workflows/reusable-security.yml # zizmor: ignore[self-repository] bootstrap rewrites to <org>/groundwork@vX.Y.Z
+    uses: ./.github/workflows/reusable-security.yml # zizmor: ignore[self-repository] bootstrap rewrites to <org>/groundwork@<tag commit sha> # vX.Y.Z
 
   # Validators run from the base commit so a PR cannot change the rules it is judged by.
   test-integrity:

@@ -67,13 +67,14 @@ export async function resolveTagCommit({ client, org, controlRepo, tag }) {
 }
 
 /**
- * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string, tag: string }} options
+ * Reads the tree by the tag's commit SHA, the same SHA the workflow refs are pinned to.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string, commitSha: string }} options
  * @returns {Promise<Array<{ path: string, mode: string, sha: string }>>} blobs only
  */
-export async function readReleaseTree({ client, org, controlRepo, tag }) {
-  const path = repoPath(org, controlRepo, `/git/trees/${encodeURIComponent(tag)}`);
+export async function readReleaseTree({ client, org, controlRepo, commitSha }) {
+  const path = repoPath(org, controlRepo, `/git/trees/${encodeURIComponent(commitSha)}`);
   const { data } = await client.request('GET', path, { query: { recursive: 1 } });
-  if (data?.truncated) throw new GitHubError(`release tree of ${org}/${controlRepo} at ${tag} is truncated`);
+  if (data?.truncated) throw new GitHubError(`release tree of ${org}/${controlRepo} at ${commitSha} is truncated`);
   return (data?.tree ?? [])
     .filter((entry) => entry.type === 'blob')
     .map(({ path: entryPath, mode, sha }) => ({ path: entryPath, mode, sha }));

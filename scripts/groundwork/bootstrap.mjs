@@ -81,7 +81,7 @@ async function readSource({ client, org, controlRepo, repo, description, adminBo
     ? await readKitVersion({ client, org, repo })
     : await latestReleaseTag({ client, org, controlRepo });
   const tagSha = await resolveTagCommit({ client, org, controlRepo, tag });
-  const entries = await readReleaseTree({ client, org, controlRepo, tag });
+  const entries = await readReleaseTree({ client, org, controlRepo, commitSha: tagSha });
   const contents = await readBlobTexts({ client, org, controlRepo, entries, paths: contentPaths(entries) });
   const treeEntries = buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag, tagSha });
   const templates = parseSetupTemplates(setupTemplateFiles(contents), { org, repo, description });
