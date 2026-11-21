@@ -775,6 +775,27 @@ test('apply: ops get an env without ADMIN_APP_KEY, mint keeps the original', asy
   assert.equal(env.ADMIN_APP_KEY, 'PRIVATE-KEY-MATERIAL', 'the caller env is not mutated');
 });
 
+test('apply: op code reads no ADMIN_APP_KEY from process.env while minting still works', async (context) => {
+  const previous = process.env.ADMIN_APP_KEY;
+  process.env.ADMIN_APP_KEY = 'PRIVATE-KEY-MATERIAL';
+  context.after(() => {
+    if (previous === undefined) delete process.env.ADMIN_APP_KEY;
+    else process.env.ADMIN_APP_KEY = previous;
+  });
+  let seenInProcess = 'not run';
+  const registry = stubRegistry({
+    check: async () => {
+      seenInProcess = process.env.ADMIN_APP_KEY;
+      return { ok: true, summary: 'ok' };
+    },
+  });
+  const { overrides, mints } = harness({ registry, routes: { ...settingsRoutes(HEAD), ...revokeRoute } });
+  const result = await apply(dispatchEnv(), overrides);
+  assert.equal(result.exitCode, 0);
+  assert.equal(seenInProcess, undefined);
+  assert.equal(mints[0].env.ADMIN_APP_KEY, 'PRIVATE-KEY-MATERIAL');
+});
+
 test('apply: the token is revoked even when building the op client throws', async () => {
   const { overrides, events } = harness({ routes: { ...settingsRoutes(HEAD), ...revokeRoute } });
   const createClient = overrides.createClient;
