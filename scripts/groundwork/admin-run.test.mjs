@@ -888,6 +888,30 @@ test('withToken: a callback error is rethrown after the revoke', async () => {
   assert.deepEqual(nonStdout(events), ['mint', 'revoke']);
 });
 
+test('withToken: a failed mint runs no callback and revokes nothing', async () => {
+  const outcomes = [];
+  const { overrides, events } = deferredHarness(async (ctx) => {
+    await ctx.withToken(controlRead, async () => outcomes.push('callback')).catch((error) => outcomes.push(error.message));
+    return stopHere;
+  }, { mintFails: 'mint refused' });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.deepEqual(outcomes, ['mint refused']);
+  assert.ok(!events.includes('revoke'));
+});
+
+test('plan and apply: bootstrap ops refuse the control repository as target before any mint', async () => {
+  for (const op of ['bootstrap', 'bootstrap-pass2']) {
+    const overrides = { ...BOOTSTRAP_ENV, INPUT_OP: op, INPUT_ARGS: op === 'bootstrap' ? BOOTSTRAP_ENV.INPUT_ARGS : '{}', INPUT_TARGET_REPO: 'Groundwork' };
+    const planned = await plan(dispatchEnv(overrides), { ...planOverrides({}), registry: REGISTRY });
+    assert.equal(planned.exitCode, 1, op);
+    const { overrides: deps, mints, jwts } = deferredHarness(async () => assert.fail('op must not run'));
+    const applied = await apply(dispatchEnv(overrides), { ...deps, registry: REGISTRY });
+    assert.equal(applied.exitCode, 1, op);
+    assert.match(applied.reason, /control repository/);
+    assert.deepEqual([mints.length, jwts.length], [0, 0]);
+  }
+});
+
 test('withToken: a failed revoke fails the run even when the op swallows the outcome', async () => {
   const routes = { ...settingsRoutes(HEAD), 'DELETE /installation/token': { status: 500, data: { message: 'down' } } };
   const { overrides } = deferredHarness(async (ctx) => {

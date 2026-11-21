@@ -59,6 +59,13 @@ function safeText(text) {
     .slice(0, TEXT_MAX_LENGTH);
 }
 
+const BOOTSTRAP_OPS = new Set(['bootstrap', 'bootstrap-pass2']);
+const CONTROL_TARGET_REASON = 'target_repo must not be the control repository for this op';
+
+/** Bootstrap ops hold a write grant on the target: aimed at `groundwork` it would be write access to the control repo. */
+const targetsControlRepo = (request, controlRepo) => BOOTSTRAP_OPS.has(request.op)
+  && request.targetRepo.toLowerCase() === String(controlRepo).toLowerCase();
+
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
@@ -234,6 +241,7 @@ export async function plan(env, overrides = {}) {
   const { problems, request } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
+  if (targetsControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   let ancestry;
   if (request.op === OP_WITH_REF) {
     const checked = await checkAncestry(deps.createClient({ env }), { org, repo: request.targetRepo, ref: request.ref });
@@ -386,7 +394,7 @@ async function mintScopedToken({ deps, env, org, repositories, permissions, reco
   return minted.token;
 }
 
-/** `ctx.withToken`: one grant at a time, revoked in a `finally`. A failed revoke is collected so it fails the run even if the op swallows errors. */
+/** `ctx.withToken`: one grant at a time, revoked in a `finally`. A failed revoke is collected, so it fails the run even if the op swallows the error. */
 function createWithToken({ deps, env, opEnv, org, record, mask, clean, grants }) {
   const revokeProblems = [];
   let active = false;
@@ -521,6 +529,7 @@ export async function apply(env, overrides = {}) {
   if (!env.ADMIN_APP_CLIENT_ID || !env.ADMIN_APP_KEY) return failure(heading, 'ADMIN_APP_CLIENT_ID and ADMIN_APP_KEY must be set');
 
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
+  if (targetsControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   const calls = [];
   const logs = [];
   const secrets = SECRET_ENV_NAMES.map((name) => env[name]);
