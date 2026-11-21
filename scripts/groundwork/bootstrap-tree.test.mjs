@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { SettingsError } from '../lib/settings.mjs';
 import {
   CONTROL_PATHS,
@@ -9,6 +12,8 @@ import {
   settingsFiles,
 } from './bootstrap-tree.mjs';
 
+const DEPLOY_STUBS_DIR = fileURLToPath(new URL('./stubs/deploy/', import.meta.url));
+const DEPLOY_STUB_NAMES = ['deploy', 'smoke', 'rollback'];
 const TAG = 'v9.9.9';
 const TAG_SHA = 'ab12'.repeat(10);
 const OPTIONS = { org: 'acme', controlRepo: 'groundwork', repo: 'shop', description: 'Shop for $& "quotes" and \\ slashes', tag: TAG, tagSha: TAG_SHA };
@@ -41,6 +46,8 @@ function fixture({ omit = [] } = {}) {
     blob('scripts/groundwork/stubs/README.md', '# __REPO__\n__DESCRIPTION__ by __ORG__\n'),
     blob('scripts/groundwork/stubs/docs/guide.md', 'Guide for __REPO__: __DESCRIPTION__\n'),
     blob('scripts/groundwork/stubs/docs/sub/more.md', 'more\n'),
+    blob('scripts/groundwork/stubs/deploy/deploy', '#!/bin/sh\nexit 1\n', '100755'),
+    blob('scripts/groundwork/stubs/deploy/deploy.cmd', '@echo off\n'),
     blob('admin-ops/op.json', '{}'),
     blob('scripts/verify', 'groundwork own verify', '100755'),
     blob('scripts/verify.cmd', 'groundwork own verify'),
@@ -105,6 +112,29 @@ test('AC3: generated files, stub verify with its mode, README and docs from stub
   assert.equal(find(tree, 'docs/guide.md').content, `Guide for shop: ${OPTIONS.description}\n`);
   assert.equal(find(tree, 'docs/sub/more.md').sha, 'sha-scripts/groundwork/stubs/docs/sub/more.md');
   assert.equal(find(tree, 'docs/spec.md'), undefined);
+});
+
+test('AC2: deploy stubs land in scripts/stubs/deploy/ with their mode; no project deploy, smoke or rollback script', () => {
+  const tree = build();
+  const deploy = find(tree, 'scripts/stubs/deploy/deploy');
+  assert.equal(deploy.mode, '100755');
+  assert.equal(deploy.sha, 'sha-scripts/groundwork/stubs/deploy/deploy');
+  assert.equal(find(tree, 'scripts/stubs/deploy/deploy.cmd').mode, '100644');
+  const projectScripts = ['deploy', 'deploy.cmd', 'smoke', 'smoke.cmd', 'rollback', 'rollback.cmd'].map((name) => `scripts/${name}`);
+  assert.deepEqual(tree.filter(({ path }) => projectScripts.includes(path)), []);
+  assert.deepEqual(tree.filter(({ path }) => path.startsWith('scripts/groundwork/')), []);
+});
+
+test('AC1: each release deploy stub exits 1 with one GROUNDWORK_STUB line, and its shim is CRLF', () => {
+  for (const name of DEPLOY_STUB_NAMES) {
+    const run = spawnSync('sh', [`${DEPLOY_STUBS_DIR}${name}`, 'v1.0.0'], { encoding: 'utf8' });
+    assert.equal(run.status, 1, name);
+    assert.equal(run.stdout, '', name);
+    assert.equal(run.stderr, `GROUNDWORK_STUB: scripts/${name} is the groundwork stub; replace it in the Project setup epic\n`, name);
+    const shim = readFileSync(`${DEPLOY_STUBS_DIR}${name}.cmd`, 'utf8');
+    assert.match(shim, new RegExp(`"%~dp0${name}"`), name);
+    assert.ok(!shim.replace(/\r\n/g, '').match(/[\r\n]/), `${name}.cmd line endings`);
+  }
 });
 
 test('AC4: placeholders replaced literally; __DESCRIPTION__ outside .md throws', () => {

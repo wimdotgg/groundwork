@@ -13,11 +13,11 @@ E4
 
 ## Scope
 
-In: for a project that deploys, set `"deploy": "scripts"` and write `scripts/deploy`, `scripts/smoke` and `scripts/rollback` with their `.cmd` shims; otherwise leave `"deploy": "none"`. Out: entering deploy secrets (owner only, listed by `bootstrap-pass2`).
+In: for a project that deploys, move the stubs from `scripts/stubs/deploy/` to `scripts/`, replace their bodies, and set `"deploy": "scripts"`; otherwise leave `"deploy": "none"` and the stubs where they are. Each stub prints a `GROUNDWORK_STUB` line to stderr and exits 1 until replaced. Contract (spec 8.5): `scripts/deploy <tag>` deploys the release tag `vX.Y.Z` and reads its secrets from `process.env`; `scripts/smoke` takes no arguments, is read-only and idempotent, and runs after deploy and after rollback; `scripts/rollback <previous tag>` redeploys that tag. Exit 0 is success. Out: entering deploy secrets (owner only, listed by `bootstrap-pass2`).
 
 ## Touches
 
-`scripts/deploy`, `scripts/deploy.cmd`, `scripts/smoke`, `scripts/smoke.cmd`, `scripts/rollback`, `scripts/rollback.cmd`, `.github/groundwork/config.json`
+`scripts/stubs/deploy/`, `scripts/deploy`, `scripts/deploy.cmd`, `scripts/smoke`, `scripts/smoke.cmd`, `scripts/rollback`, `scripts/rollback.cmd`, `.github/groundwork/config.json`
 
 ## Acceptance criteria
 
