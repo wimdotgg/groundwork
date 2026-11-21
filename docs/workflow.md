@@ -79,7 +79,7 @@ Everything else merges on green checks through the queue.
 |---|---|---|
 | 0 | Normal work, agent App | none |
 | 1 | Settings as code (`settings.json`, `labels.json`, `rulesets/*.json`) | Approve the PR, then the `admin` run |
-| 2 | One-off ops: bootstrap, new repo, issue types, cleanup | Read the run summary, approve the `admin` run |
+| 2 | One-off ops: `bootstrap`, `bootstrap-pass2`, issue types, cleanup | Read the run summary, approve the `admin` run. The run name carries op, target and args; `check` runs at the end of each bootstrap |
 | 3 | Apps, billing, org ownership, secret values, PAT rotation | You, in the browser |
 
 Detail in [section 12](spec.md).
