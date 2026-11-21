@@ -6,7 +6,7 @@ import {
   readReleaseTree, resolveTagCommit,
 } from './bootstrap-repo.mjs';
 import { buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
-import { openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
+import { findSetupEpic, openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
 
 const SETUP_TEMPLATES_DIR = 'scripts/groundwork/stubs/setup/';
 
@@ -35,6 +35,8 @@ export const CREATE_PERMISSIONS = { administration: 'write' };
 export const CONTROL_READ_PERMISSIONS = { contents: 'read' };
 
 export const DESCRIPTION_MAX_LENGTH = 350;
+
+const ACCEPTED_LABEL = 'accepted';
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 const ALLOWED_KEYS = new Set(['description']);
 
@@ -77,6 +79,7 @@ async function readSource({ client, org, controlRepo, repo, description, adminBo
   if (state === 'foreign') {
     throw new SettingsError(`${org}/${repo} exists and is neither a groundwork project nor a fresh auto_init repository`);
   }
+  if (state === 'ours') await refuseAfterSetupAcceptance({ client, org, repo, adminBot });
   const tag = state === 'ours'
     ? await readKitVersion({ client, org, repo })
     : await latestReleaseTag({ client, org, controlRepo });
@@ -92,6 +95,15 @@ async function readSource({ client, org, controlRepo, repo, description, adminBo
 
 /** @returns {string[]} the `- step: result` lines of an `applySections` summary */
 const stepLines = ({ summary }) => summary.split('\n').filter((line) => line.startsWith('- '));
+
+/** Owner decision on #167 (Q4): once the setup epic is accepted or closed, `apply-settings` is the repair path. */
+async function refuseAfterSetupAcceptance({ client, org, repo, adminBot }) {
+  const epic = await findSetupEpic({ client, org, repo, adminBot });
+  if (epic === undefined) return;
+  const accepted = (epic.labels ?? []).some((label) => (label.name ?? label) === ACCEPTED_LABEL);
+  if (!accepted && epic.state !== 'closed') return;
+  throw new SettingsError(`${org}/${repo} setup epic #${epic.number} is ${accepted ? 'accepted' : 'closed'}: bootstrap will not rerun, use apply-settings to repair settings`);
+}
 
 async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
   const { client, token } = minted;

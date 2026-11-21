@@ -386,3 +386,51 @@ test('a broken setup template fails before the repository or any other write', a
   assert.deepEqual(writesOf(world), []);
   assert.equal(world.grants.length, 1);
 });
+
+const ISSUES_ROUTE = `GET ${TARGET_PATH}/issues?per_page=100&state=all`;
+const setupEpicIssue = (fields) => ({ number: 10, id: 100, state: 'open', labels: [], body: '# Project setup\n\n<!-- groundwork:setup-epic -->', user: { login: ADMIN_BOT }, ...fields });
+
+/** Routes for a run that finds the epic already open: its sub-issue list is read live and only the two tasks are created. */
+const existingEpicRoutes = (fields) => ({
+  [ISSUES_ROUTE]: reply(200, [setupEpicIssue(fields)]),
+  [`GET ${TARGET_PATH}/issues/10/sub_issues?per_page=100`]: reply(200, []),
+  [`POST ${TARGET_PATH}/issues`]: [reply(201, { number: 11, id: 101 }), reply(201, { number: 12, id: 102 })],
+});
+
+async function refusedWorld(fields) {
+  const world = createWorld({ state: 'ours', overrides: { [ISSUES_ROUTE]: reply(200, [setupEpicIssue(fields)]) } });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /apply-settings/.test(error.message));
+  return world;
+}
+
+test('AC1 an ours run refuses on an accepted setup epic before any write and names apply-settings', async () => {
+  const world = await refusedWorld({ labels: [{ name: 'accepted' }] });
+  assert.deepEqual(writesOf(world), []);
+  assert.equal(world.grants.length, 1);
+  assert.equal(world.calls.some((call) => call.method === 'gh'), false);
+});
+
+test('AC2 an ours run refuses on a closed setup epic before any write and names apply-settings', async () => {
+  const world = await refusedWorld({ state: 'closed' });
+  assert.deepEqual(writesOf(world), []);
+  assert.equal(world.grants.length, 1);
+  assert.equal(world.calls.some((call) => call.method === 'gh'), false);
+});
+
+test('AC3 an ours run resumes on an open unaccepted setup epic and on none', async () => {
+  const open = createWorld({ state: 'ours', overrides: existingEpicRoutes({ labels: [{ name: 'size:M' }] }) });
+  assert.equal((await run(open.ctx, open.seams)).ok, true);
+  const none = createWorld({ state: 'ours' });
+  assert.equal((await run(none.ctx, none.seams)).ok, true);
+});
+
+test('a fresh run is not refused by an accepted setup epic', async () => {
+  const world = createWorld({ state: 'fresh', overrides: existingEpicRoutes({ labels: [{ name: 'accepted' }] }) });
+  assert.equal((await run(world.ctx, world.seams)).ok, true);
+});
+
+test('an ours run whose setup-epic marker was planted by another login fails the author check before any write', async () => {
+  const world = createWorld({ state: 'ours', overrides: { [ISSUES_ROUTE]: reply(200, [setupEpicIssue({ user: { login: 'stranger' } })]) } });
+  await assert.rejects(run(world.ctx, world.seams), /was not written by/);
+  assert.deepEqual(writesOf(world), []);
+});

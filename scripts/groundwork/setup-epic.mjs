@@ -132,6 +132,20 @@ async function addMissingLinks(client, { path, field, ids, listExists }) {
   }
 }
 
+async function listIssues(client, issuesPath) {
+  return (await client.paginate(issuesPath, { query: { state: 'all' } })).filter((issue) => issue.pull_request === undefined);
+}
+
+/**
+ * The "Project setup" epic the admin bot opened, if any.
+ * @returns {Promise<object | undefined>} the issue as the API returns it
+ * @throws {SettingsError} a marker on an issue the admin bot did not write
+ */
+export async function findSetupEpic({ client, org, repo, adminBot }) {
+  const issues = await listIssues(client, apiPath('/repos/{org}/{repo}/issues', { org, repo }));
+  return findMarkedIssue(issues, SETUP_EPIC_MARKER, adminBot);
+}
+
 /**
  * Opens the "Project setup" epic and one sub-issue per task, each typed and linked.
  * Issues are found by marker (admin bot only) and left alone; links are read live and only
@@ -143,8 +157,7 @@ async function addMissingLinks(client, { path, field, ids, listExists }) {
  */
 export async function openSetupEpic({ client, org, repo, templates, adminBot, sleep = defaultSleep }) {
   const issuesPath = apiPath('/repos/{org}/{repo}/issues', { org, repo });
-  const existing = (await client.paginate(issuesPath, { query: { state: 'all' } }))
-    .filter((issue) => issue.pull_request === undefined);
+  const existing = await listIssues(client, issuesPath);
   const createIssue = pacedIssueCreator({ client, issuesPath, sleep });
   const created = [];
 
