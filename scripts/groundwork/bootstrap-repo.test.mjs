@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GitHubError, createFixtureClient } from '../lib/github.mjs';
+import { SettingsError } from '../lib/settings.mjs';
 import {
+  readBlobContents,
   commitBootstrapTree,
   createRepo,
   inspectRepo,
@@ -17,6 +19,7 @@ const REPO = 'shop';
 const ADMIN_BOT = 'acme-admin[bot]';
 const REPO_PATH = `/repos/${ORG}/${REPO}`;
 const KIT_PATH = `${REPO_PATH}/contents/.github/groundwork/kit-version.txt`;
+const KIT_ON_MAIN = `GET ${KIT_PATH}?ref=main`;
 const TAGS_KEY = `GET /repos/${ORG}/${CONTROL}/git/matching-refs/tags/v?per_page=100`;
 
 function reply(status, data = {}) {
@@ -126,6 +129,7 @@ const FOREIGN_CASES = {
   'a commit with no linked author': { commits: reply(200, [{ sha: 'c1', author: null }]) },
   'a root file besides README.md': { root: reply(200, [...README_ONLY, { name: 'src', type: 'dir' }]) },
   'an empty repository (409)': { commits: reply(409, { message: 'Git Repository is empty.' }), kit: reply(404) },
+  'an empty repository with a 409 kit read': { commits: reply(409, { message: 'Git Repository is empty.' }), kit: reply(409) },
   'a non-main default branch': { repository: reply(200, { default_branch: 'trunk' }) },
 };
 
@@ -136,9 +140,9 @@ for (const [name, overrides] of Object.entries(FOREIGN_CASES)) {
 }
 
 test('AC2 readKitVersion returns the pinned tag and rejects other content', async () => {
-  const good = recordingClient({ [`GET ${KIT_PATH}`]: reply(200, { content: base64('v0.4.0\n') }) });
+  const good = recordingClient({ [KIT_ON_MAIN]: reply(200, { content: base64('v0.4.0\n') }) });
   assert.equal(await readKitVersion({ client: good.client, org: ORG, repo: REPO }), 'v0.4.0');
-  const bad = recordingClient({ [`GET ${KIT_PATH}`]: reply(200, { content: base64('latest\n') }) });
+  const bad = recordingClient({ [KIT_ON_MAIN]: reply(200, { content: base64('latest\n') }) });
   await assert.rejects(readKitVersion({ client: bad.client, org: ORG, repo: REPO }), /vX\.Y\.Z/);
 });
 
@@ -153,6 +157,7 @@ function stubWithToken(answers) {
     const client = {
       request: async (method, path, options) => {
         log.push(`${method} ${path} ${JSON.stringify(options.body)}`);
+        if (answer instanceof Error) throw answer;
         if (answer !== 'ok') throw new GitHubError(`${method} ${path}: ${answer}`, { status: answer });
         return reply(201);
       },
@@ -203,6 +208,19 @@ test('AC3 createRepo throws the second refusal after one retry', async () => {
   assert.equal(log.filter((line) => line.startsWith('mint')).length, 2);
 });
 
+const UNRETRIED_FAILURES = {
+  'a 0 status': new GitHubError('fetch failed', { status: 0 }),
+  'a plain Error': new Error('boom'),
+};
+
+for (const [name, failure] of Object.entries(UNRETRIED_FAILURES)) {
+  test(`AC3 createRepo throws ${name} after one mint`, async () => {
+    const { withToken, log } = stubWithToken([failure]);
+    await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error === failure);
+    assert.equal(log.filter((line) => line.startsWith('mint')).length, 1);
+  });
+}
+
 test('AC3 createRepo throws a 422 without a retry', async () => {
   const { withToken, log } = stubWithToken([422]);
   await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error.status === 422);
@@ -212,28 +230,52 @@ test('AC3 createRepo throws a 422 without a retry', async () => {
 
 const TREE_ENTRIES = [
   { path: 'README.md', mode: '100644', content: '# shop\n' },
-  { path: 'a.txt', mode: '100644', sha: 'blob1' },
+  { path: 'a.txt', mode: '100644', sha: 'ctl1' },
+  { path: 'b.txt', mode: '100755', sha: 'ctl2' },
 ];
+const BLOBS = new Map([['a.txt', 'QQ=='], ['b.txt', 'Qg==']]);
 
 function commitRoutes({ kit = reply(404) } = {}) {
   return {
     [`GET ${REPO_PATH}/git/ref/heads/main`]: reply(200, { object: { sha: 'head1' } }),
-    [`GET ${KIT_PATH}`]: kit,
+    [KIT_ON_MAIN]: kit,
+    [`POST ${REPO_PATH}/git/blobs`]: [reply(201, { sha: 'new1' }), reply(201, { sha: 'new2' })],
     [`POST ${REPO_PATH}/git/trees`]: reply(201, { sha: 'tree1' }),
     [`POST ${REPO_PATH}/git/commits`]: reply(201, { sha: 'commit1' }),
     [`PATCH ${REPO_PATH}/git/refs/heads/main`]: reply(200, {}),
   };
 }
 
-test('AC4 commitBootstrapTree posts the tree without base_tree and a commit with no author or committer', async () => {
+function commitArgs(client, sleep = async () => {}) {
+  return { client, org: ORG, repo: REPO, tag: 'v0.4.0', treeEntries: TREE_ENTRIES, blobs: BLOBS, sleep };
+}
+
+test('readBlobContents reads control blobs for sha entries only, as base64 without line breaks', async () => {
+  const { client, calls } = recordingClient({
+    [`GET /repos/${ORG}/${CONTROL}/git/blobs/ctl1`]: reply(200, { content: 'QQ\n==\n', encoding: 'base64' }),
+    [`GET /repos/${ORG}/${CONTROL}/git/blobs/ctl2`]: reply(200, { content: 'Qg==', encoding: 'base64' }),
+  });
+  const blobs = await readBlobContents({ client, org: ORG, controlRepo: CONTROL, entries: TREE_ENTRIES });
+  assert.deepEqual([...blobs], [...BLOBS]);
+  assert.equal(calls.length, 2);
+});
+
+test('AC4 commitBootstrapTree creates each kept blob in the target, paced by sleep, and uses the new sha', async () => {
   const { client, bodies } = recordingClient(commitRoutes());
-  const result = await commitBootstrapTree({ client, org: ORG, repo: REPO, tag: 'v0.4.0', treeEntries: TREE_ENTRIES });
+  const sleeps = [];
+  const result = await commitBootstrapTree(commitArgs(client, async (ms) => { sleeps.push(ms); }));
   assert.deepEqual(result, { sha: 'commit1', created: true });
+  assert.deepEqual(sleeps, [1000]);
+  assert.deepEqual(
+    bodies.filter((call) => call.path === `${REPO_PATH}/git/blobs`).map((call) => call.body),
+    [{ content: 'QQ==', encoding: 'base64' }, { content: 'Qg==', encoding: 'base64' }],
+  );
   const bodyOf = (method, suffix) => bodies.find((call) => call.method === method && call.path === `${REPO_PATH}${suffix}`).body;
   assert.deepEqual(bodyOf('POST', '/git/trees'), {
     tree: [
       { path: 'README.md', mode: '100644', content: '# shop\n', type: 'blob' },
-      { path: 'a.txt', mode: '100644', sha: 'blob1', type: 'blob' },
+      { path: 'a.txt', mode: '100644', sha: 'new1', type: 'blob' },
+      { path: 'b.txt', mode: '100755', sha: 'new2', type: 'blob' },
     ],
   });
   assert.deepEqual(bodyOf('POST', '/git/commits'), {
@@ -247,7 +289,14 @@ test('AC4 commitBootstrapTree posts the tree without base_tree and a commit with
 test('AC4 commitBootstrapTree writes nothing when kit-version.txt is already on main', async () => {
   const kit = reply(200, { content: base64('v0.4.0\n') });
   const { client, calls } = recordingClient(commitRoutes({ kit }));
-  const result = await commitBootstrapTree({ client, org: ORG, repo: REPO, tag: 'v0.4.0', treeEntries: TREE_ENTRIES });
+  const result = await commitBootstrapTree(commitArgs(client));
   assert.deepEqual(result, { sha: 'head1', created: false });
   assert.deepEqual(calls.filter(({ method }) => method !== 'GET'), []);
+});
+
+test('commitBootstrapTree throws SettingsError for a sha entry without base64 and creates no tree', async () => {
+  const { client, calls } = recordingClient(commitRoutes());
+  const args = { ...commitArgs(client), blobs: new Map([['a.txt', 'QQ==']]) };
+  await assert.rejects(commitBootstrapTree(args), SettingsError);
+  assert.equal(calls.some(({ path }) => path.endsWith('/git/trees')), false);
 });

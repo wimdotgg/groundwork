@@ -1,4 +1,6 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { GitHubError, apiPath } from '../lib/github.mjs';
+import { SettingsError } from '../lib/settings.mjs';
 import { sameLogin } from '../lib/trust.mjs';
 
 // Same value as bootstrap-tree.mjs (#144); the integration task (#149) may share one export.
@@ -8,6 +10,8 @@ const TAG_PATTERN = /^v(\d+)\.(\d+)\.(\d+)$/;
 const TAG_REF_PREFIX = 'refs/tags/';
 const RETRY_STATUSES = new Set([403, 404]);
 const FRESH_ROOT_FILE = 'README.md';
+// GitHub's secondary limit on content creation: 60 blob POSTs per minute.
+const BLOB_POST_SPACING_MS = 1000;
 
 function repoPath(org, repo, suffix) {
   return `${apiPath('/repos/{org}/{repo}', { org, repo })}${suffix}`;
@@ -75,12 +79,15 @@ export async function readBlobTexts({ client, org, controlRepo, entries, paths }
   return texts;
 }
 
-async function hasKitVersion(client, org, repo) {
-  const { status } = await client.request('GET', contentsPath(org, repo, KIT_VERSION_PATH), { okStatuses: [404, 409] });
+async function hasKitVersion({ client, org, repo, ref }) {
+  const { status } = await client.request('GET', contentsPath(org, repo, KIT_VERSION_PATH), {
+    query: { ref },
+    okStatuses: [404, 409],
+  });
   return status === 200;
 }
 
-async function isFreshAutoInit(client, org, repo, adminBot) {
+async function isFreshAutoInit({ client, org, repo, adminBot }) {
   const { status, data: commits } = await client.request('GET', repoPath(org, repo, '/commits'), {
     query: { per_page: 2 },
     okStatuses: [409],
@@ -98,9 +105,9 @@ async function isFreshAutoInit(client, org, repo, adminBot) {
 export async function inspectRepo({ client, org, repo, adminBot }) {
   const { status, data: repository } = await client.request('GET', repoPath(org, repo, ''), { okStatuses: [404] });
   if (status === 404) return 'absent';
-  if (await hasKitVersion(client, org, repo)) return 'ours';
+  if (await hasKitVersion({ client, org, repo })) return 'ours';
   if (repository.default_branch !== DEFAULT_BRANCH) return 'foreign';
-  return (await isFreshAutoInit(client, org, repo, adminBot)) ? 'fresh' : 'foreign';
+  return (await isFreshAutoInit({ client, org, repo, adminBot })) ? 'fresh' : 'foreign';
 }
 
 /**
@@ -108,7 +115,7 @@ export async function inspectRepo({ client, org, repo, adminBot }) {
  * @returns {Promise<string>} the vX.Y.Z tag pinned in the repository's kit-version file
  */
 export async function readKitVersion({ client, org, repo }) {
-  const { data } = await client.request('GET', contentsPath(org, repo, KIT_VERSION_PATH));
+  const { data } = await client.request('GET', contentsPath(org, repo, KIT_VERSION_PATH), { query: { ref: DEFAULT_BRANCH } });
   const tag = decodeBase64(data?.content).trim();
   if (!TAG_PATTERN.test(tag)) throw new GitHubError(`${org}/${repo} ${KIT_VERSION_PATH} does not hold a vX.Y.Z tag`);
   return tag;
@@ -143,16 +150,54 @@ export async function createRepo({ withToken, org, controlRepo, repo, descriptio
   if (installationWide !== null) throw installationWide;
 }
 
+
+/**
+ * Raw blobs for the tree entries that keep a control-repository `sha`; the target holds no such objects.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string,
+ *   entries: Array<{ path: string, sha?: string, content?: string }> }} options
+ * @returns {Promise<Map<string, string>>} base64 content by path
+ */
+export async function readBlobContents({ client, org, controlRepo, entries }) {
+  const blobs = new Map();
+  for (const { path, sha, content } of entries) {
+    if (sha === undefined || content !== undefined) continue;
+    const { data } = await client.request('GET', repoPath(org, controlRepo, `/git/blobs/${encodeURIComponent(sha)}`));
+    if (typeof data?.content === 'string') blobs.set(path, data.content.replace(/\s+/g, ''));
+  }
+  return blobs;
+}
+
+async function createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep }) {
+  const resolved = [];
+  let posted = 0;
+  for (const entry of treeEntries) {
+    if (entry.sha === undefined) {
+      resolved.push({ ...entry, type: 'blob' });
+      continue;
+    }
+    const content = blobs.get(entry.path);
+    if (content === undefined) throw new SettingsError(`no base64 content for ${entry.path}`);
+    if (posted > 0) await sleep(BLOB_POST_SPACING_MS);
+    const body = { content, encoding: 'base64' };
+    const { data } = await client.request('POST', repoPath(org, repo, '/git/blobs'), { body });
+    posted += 1;
+    resolved.push({ path: entry.path, mode: entry.mode, sha: data.sha, type: 'blob' });
+  }
+  return resolved;
+}
+
 /**
  * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string, tag: string,
- *   treeEntries: Array<{ path: string, mode: string, sha?: string, content?: string }> }} options
+ *   treeEntries: Array<{ path: string, mode: string, sha?: string, content?: string }>,
+ *   blobs: Map<string, string>, sleep?: (ms: number) => Promise<unknown> }} options
+ *   `blobs` is `readBlobContents` output; `sleep` spaces the blob POSTs.
  * @returns {Promise<{ sha: string, created: boolean }>} `created` is false when the kit-version file is already on main
  */
-export async function commitBootstrapTree({ client, org, repo, tag, treeEntries }) {
+export async function commitBootstrapTree({ client, org, repo, tag, treeEntries, blobs, sleep = delay }) {
   const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${DEFAULT_BRANCH}`));
   const head = ref.object.sha;
-  if (await hasKitVersion(client, org, repo)) return { sha: head, created: false };
-  const tree = treeEntries.map((entry) => ({ ...entry, type: 'blob' }));
+  if (await hasKitVersion({ client, org, repo, ref: DEFAULT_BRANCH })) return { sha: head, created: false };
+  const tree = await createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep });
   const { data: createdTree } = await client.request('POST', repoPath(org, repo, '/git/trees'), { body: { tree } });
   const message = `chore: bootstrap from groundwork ${tag}`;
   const { data: commit } = await client.request('POST', repoPath(org, repo, '/git/commits'), {
