@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFixtureClient } from '../lib/github.mjs';
+import { GitHubError, createFixtureClient } from '../lib/github.mjs';
 import { SettingsError } from '../lib/settings.mjs';
 import { SETUP_EPIC_MARKER, openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
 
@@ -103,21 +103,69 @@ test('parseSetupTemplates accepts CRLF text', () => {
   assert.equal(tasks[0].size, 'M');
 });
 
+
+test('parseSetupTemplates rejects two files with the same task number', () => {
+  assertSettingsError({ '01-other.md': TASK_ONE }, /task 01.*more than one file/);
+});
+
+test('parseSetupTemplates rejects a task that blocks itself', () => {
+  assertSettingsError({ '02-ecosystems.md': '# T\n<!-- size: S -->\n<!-- blocked-by: 02 -->\n' }, /task 02.*the task itself/);
+});
+
+const ADMIN_BOT = 'acme-admin[bot]';
+const CREATED = { status: 201, data: {} };
+const ISSUES_POST = 'POST /repos/acme/widgets/issues';
+const SUB_ISSUES = (epic) => `/repos/acme/widgets/issues/${epic}/sub_issues`;
+const BLOCKED_BY = (task) => `/repos/acme/widgets/issues/${task}/dependencies/blocked_by`;
+const issue = (number, id, body, login = ADMIN_BOT) => ({ number, id, body, user: { login } });
+const listing = (...items) => ({ status: 200, data: items });
+const creation = (number, id) => ({ status: 201, data: { number, id } });
+
+async function open(client, templates, sleeps = []) {
+  const sleep = async (ms) => { sleeps.push(ms); };
+  return openSetupEpic({ client, org: 'acme', repo: 'widgets', templates, adminBot: ADMIN_BOT, sleep });
+}
+
+// Epic 10 (id 100) and tasks 01 to 03 at numbers 11 to 13 (ids 101 to 103).
+function existingIssues(templates, { skip = [] } = {}) {
+  const all = [
+    issue(10, 100, templates.epic.body),
+    ...templates.tasks.map((task, index) => issue(11 + index, 101 + index, task.body)),
+  ];
+  return all.filter((item) => !skip.includes(item.number));
+}
+
+const postPaths = (calls) => writes(calls).map((call) => call.path);
+
+const FRESH_ROUTES = {
+  [ISSUES_KEY]: listing(),
+  [ISSUES_POST]: [creation(10, 100), creation(11, 101), creation(12, 102), creation(13, 103)],
+  [`POST ${SUB_ISSUES(10)}`]: [CREATED, CREATED, CREATED],
+  [`POST ${BLOCKED_BY(12)}`]: CREATED,
+  [`POST ${BLOCKED_BY(13)}`]: [CREATED, CREATED],
+};
+
+const ALL_LINKS_LIVE = {
+  [`GET ${SUB_ISSUES(10)}?per_page=100`]: listing({ id: 101 }, { id: 102 }, { id: 103 }),
+  [`GET ${BLOCKED_BY(12)}?per_page=100`]: listing({ id: 101 }),
+  [`GET ${BLOCKED_BY(13)}?per_page=100`]: listing({ id: 101 }, { id: 102 }),
+};
+
+const NO_LINKS_LIVE = {
+  [`GET ${SUB_ISSUES(10)}?per_page=100`]: listing(),
+  [`GET ${BLOCKED_BY(12)}?per_page=100`]: listing(),
+  [`GET ${BLOCKED_BY(13)}?per_page=100`]: listing(),
+  [`POST ${SUB_ISSUES(10)}`]: [CREATED, CREATED, CREATED],
+  [`POST ${BLOCKED_BY(12)}`]: CREATED,
+  [`POST ${BLOCKED_BY(13)}`]: [CREATED, CREATED],
+};
+
 test('openSetupEpic creates the epic, typed tasks, links and blockers on a fresh repo (AC2, AC4)', async () => {
-  const templates = parse();
   const { client, calls } = recordingClient({
-    [ISSUES_KEY]: { status: 200, data: [{ number: 1, id: 11, body: 'unrelated' }, { number: 2, id: 12, pull_request: {}, body: SETUP_EPIC_MARKER }] },
-    'POST /repos/acme/widgets/issues': [
-      { status: 201, data: { number: 10, id: 100 } },
-      { status: 201, data: { number: 11, id: 101 } },
-      { status: 201, data: { number: 12, id: 102 } },
-      { status: 201, data: { number: 13, id: 103 } },
-    ],
-    'POST /repos/acme/widgets/issues/10/sub_issues': [{ status: 201, data: {} }, { status: 201, data: {} }, { status: 201, data: {} }],
-    'POST /repos/acme/widgets/issues/12/dependencies/blocked_by': { status: 201, data: {} },
-    'POST /repos/acme/widgets/issues/13/dependencies/blocked_by': [{ status: 201, data: {} }, { status: 201, data: {} }],
+    ...FRESH_ROUTES,
+    [ISSUES_KEY]: listing(issue(1, 11, 'unrelated', 'someone'), { ...issue(2, 12, SETUP_EPIC_MARKER, 'someone'), pull_request: {} }),
   });
-  const result = await openSetupEpic({ client, org: 'acme', repo: 'widgets', templates });
+  const result = await open(client, parse());
   assert.deepEqual(result, { epic: 10, created: [10, 11, 12, 13] });
 
   const created = writes(calls).filter((call) => call.path === '/repos/acme/widgets/issues');
@@ -128,94 +176,122 @@ test('openSetupEpic creates the epic, typed tasks, links and blockers on a fresh
     ['Chore', ['size:S']],
     ['Feature', ['size:S']],
   ]);
-  const links = writes(calls).filter((call) => call.path.endsWith('/sub_issues')).map((call) => call.body);
-  assert.deepEqual(links, [{ sub_issue_id: 101 }, { sub_issue_id: 102 }, { sub_issue_id: 103 }]);
+  assert.deepEqual(
+    writes(calls).filter((call) => call.path === SUB_ISSUES(10)).map((call) => call.body),
+    [{ sub_issue_id: 101 }, { sub_issue_id: 102 }, { sub_issue_id: 103 }],
+  );
   const blockers = writes(calls).filter((call) => call.path.endsWith('/blocked_by')).map((call) => [call.path, call.body]);
   assert.deepEqual(blockers, [
-    ['/repos/acme/widgets/issues/12/dependencies/blocked_by', { issue_id: 101 }],
-    ['/repos/acme/widgets/issues/13/dependencies/blocked_by', { issue_id: 101 }],
-    ['/repos/acme/widgets/issues/13/dependencies/blocked_by', { issue_id: 102 }],
+    [BLOCKED_BY(12), { issue_id: 101 }],
+    [BLOCKED_BY(13), { issue_id: 101 }],
+    [BLOCKED_BY(13), { issue_id: 102 }],
   ]);
+  assert.equal(calls.some((call) => call.method === 'GET' && call.path.includes('/sub_issues')), false);
 });
 
-test('openSetupEpic on a rerun creates only the missing tasks and their links (AC3)', async () => {
+test('openSetupEpic pauses 12 seconds between creations (R3)', async () => {
+  const sleeps = [];
+  const { client } = recordingClient(FRESH_ROUTES);
+  await open(client, parse(), sleeps);
+  assert.deepEqual(sleeps, [12_000, 12_000, 12_000]);
+});
+
+test('openSetupEpic on a rerun creates only the missing task and the links it lacks (AC3)', async () => {
   const templates = parse();
+  const sleeps = [];
   const { client, calls } = recordingClient({
-    [ISSUES_KEY]: {
-      status: 200,
-      data: [
-        { number: 10, id: 100, body: templates.epic.body },
-        { number: 11, id: 101, body: templates.tasks[0].body },
-        { number: 12, id: 102, body: templates.tasks[1].body },
-      ],
-    },
-    'POST /repos/acme/widgets/issues': { status: 201, data: { number: 13, id: 103 } },
-    'POST /repos/acme/widgets/issues/10/sub_issues': { status: 201, data: {} },
-    'POST /repos/acme/widgets/issues/13/dependencies/blocked_by': [{ status: 201, data: {} }, { status: 201, data: {} }],
+    [ISSUES_KEY]: listing(...existingIssues(templates, { skip: [13] })),
+    [ISSUES_POST]: creation(13, 103),
+    [`GET ${SUB_ISSUES(10)}?per_page=100`]: listing({ id: 101 }, { id: 102 }),
+    [`POST ${SUB_ISSUES(10)}`]: CREATED,
+    [`GET ${BLOCKED_BY(12)}?per_page=100`]: listing({ id: 101 }),
+    [`POST ${BLOCKED_BY(13)}`]: [CREATED, CREATED],
   });
-  const result = await openSetupEpic({ client, org: 'acme', repo: 'widgets', templates });
+  const result = await open(client, templates, sleeps);
   assert.deepEqual(result, { epic: 10, created: [13] });
-  assert.deepEqual(writes(calls).map((call) => call.path), [
-    '/repos/acme/widgets/issues',
-    '/repos/acme/widgets/issues/10/sub_issues',
-    '/repos/acme/widgets/issues/13/dependencies/blocked_by',
-    '/repos/acme/widgets/issues/13/dependencies/blocked_by',
-  ]);
+  assert.deepEqual(postPaths(calls), ['/repos/acme/widgets/issues', SUB_ISSUES(10), BLOCKED_BY(13), BLOCKED_BY(13)]);
   assert.deepEqual(writes(calls)[1].body, { sub_issue_id: 103 });
+  assert.deepEqual(sleeps, []);
 });
 
-test('openSetupEpic links an existing task to a new blocker (AC3)', async () => {
+test('openSetupEpic links issues that exist without links, as after a failed first link (R1)', async () => {
+  const templates = parse();
+  const { client, calls } = recordingClient({ [ISSUES_KEY]: listing(...existingIssues(templates)), ...NO_LINKS_LIVE });
+  const result = await open(client, templates);
+  assert.deepEqual(result, { epic: 10, created: [] });
+  assert.deepEqual(postPaths(calls), [
+    SUB_ISSUES(10), SUB_ISSUES(10), SUB_ISSUES(10), BLOCKED_BY(12), BLOCKED_BY(13), BLOCKED_BY(13),
+  ]);
+});
+
+test('openSetupEpic resumes after the first link request failed (R1)', async () => {
+  const templates = parse();
+  const { client: failing } = recordingClient({
+    ...FRESH_ROUTES,
+    [`POST ${SUB_ISSUES(10)}`]: { status: 502, data: { message: 'bad gateway' } },
+  });
+  await assert.rejects(open(failing, templates), GitHubError);
+
+  const { client, calls } = recordingClient({ [ISSUES_KEY]: listing(...existingIssues(templates)), ...NO_LINKS_LIVE });
+  await open(client, templates);
+  assert.equal(writes(calls).filter((call) => call.path === SUB_ISSUES(10)).length, 3);
+});
+
+test('openSetupEpic adds a blocker link to an existing task when the blocker is new (R1)', async () => {
   const templates = parse();
   const { client, calls } = recordingClient({
-    [ISSUES_KEY]: {
-      status: 200,
-      data: [
-        { number: 10, id: 100, body: templates.epic.body },
-        { number: 12, id: 102, body: templates.tasks[1].body },
-        { number: 13, id: 103, body: templates.tasks[2].body },
-      ],
-    },
-    'POST /repos/acme/widgets/issues': { status: 201, data: { number: 14, id: 104 } },
-    'POST /repos/acme/widgets/issues/10/sub_issues': { status: 201, data: {} },
-    'POST /repos/acme/widgets/issues/12/dependencies/blocked_by': { status: 201, data: {} },
-    'POST /repos/acme/widgets/issues/13/dependencies/blocked_by': { status: 201, data: {} },
+    [ISSUES_KEY]: listing(...existingIssues(templates, { skip: [11] })),
+    [ISSUES_POST]: creation(14, 104),
+    [`GET ${SUB_ISSUES(10)}?per_page=100`]: listing({ id: 102 }, { id: 103 }),
+    [`POST ${SUB_ISSUES(10)}`]: CREATED,
+    [`GET ${BLOCKED_BY(12)}?per_page=100`]: listing(),
+    [`GET ${BLOCKED_BY(13)}?per_page=100`]: listing({ id: 102 }),
+    [`POST ${BLOCKED_BY(12)}`]: CREATED,
+    [`POST ${BLOCKED_BY(13)}`]: CREATED,
   });
-  await openSetupEpic({ client, org: 'acme', repo: 'widgets', templates });
+  await open(client, templates);
   const blockers = writes(calls).filter((call) => call.path.endsWith('/blocked_by')).map((call) => call.body);
   assert.deepEqual(blockers, [{ issue_id: 104 }, { issue_id: 104 }]);
 });
 
-test('openSetupEpic creates nothing when everything exists (AC3)', async () => {
+test('openSetupEpic writes nothing when every issue and link exists (AC3)', async () => {
   const templates = parse();
-  const { client, calls } = recordingClient({
-    [ISSUES_KEY]: {
-      status: 200,
-      data: [
-        { number: 10, id: 100, body: templates.epic.body },
-        ...templates.tasks.map((task, index) => ({ number: 11 + index, id: 101 + index, body: task.body })),
-      ],
-    },
-  });
-  const result = await openSetupEpic({ client, org: 'acme', repo: 'widgets', templates });
+  const { client, calls } = recordingClient({ [ISSUES_KEY]: listing(...existingIssues(templates)), ...ALL_LINKS_LIVE });
+  const result = await open(client, templates);
   assert.deepEqual(result, { epic: 10, created: [] });
   assert.equal(writes(calls).length, 0);
 });
 
-test('openSetupEpic applies no label other than size:S or size:M (AC4)', async () => {
+test('openSetupEpic refuses an epic marker written by another author (R2)', async () => {
+  const { client, calls } = recordingClient({
+    [ISSUES_KEY]: listing(issue(5, 50, SETUP_EPIC_MARKER, 'stranger')),
+  });
+  await assert.rejects(
+    open(client, parse()),
+    (error) => error instanceof SettingsError && /#5 .*not written by acme-admin\[bot\]/.test(error.message),
+  );
+  assert.equal(writes(calls).length, 0);
+});
+
+test('openSetupEpic refuses a task marker written by another author (R2)', async () => {
   const templates = parse();
   const { client, calls } = recordingClient({
-    [ISSUES_KEY]: { status: 200, data: [] },
-    'POST /repos/acme/widgets/issues': [
-      { status: 201, data: { number: 10, id: 100 } },
-      { status: 201, data: { number: 11, id: 101 } },
-      { status: 201, data: { number: 12, id: 102 } },
-      { status: 201, data: { number: 13, id: 103 } },
-    ],
-    'POST /repos/acme/widgets/issues/10/sub_issues': [{ status: 201, data: {} }, { status: 201, data: {} }, { status: 201, data: {} }],
-    'POST /repos/acme/widgets/issues/12/dependencies/blocked_by': { status: 201, data: {} },
-    'POST /repos/acme/widgets/issues/13/dependencies/blocked_by': [{ status: 201, data: {} }, { status: 201, data: {} }],
+    [ISSUES_KEY]: listing(issue(10, 100, templates.epic.body), issue(6, 60, templates.tasks[0].body, 'stranger')),
   });
-  await openSetupEpic({ client, org: 'acme', repo: 'widgets', templates });
+  await assert.rejects(open(client, templates), SettingsError);
+  assert.equal(writes(calls).length, 0);
+});
+
+test('openSetupEpic compares the admin bot login case-insensitively (R2)', async () => {
+  const templates = parse();
+  const mixedCase = existingIssues(templates).map((item) => ({ ...item, user: { login: 'ACME-Admin[bot]' } }));
+  const { client } = recordingClient({ [ISSUES_KEY]: listing(...mixedCase), ...ALL_LINKS_LIVE });
+  assert.deepEqual(await open(client, templates), { epic: 10, created: [] });
+});
+
+test('openSetupEpic applies no label other than size:S or size:M (AC4)', async () => {
+  const { client, calls } = recordingClient(FRESH_ROUTES);
+  await open(client, parse());
   const labels = calls.flatMap((call) => call.body?.labels ?? []);
   assert.deepEqual([...new Set(labels)].sort(), ['size:M', 'size:S']);
   assert.equal(calls.some((call) => call.path.includes('/labels')), false);

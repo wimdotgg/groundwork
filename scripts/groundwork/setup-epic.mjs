@@ -1,6 +1,7 @@
 import { apiPath } from '../lib/github.mjs';
 import { ISSUE_TYPES } from '../lib/issue-model.mjs';
 import { SettingsError } from '../lib/settings.mjs';
+import { sameLogin } from '../lib/trust.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {{ number: string, title: string, type: string, size: string, body: string, blockedBy: string[] }} SetupTask */
@@ -17,7 +18,11 @@ const TASK_TYPES = ISSUE_TYPES.filter((type) => type !== 'Epic');
 const SIZES = ['S', 'M'];
 const PLACEHOLDER_PATTERN = /__(ORG|REPO|DESCRIPTION)__/g;
 
-const taskMarker = (number) => `<!-- groundwork:setup-task ${number} -->`;
+// AGENTS.md caps issue creation at 5 per minute.
+const CREATION_SPACING_MS = 12_000;
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const taskMarker =(number) => `<!-- groundwork:setup-task ${number} -->`;
 
 /** One pass, so a description that itself holds `__ORG__` is not expanded again. */
 function fillPlaceholders(text, { org, repo, description }) {
@@ -58,6 +63,23 @@ function parseTask(file, number, text) {
   return { number, title, type, size: directives.size, body: withMarker(body, taskMarker(number)), blockedBy };
 }
 
+function checkTaskNumbers(tasks) {
+  const numbers = new Set();
+  for (const { number } of tasks) {
+    if (numbers.has(number)) throw new SettingsError(`task ${number}: number used by more than one file`, number);
+    numbers.add(number);
+  }
+  for (const task of tasks) {
+    const dangling = task.blockedBy.find((blocker) => !numbers.has(blocker));
+    if (dangling !== undefined) {
+      throw new SettingsError(`task ${task.number}: blocked-by ${dangling} names no task`, task.number);
+    }
+    if (task.blockedBy.includes(task.number)) {
+      throw new SettingsError(`task ${task.number}: blocked-by names the task itself`, task.number);
+    }
+  }
+}
+
 /**
  * Pure. Reads `epic.md` and `NN-<slug>.md` from `files` (paths relative to `setup/`),
  * fills `__ORG__`, `__REPO__` and `__DESCRIPTION__`, and checks every task.
@@ -74,72 +96,97 @@ export function parseSetupTemplates(files, values) {
     .filter(({ number }) => number !== undefined)
     .sort((a, b) => a.file.localeCompare(b.file))
     .map(({ file, number }) => parseTask(file, number, fillPlaceholders(files[file], values)));
-  const numbers = new Set(tasks.map((task) => task.number));
-  for (const task of tasks) {
-    const dangling = task.blockedBy.find((blocker) => !numbers.has(blocker));
-    if (dangling !== undefined) {
-      throw new SettingsError(`task ${task.number}: blocked-by ${dangling} names no task`, task.number);
-    }
-  }
+  checkTaskNumbers(tasks);
   return { epic: { title: epic.title, body: withMarker(epic.body, SETUP_EPIC_MARKER) }, tasks };
 }
 
-async function createIssue(client, issuesPath, fields) {
-  const { data } = await client.request('POST', issuesPath, { body: fields });
-  return { number: data.number, id: data.id };
+/**
+ * Marker match by the admin bot only: the repository is public, so any account can plant a marker.
+ * @throws {SettingsError} a marked issue written by someone else
+ */
+function findMarkedIssue(existing, marker, adminBot) {
+  const marked = existing.filter((issue) => typeof issue.body === 'string' && issue.body.includes(marker));
+  const stranger = marked.find((issue) => !sameLogin(issue.user?.login, adminBot));
+  if (stranger !== undefined) {
+    throw new SettingsError(`issue #${stranger.number} carries ${marker} but was not written by ${adminBot}`);
+  }
+  return marked[0];
 }
 
-async function addBlocker(client, blockedByPath, blocker) {
-  await client.request('POST', blockedByPath, { body: { issue_id: blocker.id } });
+/** Creates issues one at a time, `sleep`ing between them to stay under the creation rate cap. */
+function pacedIssueCreator({ client, issuesPath, sleep }) {
+  let creations = 0;
+  return async (fields) => {
+    if (creations > 0) await sleep(CREATION_SPACING_MS);
+    creations += 1;
+    const { data } = await client.request('POST', issuesPath, { body: fields });
+    return { number: data.number, id: data.id };
+  };
+}
+
+/** POSTs a link for each id the live list lacks; `listExists` is false for an issue made in this run. */
+async function addMissingLinks(client, { path, field, ids, listExists }) {
+  const live = listExists ? new Set((await client.paginate(path)).map((item) => item.id)) : new Set();
+  for (const id of ids.filter((candidate) => !live.has(candidate))) {
+    await client.request('POST', path, { body: { [field]: id } });
+  }
 }
 
 /**
  * Opens the "Project setup" epic and one sub-issue per task, each typed and linked.
- * Existing issues are found by marker and left alone; a link is added when either end is new.
- * Only `size:*` labels are applied, and `accepted` never.
- * @param {{ client: GitHubClient, org: string, repo: string, templates: SetupTemplates }} options
+ * Issues are found by marker (admin bot only) and left alone; links are read live and only
+ * the missing ones are posted, so a run that died mid-way resumes. Only `size:*` labels are
+ * applied, and `accepted` never.
+ * @param {{ client: GitHubClient, org: string, repo: string, templates: SetupTemplates, adminBot: string, sleep?: (ms: number) => Promise<void> }} options
  * @returns {Promise<{ epic: number, created: number[] }>} the epic number and the numbers created now
+ * @throws {SettingsError} a marker on an issue the admin bot did not write
  */
-export async function openSetupEpic({ client, org, repo, templates }) {
+export async function openSetupEpic({ client, org, repo, templates, adminBot, sleep = defaultSleep }) {
   const issuesPath = apiPath('/repos/{org}/{repo}/issues', { org, repo });
   const existing = (await client.paginate(issuesPath, { query: { state: 'all' } }))
     .filter((issue) => issue.pull_request === undefined);
-  const findByMarker = (marker) => existing.find((issue) => typeof issue.body === 'string' && issue.body.includes(marker));
+  const createIssue = pacedIssueCreator({ client, issuesPath, sleep });
   const created = [];
 
-  let epic = findByMarker(SETUP_EPIC_MARKER);
-  if (epic === undefined) {
-    epic = await createIssue(client, issuesPath, { ...templates.epic, type: 'Epic' });
+  let epic = findMarkedIssue(existing, SETUP_EPIC_MARKER, adminBot);
+  const epicExisted = epic !== undefined;
+  if (!epicExisted) {
+    epic = await createIssue({ ...templates.epic, type: 'Epic' });
     created.push(epic.number);
   }
 
   const issues = new Map();
-  const isNew = new Set();
+  const createdNow = new Set();
   for (const task of templates.tasks) {
-    const found = findByMarker(taskMarker(task.number));
+    const found = findMarkedIssue(existing, taskMarker(task.number), adminBot);
     if (found !== undefined) {
       issues.set(task.number, found);
       continue;
     }
     const { title, body, type, size } = task;
-    const issue = await createIssue(client, issuesPath, { title, body, type, labels: [`size:${size}`] });
+    const issue = await createIssue({ title, body, type, labels: [`size:${size}`] });
     issues.set(task.number, issue);
-    isNew.add(task.number);
+    createdNow.add(task.number);
     created.push(issue.number);
   }
 
-  const subIssuesPath = apiPath('/repos/{org}/{repo}/issues/{number}/sub_issues', { org, repo, number: epic.number });
-  for (const task of templates.tasks.filter(({ number }) => isNew.has(number))) {
-    await client.request('POST', subIssuesPath, { body: { sub_issue_id: issues.get(task.number).id } });
-  }
-  for (const task of templates.tasks) {
-    const newBlockers = task.blockedBy.filter((blocker) => isNew.has(task.number) || isNew.has(blocker));
-    const blockedByPath = apiPath('/repos/{org}/{repo}/issues/{number}/dependencies/blocked_by', {
-      org,
-      repo,
-      number: issues.get(task.number).number,
+  await addMissingLinks(client, {
+    path: apiPath('/repos/{org}/{repo}/issues/{number}/sub_issues', { org, repo, number: epic.number }),
+    field: 'sub_issue_id',
+    ids: templates.tasks.map((task) => issues.get(task.number).id),
+    listExists: epicExisted,
+  });
+  for (const task of templates.tasks.filter(({ blockedBy }) => blockedBy.length > 0)) {
+    await addMissingLinks(client, {
+      path: apiPath('/repos/{org}/{repo}/issues/{number}/dependencies/blocked_by', {
+        org,
+        repo,
+        number: issues.get(task.number).number,
+      }),
+      field: 'issue_id',
+      ids: task.blockedBy.map((blocker) => issues.get(blocker).id),
+      listExists: !createdNow.has(task.number),
     });
-    for (const blocker of newBlockers) await addBlocker(client, blockedByPath, issues.get(blocker));
   }
   return { epic: epic.number, created };
 }
