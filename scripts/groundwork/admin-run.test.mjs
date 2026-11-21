@@ -1212,10 +1212,10 @@ test('plan: a deferred op lists every mintable grant', async () => {
   }
 });
 
-test('selftestRepoName builds selftest-<run id> from digits only', () => {
-  assert.equal(REGISTRY.selftest.selftestRepoName({ GITHUB_RUN_ID: '4242' }), 'selftest-4242');
+test('selftest targetRepo builds selftest-<run id> from digits only', () => {
+  assert.equal(REGISTRY.selftest.targetRepo({ GITHUB_RUN_ID: '4242' }), 'selftest-4242');
   for (const runId of [undefined, '', '12a', '../1']) {
-    assert.throws(() => REGISTRY.selftest.selftestRepoName({ GITHUB_RUN_ID: runId }), { name: 'GitHubError' });
+    assert.throws(() => REGISTRY.selftest.targetRepo({ GITHUB_RUN_ID: runId }), { name: 'GitHubError' });
   }
 });
 

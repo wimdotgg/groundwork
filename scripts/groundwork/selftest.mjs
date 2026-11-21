@@ -24,7 +24,7 @@ const RUN_ID_PATTERN = /^[0-9]+$/;
  * @param {Record<string, string|undefined>} env
  * @returns {string} `selftest-<GITHUB_RUN_ID>`
  */
-export function selftestRepoName(env) {
+export function targetRepo(env) {
   const runId = env.GITHUB_RUN_ID ?? '';
   if (!RUN_ID_PATTERN.test(runId)) throw new GitHubError('GITHUB_RUN_ID must be digits');
   return `${SELFTEST_REPO_PREFIX}${runId}`;
