@@ -19,6 +19,25 @@ const DPAPI_SCRIPT = '$s = Get-Content $env:GROUNDWORK_DPAPI_FILE | ConvertTo-Se
   + '[Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))';
 const USAGE = 'usage: token.mjs exec -- <command> [args...] | token.mjs credential <get|store|erase>';
 
+const MIN_NODE_MAJOR = 24;
+
+/**
+ * Every agent script ends with `if (import.meta.main)`, which an old Node leaves undefined, so the script would
+ * exit 0 having done nothing. Every script imports this module, so the check below runs for all of them.
+ * @param {string} version `process.versions.node`
+ * @returns {string|null} the one-line error, or null when the version is supported
+ */
+export function nodeVersionError(version) {
+  if (Number(version.split('.')[0]) >= MIN_NODE_MAJOR) return null;
+  return `groundwork agent scripts need Node ${MIN_NODE_MAJOR} or newer (running ${version})`;
+}
+
+const unsupportedNode = nodeVersionError(process.versions.node);
+if (unsupportedNode) {
+  console.error(unsupportedNode);
+  process.exit(1);
+}
+
 /** @returns {string|undefined} where setup stores `<slug><suffix>` on Windows */
 function windowsStorePath({ env, platform, slug }, suffix) {
   if (platform !== 'win32' || !env.APPDATA) return undefined;

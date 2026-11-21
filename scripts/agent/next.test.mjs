@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFixtureClient } from '../lib/github.mjs';
 import { loadConfig, repoRoot } from '../lib/config.mjs';
-import { chooseNext, findHeldHotspots, formatOutput, parseArgs, rankCandidates } from './next.mjs';
+import { loadIssueFacts } from '../lib/issue-model.mjs';
+import { chooseNext, findHeldHotspots, formatOutput, parseArgs, rankCandidates, unmetReadiness } from './next.mjs';
 
 const config = await loadConfig({ root: repoRoot(import.meta.url) });
 const repoRef = { owner: 'wimdotgg', repo: 'groundwork' };
@@ -288,4 +289,25 @@ test('AC3: a takeover candidate is not blocked by its own PR', async () => {
   const chosen = chooseNext(result.ranked, result.skipped, [{ hotspot: HOTSPOT, pr: 911 }]);
   assert.equal(chosen.next.number, 11);
   assert.deepEqual(chosen.skipped.map(({ number, code }) => [number, code]), [[12, 'hotspot']]);
+});
+
+async function readinessOf(spec) {
+  const client = createFixtureClient({ ...issueRoutes(spec), [`GET ${BASE}/issues/${spec.parent.number}/parent`]: { status: 404, data: {} } });
+  const facts = await loadIssueFacts(client, { ...repoRef, number: spec.number }, { config });
+  return unmetReadiness(facts, { config, now: NOW });
+}
+
+test('readiness: an accepted, sized, unblocked task has nothing unmet', async () => {
+  assert.equal(await readinessOf({ number: 5, labels: sized(), parent: { number: 1, labels: ['accepted'] } }), null);
+});
+
+test('readiness: names the first unmet item (proposed ancestor, open blocker, missing size, untrusted author)', async () => {
+  const parent = { number: 1, labels: ['accepted'] };
+  const cases = [
+    [{ number: 5, labels: sized(), parent: { number: 1, labels: [] } }, 'proposed'],
+    [{ number: 5, labels: sized(), parent, blockedBy: [{ number: 9, state: 'open' }] }, 'blocked'],
+    [{ number: 5, labels: [], parent }, 'size'],
+    [{ number: 5, labels: sized(), parent, author: 'stranger' }, 'untrusted-author'],
+  ];
+  for (const [spec, code] of cases) assert.equal((await readinessOf(spec))?.code, code);
 });

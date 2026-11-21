@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createVerify, generateKeyPairSync } from 'node:crypto';
 import { createFixtureClient } from '../lib/github.mjs';
 import {
-  buildChildEnv, createAppJwt, credentialOutput, fetchBotUserId, mintInstallationToken,
+  buildChildEnv, createAppJwt, credentialOutput, fetchBotUserId, mintInstallationToken, nodeVersionError,
   resolveClientId, resolvePrivateKey,
 } from './token.mjs';
 
@@ -89,4 +89,10 @@ test('mintInstallationToken: org installation lookup, then token; failures are o
 test('fetchBotUserId: reads the bot user id', async () => {
   const client = createFixtureClient({ 'GET /users/demo-agent%5Bbot%5D': { status: 200, data: { id: 42 } } });
   assert.equal(await fetchBotUserId(client, 'demo-agent[bot]'), 42);
+});
+
+test('nodeVersionError: names Node 24 for an older major, null from 24 on', () => {
+  assert.match(nodeVersionError('22.23.4'), /Node 24 or newer \(running 22\.23\.4\)/);
+  assert.equal(nodeVersionError('24.0.0'), null);
+  assert.equal(nodeVersionError('26.13.1'), null);
 });
