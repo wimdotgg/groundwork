@@ -874,7 +874,7 @@ const stopHere = { ok: false, summary: 'stop' };
 
 test('admin-run.yml: run-name carries every input for the owner delegation', async () => {
   const lines = (await readFile(WORKFLOW_FILE, 'utf8')).split(/\r?\n/);
-  assert.ok(lines.includes('run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} args=${{ inputs.args }} script=${{ inputs.script_path }}'));
+  assert.ok(lines.includes('run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} script=${{ inputs.script_path }} args=${{ inputs.args }}'));
 });
 
 test('admin-run.yml: lists script and selftest, declares script_path and carries it in run-name', async () => {
@@ -1210,4 +1210,17 @@ test('plan: a deferred op lists every mintable grant', async () => {
   for (const [name, level] of [PERMISSIONS, CREATE_PERMISSIONS, CONTROL_READ_PERMISSIONS].flatMap(Object.entries)) {
     assert.ok(result.summary.includes(`| ${name} | ${level} |`), name);
   }
+});
+
+test('selftestRepoName builds selftest-<run id> from digits only', () => {
+  assert.equal(REGISTRY.selftest.selftestRepoName({ GITHUB_RUN_ID: '4242' }), 'selftest-4242');
+  for (const runId of [undefined, '', '12a', '../1']) {
+    assert.throws(() => REGISTRY.selftest.selftestRepoName({ GITHUB_RUN_ID: runId }), { name: 'GitHubError' });
+  }
+});
+
+test('skeleton ops export an empty grant list and refuse every script file', () => {
+  assert.deepEqual(REGISTRY.script.grants({}), []);
+  assert.deepEqual(REGISTRY.selftest.grants({}), []);
+  assert.throws(() => REGISTRY.script.parseScript('export const permissions = {};'), { message: 'not implemented' });
 });

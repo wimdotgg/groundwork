@@ -19,11 +19,17 @@ export function validateArgs() {
 }
 
 /**
+ * Static text check, never executes the file: the one `permissions` statement, no `import`, `import(` or `require`.
  * @param {string} source text of `admin-ops/<name>.mjs`
  * @returns {{ permissions?: Record<string, 'read'|'write'>, problem?: string }}
  */
-export function parsePermissions() {
+export function parseScript() {
   throw new GitHubError(NOT_IMPLEMENTED);
+}
+
+/** Empty until the lane lands, so nothing can mint (12.1 grant shape). */
+export function grants() {
+  return [];
 }
 
 /** @returns {Promise<{ ok: boolean, summary: string }>} */
