@@ -186,7 +186,22 @@
       "Bash(node scripts/agent/token.mjs exec -- gh api -F* *secrets*)",
       "Bash(node scripts/agent/token.mjs exec -- gh api --field* *secrets*)",
       "Bash(node scripts/agent/token.mjs exec -- gh api --raw-field* *secrets*)",
-      "Bash(node scripts/agent/token.mjs exec -- gh api --input* *secrets*)"
+      "Bash(node scripts/agent/token.mjs exec -- gh api --input* *secrets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * -f* *rulesets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * -F* *rulesets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --field* *rulesets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --raw-field* *rulesets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --input* *rulesets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * -f* *environments*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * -F* *environments*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --field* *environments*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --raw-field* *environments*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --input* *environments*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * -f* *secrets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * -F* *secrets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --field* *secrets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --raw-field* *secrets*)",
+      "Bash(node scripts/agent/token.mjs exec -- gh api * --input* *secrets*)"
     ]
   },
   "hooks": {
