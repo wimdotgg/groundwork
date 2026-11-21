@@ -106,7 +106,7 @@ function expectedTree(files) {
 }
 
 /** Status of each kit-version read without a ref, in call order: one per `inspectRepo` (not when absent) and per `applySections` call. */
-const KIT_READS = { absent: [404, 200, 200, 200], fresh: [404, 404, 200, 200, 200], ours: [200, 200, 200, 200, 200] };
+const KIT_READS = { absent: [404, 200, 200, 200, 200], fresh: [404, 404, 200, 200, 200, 200], ours: [200, 200, 200, 200, 200, 200] };
 
 function targetRoutes(state, files) {
   const { treeEntries } = expectedTree(files);
@@ -328,6 +328,21 @@ test('AC5 the summary lists every pass 1 step with its result and the tag', asyn
   const lines = summary.split('\n');
   for (const step of steps) assert.ok(lines.includes(`- ${step}`), step);
   assert.deepEqual(lines.slice(0, 2), [`### bootstrap ${ORG}/${REPO}`, '']);
+});
+
+test('AC8 the last step lists labels again and deletes the defaults GitHub seeded meanwhile', async () => {
+  const defaults = ['bug', 'documentation', 'duplicate', 'enhancement', 'good first issue', 'help wanted', 'invalid', 'question', 'wontfix', 'accessibility']
+    .map((name) => ({ name, color: 'ededed', description: '' }));
+  const world = createWorld({
+    state: 'absent',
+    overrides: { [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, []), reply(200, [...LABELS, ...defaults])] },
+  });
+  const { summary } = await run(world.ctx, world.seams);
+  const deletes = world.calls.filter((call) => call.method === 'DELETE' && call.path.startsWith(`${TARGET_PATH}/labels/`));
+  assert.equal(deletes.length, defaults.length);
+  const lastLabelsStep = world.calls.findLastIndex((call) => call.path === `${TARGET_PATH}/labels` && call.method === 'GET');
+  assert.ok(lastLabelsStep > indexOfLine(world, `POST ${TARGET_PATH}/issues`), 'the cleanup runs after the setup epic');
+  assert.ok(summary.split('\n').includes('- labels (final pass): 10 deleted'));
 });
 
 test('issue and blob creations are paced through the injected sleep', async () => {

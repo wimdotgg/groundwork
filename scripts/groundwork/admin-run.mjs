@@ -585,7 +585,7 @@ export async function apply(env, overrides = {}) {
   return { exitCode: outcome.ok ? 0 : 1, summary, reason };
 }
 
-async function writeSummary(env, text) {
+export async function writeSummary(env, text) {
   if (env.GITHUB_STEP_SUMMARY) {
     await appendFile(env.GITHUB_STEP_SUMMARY, `${text}\n`);
     return;

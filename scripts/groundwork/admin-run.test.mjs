@@ -2,12 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createFixtureClient } from '../lib/github.mjs';
 import { repoRoot } from '../lib/config.mjs';
-import { REGISTRY, apply, materialiseSettings, plan, validateRequest } from './admin-run.mjs';
+import { REGISTRY, apply, materialiseSettings, plan, validateRequest, writeSummary } from './admin-run.mjs';
 import { mintInstallationToken, revokeInstallationToken } from './app-token.mjs';
 
 const ORG = 'acme';
@@ -1023,6 +1023,29 @@ test('apply: after a passing deferred op, check runs with its own token against 
   assert.match(result.summary, new RegExp(`git/trees/${HEAD}\` \\| 200`));
   assert.ok(result.summary.includes(`git/ref/heads/main`) && !result.summary.includes('/branches/'), 'settings come from the main ref, not the default branch');
   assert.ok(result.summary.indexOf('bootstrapped') < result.summary.indexOf('verified'));
+});
+
+test('AC7 the check token after a deferred op carries administration write', async () => {
+  const { overrides, mints } = deferredHarness(async () => ({ ok: true, summary: 'bootstrapped' }));
+  const result = await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.equal(result.exitCode, 0, result.reason);
+  assert.equal(mints[0].permissions.administration, 'write');
+});
+
+test('AC9 writeSummary with GITHUB_STEP_SUMMARY set writes the file and wraps the same text in a stdout group', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'admin-run-summary-'));
+  const file = path.join(directory, 'summary.md');
+  const printed = [];
+  await writeSummary({ GITHUB_STEP_SUMMARY: file }, '## admin-run apply', (text) => printed.push(text));
+  assert.equal(await readFile(file, 'utf8'), '## admin-run apply\n');
+  assert.equal(printed.join(''), '::group::admin-run summary\n## admin-run apply\n::endgroup::\n');
+  await rm(directory, { recursive: true, force: true });
+});
+
+test('AC9 writeSummary without GITHUB_STEP_SUMMARY prints the plain text once', async () => {
+  const printed = [];
+  await writeSummary({}, '## admin-run apply', (text) => printed.push(text));
+  assert.equal(printed.join(''), '## admin-run apply\n');
 });
 
 test('apply: a failing trailing check fails the run, a failing op skips it, both revoke', async () => {
