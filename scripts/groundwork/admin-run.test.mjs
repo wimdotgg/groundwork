@@ -841,7 +841,6 @@ function deferredHarness(run, { routes = withTokenRoutes(), checkRun, ...rest } 
 const targetGrant = { repositories: [TARGET], permissions: { contents: 'write', members: 'read' } };
 const controlRead = { repositories: [CONTROL_REPO], permissions: BOOTSTRAP.CONTROL_READ_PERMISSIONS };
 const createGrant = { repositories: [CONTROL_REPO], permissions: BOOTSTRAP.CREATE_PERMISSIONS };
-const createAllGrant = { repositories: 'all', permissions: BOOTSTRAP.CREATE_PERMISSIONS };
 const stopHere = { ok: false, summary: 'stop' };
 
 test('admin-run.yml: run-name carries every input for the owner delegation', async () => {
@@ -861,7 +860,7 @@ test('apply: a deferred op mints nothing before run and gets no client, token or
 });
 
 test('withToken: every accepted grant signs a fresh JWT, mints exactly the request, masks and revokes', async () => {
-  const grants = [targetGrant, controlRead, createGrant, createAllGrant];
+  const grants = [targetGrant, controlRead, createGrant];
   const values = [];
   const { overrides, mints, jwts, events, stdout } = deferredHarness(async (ctx) => {
     for (const grant of grants) values.push(await ctx.withToken(grant, async ({ client, token }) => (client ? token : null)));
@@ -943,6 +942,7 @@ const refusals = [
   ['control read at write level', { repositories: [CONTROL_REPO], permissions: { contents: 'write' } }],
   ['create permissions on another repository', { repositories: ['other'], permissions: BOOTSTRAP.CREATE_PERMISSIONS }],
   ['create permissions plus an extra key', { repositories: [CONTROL_REPO], permissions: { administration: 'write', contents: 'read' } }],
+  ['all with the create permissions', { repositories: 'all', permissions: BOOTSTRAP.CREATE_PERMISSIONS }],
   ['all with control read', { repositories: 'all', permissions: BOOTSTRAP.CONTROL_READ_PERMISSIONS }],
   ['all with the op permissions', { repositories: 'all', permissions: BOOTSTRAP.PERMISSIONS }],
   ['an undeclared key with an undefined value', { repositories: [CONTROL_REPO], permissions: { foo: undefined } }],
@@ -1089,10 +1089,10 @@ test('apply: ctx.writeSettings writes under the temp directory, loads config fro
   assert.ok(!existsSync(tempDirs[0]));
 });
 
-test('plan: a deferred op lists every mintable grant with both create variants', async () => {
+test('plan: a deferred op lists every mintable grant', async () => {
   const result = await plan(dispatchEnv(BOOTSTRAP_ENV), { ...planOverrides({}), registry: REGISTRY });
   assert.equal(result.exitCode, 0, result.reason);
-  assert.match(result.summary, /create call on `groundwork`, or installation-wide/);
+  assert.match(result.summary, /create call on `groundwork`/);
   assert.match(result.summary, /control repository `groundwork` read/);
   const { PERMISSIONS, CREATE_PERMISSIONS, CONTROL_READ_PERMISSIONS } = BOOTSTRAP;
   for (const [name, level] of [PERMISSIONS, CREATE_PERMISSIONS, CONTROL_READ_PERMISSIONS].flatMap(Object.entries)) {

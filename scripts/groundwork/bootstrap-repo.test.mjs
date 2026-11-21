@@ -177,21 +177,6 @@ function createRepoArgs(withToken) {
 
 const CREATE_BODY = '{"name":"shop","description":"A shop","private":false,"auto_init":true}';
 
-for (const status of [403, 404]) {
-  test(`AC3 createRepo retries once with repositories "all" after ${status}, revoking first`, async () => {
-    const { withToken, log } = stubWithToken([status, 'ok']);
-    await createRepo(createRepoArgs(withToken));
-    assert.deepEqual(log, [
-      'mint {"repositories":["groundwork"],"permissions":{"administration":"write"}}',
-      `POST /orgs/acme/repos ${CREATE_BODY}`,
-      'revoke',
-      'mint {"repositories":"all","permissions":{"administration":"write"}}',
-      `POST /orgs/acme/repos ${CREATE_BODY}`,
-      'revoke',
-    ]);
-  });
-}
-
 test('AC3 createRepo makes one call with the restricted token when it succeeds', async () => {
   const { withToken, log } = stubWithToken(['ok']);
   await createRepo(createRepoArgs(withToken));
@@ -202,31 +187,22 @@ test('AC3 createRepo makes one call with the restricted token when it succeeds',
   ]);
 });
 
-test('AC3 createRepo throws the second refusal after one retry', async () => {
-  const { withToken, log } = stubWithToken([403, 403]);
-  await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error.status === 403);
-  assert.equal(log.filter((line) => line.startsWith('mint')).length, 2);
-});
-
-const UNRETRIED_FAILURES = {
+const CREATE_FAILURES = {
+  'a 403': new GitHubError('forbidden', { status: 403 }),
+  'a 404': new GitHubError('not found', { status: 404 }),
+  'a 422': new GitHubError('unprocessable', { status: 422 }),
   'a 0 status': new GitHubError('fetch failed', { status: 0 }),
   'a plain Error': new Error('boom'),
 };
 
-for (const [name, failure] of Object.entries(UNRETRIED_FAILURES)) {
-  test(`AC3 createRepo throws ${name} after one mint`, async () => {
+for (const [name, failure] of Object.entries(CREATE_FAILURES)) {
+  test(`AC5 createRepo throws ${name} after one mint, with no installation-wide retry`, async () => {
     const { withToken, log } = stubWithToken([failure]);
     await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error === failure);
     assert.equal(log.filter((line) => line.startsWith('mint')).length, 1);
+    assert.equal(log.at(-1), 'revoke');
   });
 }
-
-test('AC3 createRepo throws a 422 without a retry', async () => {
-  const { withToken, log } = stubWithToken([422]);
-  await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error.status === 422);
-  assert.equal(log.filter((line) => line.startsWith('mint')).length, 1);
-  assert.equal(log.at(-1), 'revoke');
-});
 
 const TREE_ENTRIES = [
   { path: 'README.md', mode: '100644', content: '# shop\n' },

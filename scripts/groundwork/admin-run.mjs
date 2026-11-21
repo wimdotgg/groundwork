@@ -185,7 +185,7 @@ function renderRequestedPermissions(module, { controlRepo, targetRepo }) {
   if (module.TOKEN_SCOPE !== SCOPE_DEFERRED) return ['Requested token permissions:', '', ...renderPermissions(module.PERMISSIONS)];
   const grants = [
     [`target repository \`${targetRepo}\`, any subset of`, module.PERMISSIONS],
-    [`create call on \`${controlRepo}\`, or installation-wide when GitHub refuses that`, module.CREATE_PERMISSIONS],
+    [`create call on \`${controlRepo}\``, module.CREATE_PERMISSIONS],
     [`control repository \`${controlRepo}\` read`, module.CONTROL_READ_PERMISSIONS],
   ];
   return grants.flatMap(([label, permissions]) => [`Token grant, ${label}:`, '', ...renderPermissions(permissions), '']);
@@ -375,8 +375,7 @@ function grantProblem(requested, { module, targetRepo, controlRepo }) {
     return isPermissionSubset(permissions, module.PERMISSIONS) ? undefined : 'permissions exceed the op permissions for the target';
   }
   if (isRepositoryList(repositories, controlRepo) && samePermissionSets(permissions, module.CONTROL_READ_PERMISSIONS)) return undefined;
-  const createRepositories = isRepositoryList(repositories, controlRepo) || repositories === ALL_REPOSITORIES;
-  if (createRepositories && samePermissionSets(permissions, module.CREATE_PERMISSIONS)) return undefined;
+  if (isRepositoryList(repositories, controlRepo) && samePermissionSets(permissions, module.CREATE_PERMISSIONS)) return undefined;
   return 'request is not one of the declared grants';
 }
 
