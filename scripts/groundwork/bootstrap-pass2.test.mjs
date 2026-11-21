@@ -13,8 +13,8 @@ test('validateArgs accepts an empty object', () => {
 
 test('validateArgs rejects any key and non-objects', () => {
   assert.deepEqual(validateArgs({ deploy: 'none' }), ['unknown argument "deploy"']);
-  assert.notDeepEqual(validateArgs([]), []);
-  assert.notDeepEqual(validateArgs(null), []);
+  assert.deepEqual(validateArgs([]), ['args must be a JSON object']);
+  assert.deepEqual(validateArgs(null), ['args must be a JSON object']);
 });
 
 test('run is a skeleton', async () => {

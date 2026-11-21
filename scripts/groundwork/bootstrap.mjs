@@ -19,6 +19,9 @@ export const PERMISSIONS = {
 /** Token for the `POST /orgs/{org}/repos` call alone (2.4). */
 export const CREATE_PERMISSIONS = { administration: 'write' };
 
+/** Token for reading `groundwork` and the target's existence, both public data (12.1). */
+export const CONTROL_READ_PERMISSIONS = { contents: 'read' };
+
 export const DESCRIPTION_MAX_LENGTH = 350;
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 const ALLOWED_KEYS = new Set(['description']);
