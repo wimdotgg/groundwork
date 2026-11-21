@@ -13,7 +13,7 @@ E3
 
 ## Scope
 
-In: list lockfiles, migrations or generated schemas in `.github/groundwork/hotspots.json` (exact paths or directory prefixes, no globs); replace the README stub. Out: deploy docs.
+In: create `.github/groundwork/hotspots.json` as `{ "schemaVersion": 1, "hotspots": [{ "name": "...", "paths": ["..."] }] }` listing lockfiles, migrations or generated schemas (exact paths or directory prefixes, no globs); replace the README stub. Out: deploy docs.
 
 ## Touches
 
@@ -21,7 +21,7 @@ In: list lockfiles, migrations or generated schemas in `.github/groundwork/hotsp
 
 ## Acceptance criteria
 
-- [ ] AC1 `hotspots.json` names every resource that two tasks must not change at once, or stays an empty list with the reason in the PR.
+- [ ] AC1 `hotspots.json` exists with `"schemaVersion": 1` and names every resource that two tasks must not change at once; an empty `hotspots` array needs the reason in the PR.
 - [ ] AC2 `README.md` states what the project does, the chosen stack and how to run `scripts/verify`.
 
 ## Verification plan

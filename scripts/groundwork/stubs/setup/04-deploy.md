@@ -5,7 +5,7 @@
 
 ## Outcome
 
-The deploy decision is recorded: either working `scripts/deploy`, `scripts/smoke` and `scripts/rollback`, or `"deploy": "none"` in `config.json`.
+The deploy decision is recorded in `config.json`: `"deploy": "scripts"` with working deploy, smoke and rollback scripts, or `"deploy": "none"` with no scripts. A new project starts with `none`.
 
 ## Serves
 
@@ -13,20 +13,20 @@ E4
 
 ## Scope
 
-In: write the three scripts for a project that deploys, or set `"deploy": "none"`. Out: entering deploy secrets (owner only, listed by `bootstrap-pass2`).
+In: for a project that deploys, set `"deploy": "scripts"` and write `scripts/deploy`, `scripts/smoke` and `scripts/rollback` with their `.cmd` shims; otherwise leave `"deploy": "none"`. Out: entering deploy secrets (owner only, listed by `bootstrap-pass2`).
 
 ## Touches
 
-`scripts/deploy`, `scripts/smoke`, `scripts/rollback`, `.github/groundwork/config.json`
+`scripts/deploy`, `scripts/deploy.cmd`, `scripts/smoke`, `scripts/smoke.cmd`, `scripts/rollback`, `scripts/rollback.cmd`, `.github/groundwork/config.json`
 
 ## Acceptance criteria
 
-- [ ] AC1 Either all three scripts exist and are executable, or `config.json` has `"deploy": "none"` and no script exists.
+- [ ] AC1 `config.json` has `"deploy": "scripts"` and all three scripts and their `.cmd` shims exist, or it has `"deploy": "none"` and none of them exists.
 - [ ] AC2 Each script exits non-zero on failure.
 
 ## Verification plan
 
-Run `scripts/smoke` against a local or staging target, or read `config.json` for the `none` case.
+Read `config.json` and list `scripts/`; for `scripts`, run `scripts/smoke` against a local or staging target.
 
 ## Risk
 

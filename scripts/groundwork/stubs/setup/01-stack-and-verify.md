@@ -15,7 +15,7 @@ In: pick the language and tooling, scaffold the minimal project, replace the stu
 
 ## Touches
 
-`scripts/verify`, `scripts/verify.cmd`
+`scripts/verify`, `scripts/verify.cmd`, plus the stack's manifest, lockfile and source directories
 
 ## Acceptance criteria
 

@@ -9,7 +9,7 @@ Make `__ORG__/__REPO__` ready for agent work: a real stack behind `scripts/verif
 - [ ] E1 `scripts/verify` runs the project's real build and tests, and the `GROUNDWORK_STUB` marker is gone.
 - [ ] E2 `.github/dependabot.yml` covers every package ecosystem the project uses.
 - [ ] E3 `.github/groundwork/hotspots.json` names the serialized resources and `README.md` describes the project.
-- [ ] E4 The project either has `scripts/deploy`, `scripts/smoke` and `scripts/rollback`, or `config.json` sets `"deploy": "none"`.
+- [ ] E4 `config.json` has `"deploy": "scripts"` and `scripts/deploy`, `scripts/smoke` and `scripts/rollback` exist, or it keeps `"deploy": "none"` and none of them exists.
 - [ ] E5 `.github/groundwork/rulesets/main.json` carries the `code_scanning` rule.
 - [ ] E6 `bootstrap-pass2` is requested for the owner to approve.
 

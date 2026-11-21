@@ -22,11 +22,11 @@ In: add one `updates` entry per ecosystem in `.github/dependabot.yml`, keeping t
 ## Acceptance criteria
 
 - [ ] AC1 `.github/dependabot.yml` has an `updates` entry for each package manager the project uses.
-- [ ] AC2 GitHub's Dependabot page reports no configuration error for the file.
+- [ ] AC2 Each new entry has `package-ecosystem`, `directory`, `schedule` and the `dependencies` label, as the `github-actions` entry does.
 
 ## Verification plan
 
-Open the repository's Dependabot insights page after merge and check each ecosystem is listed without errors.
+Read the PR diff of `.github/dependabot.yml`: each ecosystem is listed with those keys. After merge, the repository's Dependabot page shows no configuration error.
 
 ## Risk
 

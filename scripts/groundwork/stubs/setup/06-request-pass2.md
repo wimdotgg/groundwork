@@ -13,20 +13,20 @@ E6
 
 ## Scope
 
-In: run `scripts/admin/request.mjs bootstrap-pass2 --repo __REPO__` from the control repository. Out: approving the run (owner only).
+In: run `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs bootstrap-pass2 --repo __REPO__`, then add a "Setup" line to `README.md` with the pass-2 run link and its check result. Out: approving the run (owner only).
 
 ## Touches
 
-none
+`README.md`
 
 ## Acceptance criteria
 
-- [ ] AC1 The request run exists and awaits the owner's approval.
-- [ ] AC2 The task comment links the run and states the `deploy` mode.
+- [ ] AC1 `README.md` has a "Setup" line linking the `bootstrap-pass2` run.
+- [ ] AC2 The line states the run's final `check` result and the `deploy` mode in `config.json`.
 
 ## Verification plan
 
-Open the linked admin run and confirm it waits for approval.
+Open the linked run and confirm it matches the README line.
 
 ## Risk
 
