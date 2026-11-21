@@ -287,7 +287,7 @@ export async function plan(env, overrides = {}) {
     if (checked.problem !== undefined) return failure(heading, checked.problem);
     ancestry = describeAncestry(checked.aheadBy);
   }
-  const details = await planDetails({ client: deps.createClient({ env }), org, controlRepo, request });
+  const details = await planDetails({ createClient: deps.createClient, env, org, controlRepo, request });
   if (details.problem !== undefined) return failure(heading, details.problem);
   const summary = [
     `## ${heading}`,
@@ -303,10 +303,10 @@ export async function plan(env, overrides = {}) {
 }
 
 /** An op that must show the owner more than its inputs (the `script` file) exports `plan`; a refusal is its `problem`. */
-async function planDetails(options) {
-  if (typeof options.request.module.plan !== 'function') return {};
+async function planDetails({ createClient: makeClient, env, org, controlRepo, request }) {
+  if (typeof request.module.plan !== 'function') return {};
   try {
-    return await options.request.module.plan(options);
+    return await request.module.plan({ client: makeClient({ env }), org, controlRepo, request });
   } catch (error) {
     if (!(error instanceof GitHubError)) throw error;
     return { problem: error.message };
@@ -658,9 +658,11 @@ export async function apply(env, overrides = {}) {
 }
 
 /** Job outputs for later jobs, e.g. `script_sha256` (12.1). */
-async function writeOutputs(env, outputs = {}) {
+export async function writeOutputs(env, outputs = {}) {
   if (!env.GITHUB_OUTPUT) return;
-  const lines = Object.entries(outputs).map(([name, value]) => `${name}=${value}\n`);
+  const entries = Object.entries(outputs);
+  if (entries.flat().some((text) => /[\r\n]/.test(String(text)))) throw new GitHubError('job output names and values must be single lines');
+  const lines = entries.map(([name, value]) => `${name}=${value}\n`);
   await appendFile(env.GITHUB_OUTPUT, lines.join(''));
 }
 

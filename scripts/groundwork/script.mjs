@@ -22,7 +22,7 @@ const PERMISSION_LEVELS = new Set(['read', 'write']);
 const PERMISSIONS_STATEMENT = /^export const permissions = (\{[^{}]*\});[ \t]*$/gm;
 const PERMISSIONS_MENTION = /\bexport\s+const\s+permissions\b/g;
 /** Refused anywhere in the file, comments included: a comment-aware scanner would be more code than the check is worth. */
-const FORBIDDEN_TOKENS = [/\bimport\b/, /\brequire\s*\(/, /\bgetBuiltinModule\b/, /\beval\s*\(/, /\bFunction\s*\(/, /\bprocess\s*\.\s*binding\b/];
+const FORBIDDEN_TOKENS = [/\bimport\b/, /\brequire\s*\(/, /\bgetBuiltinModule\b/, /\beval\s*\(/, /\bFunction\s*\(/, /\.\s*constructor\s*\(/, /\bprocess\s*\.\s*binding\b/];
 const CHILD_ARGUMENT = '--script-child';
 const CHILD_ENV_ALLOWLIST = ['SystemRoot'];
 const CHILD_TIMEOUT_MS = 15 * 60 * 1000;
@@ -99,8 +99,8 @@ export async function plan({ client, org, controlRepo, request }) {
 /** Only the allowlisted names, none of which holds a secret. */
 const childEnvironment = (env) => Object.fromEntries(CHILD_ENV_ALLOWLIST.filter((name) => env[name] !== undefined).map((name) => [name, env[name]]));
 
-/** Runs this file as the child and resolves with its stdout once it exits; the input, token included, goes over stdin. */
-function runChild(input, env) {
+/** Runs this file as the child and resolves with its output once it exits; the input, token included, goes over stdin. Exported for the isolation test. */
+export function runChild(input, env) {
   return new Promise((resolve, reject) => {
     const flags = ['--permission', `--allow-fs-read=${SCRIPTS_ROOT}`];
     const child = spawn(process.execPath, [...flags, fileURLToPath(import.meta.url), CHILD_ARGUMENT], {
@@ -121,31 +121,44 @@ function runChild(input, env) {
   });
 }
 
-/** Every stdout line must be a protocol line; a stray `console.log` fails the run instead of passing as a record. */
+const parseLine = (line) => {
+  try {
+    const message = JSON.parse(line);
+    return PROTOCOL_TYPES.has(message?.type) ? message : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Stops at the first line that is not a protocol line: a stray `console.log` fails the run instead of passing as a record. */
 function parseProtocol(stdout) {
-  return stdout.split('\n').filter((line) => line !== '').map((line) => {
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      throw new GitHubError('script wrote a line that is not a protocol line');
-    }
-    if (!PROTOCOL_TYPES.has(message?.type)) throw new GitHubError('script wrote a line that is not a protocol line');
-    return message;
-  });
+  const messages = [];
+  for (const line of stdout.split('\n').filter((text) => text !== '')) {
+    const message = parseLine(line);
+    if (message === undefined) return { messages, problem: 'script wrote a line that is not a protocol line' };
+    messages.push(message);
+  }
+  return { messages };
 }
 
+const SUMMARY_MAX_LENGTH = 200;
+
+/** The script's text is untrusted: one printable line in a code span cannot forge a table, heading or tag in the run summary. */
+const inertSummary = (text) => `Script result: \`${text.replace(/[^\x20-\x7e]+/g, ' ').replace(/[`<>|]/g, "'").trim().slice(0, SUMMARY_MAX_LENGTH)}\``;
+
+/** Calls and logs are reported before any failure is raised, so a script that deleted something and then threw still shows the call. */
 async function runInChild(input, { env, log, recordCall }) {
   const { stdout, stderr, code, signal } = await runChild(input, env);
-  if (code !== 0) throw new GitHubError(`script exited with ${signal ?? `code ${code}`}: ${stderr.trim().split('\n').at(-1) ?? ''}`);
-  const messages = parseProtocol(stdout);
-  const results = messages.filter((message) => message.type === 'result');
-  if (results.length !== 1) throw new GitHubError('script must report exactly one result');
+  const { messages, problem } = parseProtocol(stdout);
   for (const message of messages) {
     if (message.type === 'call') recordCall({ method: message.method, path: message.path, status: message.status });
     if (message.type === 'log') log(message.line);
   }
-  return { ok: results[0].ok === true, summary: String(results[0].summary ?? '') };
+  if (code !== 0) throw new GitHubError(`script exited with ${signal ?? `code ${code}`}: ${stderr.trim().split('\n').at(-1) ?? ''}`);
+  if (problem !== undefined) throw new GitHubError(problem);
+  const results = messages.filter((message) => message.type === 'result');
+  if (results.length !== 1) throw new GitHubError('script must report exactly one result');
+  return { ok: results[0].ok === true, summary: inertSummary(String(results[0].summary ?? '')) };
 }
 
 /**

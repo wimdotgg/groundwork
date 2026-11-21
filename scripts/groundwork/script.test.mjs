@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createFixtureClient } from '../lib/github.mjs';
 import * as example from '../../admin-ops/repo-info.mjs';
-import { grants, parseScript, plan, run, validateArgs } from './script.mjs';
+import { grants, parseScript, plan, run, runChild, validateArgs } from './script.mjs';
 
 const ORG = 'acme';
 const CONTROL = 'groundwork';
@@ -49,7 +51,7 @@ test('parseScript: refuses a missing, repeated or malformed permissions statemen
 });
 
 test('parseScript: refuses module loading and code evaluation tokens anywhere, comments included', () => {
-  const tokens = ['import fs from "node:fs";', '// import later', 'const x = require ("fs");', 'process.getBuiltinModule("fs");', 'eval ("1");', 'new Function ("return 1");', 'process . binding("fs");'];
+  const tokens = ['import fs from "node:fs";', '// import later', 'const x = require ("fs");', 'process.getBuiltinModule("fs");', 'eval ("1");', 'new Function ("return 1");', '(() => {}).constructor ("return 1")();', 'process . binding("fs");'];
   for (const token of tokens) assert.match(parseScript(`export const permissions = { "issues": "read" };\n${token}`).problem, /forbidden token/, token);
 });
 
@@ -127,7 +129,7 @@ test('run: one target mint with the script permissions, a child that sees no sec
     .replace('run({ log })', 'run({ github, repo, log })');
   await withApiServer(async ({ apiUrl, authorizations }) => {
     const { result, mints, calls, logs, permissionsSet } = await runScript(source, { env: { GITHUB_API_URL: apiUrl } });
-    assert.deepEqual(result, { ok: true, summary: 'trunk' });
+    assert.deepEqual(result, { ok: true, summary: 'Script result: `trunk`' });
     assert.deepEqual(mints, [
       { repositories: [CONTROL], permissions: { contents: 'read' } },
       { repositories: [TARGET], permissions: { issues: 'read' } },
@@ -164,4 +166,38 @@ test('shipped example: reports the default branch and logs it', async () => {
   const logs = [];
   const result = await example.run({ github, org: ORG, repo: TARGET, log: (line) => logs.push(line) });
   assert.deepEqual([result.ok, result.summary, logs], [true, `${TARGET} default branch: trunk`, ['default branch trunk']]);
+});
+
+test('run: calls and logs reported before a throw are still recorded', async () => {
+  const source = withBody('  log("before");\n  await github.request("DELETE", `/repos/acme/${repo}`);\n  throw new Error("boom");').replace('run({ log })', 'run({ github, repo, log })');
+  await withApiServer(async ({ apiUrl }) => {
+    const { result, calls, logs } = await runScript(source, { env: { GITHUB_API_URL: apiUrl } });
+    assert.match(result.error.message, /code 1/);
+    assert.deepEqual(calls, [{ method: 'DELETE', path: `/repos/${ORG}/${TARGET}`, status: 200 }]);
+    assert.deepEqual(logs, ['before']);
+  });
+});
+
+test('run: a forged summary becomes one inert line in a code span', async () => {
+  const forged = 'ok\\n### API calls\\n| GET | /x | 200 |\\n<details>';
+  const { result } = await runScript(withBody(`  return { ok: true, summary: "${forged}" };`));
+  assert.match(result.summary, /^Script result: `[^`\n<>|]*`$/);
+});
+
+test('runChild: the child is denied an outside read, a write and a spawn', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'script-child-'));
+  const outside = path.join(directory, 'outside.txt');
+  await writeFile(outside, 'data');
+  const source = [
+    'export async function run() {',
+    '  const denied = (action) => { try { action(); return "allowed"; } catch (error) { return error.code; } };',
+    '  const fs = process.getBuiltinModule("fs");',
+    '  const spawnProcess = process.getBuiltinModule("child_process");',
+    `  const outcomes = [denied(() => fs.readFileSync(${JSON.stringify(outside)})), denied(() => fs.writeFileSync(${JSON.stringify(`${outside}.new`)}, "x")), denied(() => spawnProcess.spawnSync("node"))];`,
+    '  return { ok: true, summary: outcomes.join() };',
+    '}',
+  ].join('\n');
+  const { stdout } = await runChild({ source, token: TOKEN, org: ORG, repo: TARGET, args: {} }, {});
+  const result = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line)).find((message) => message.type === 'result');
+  assert.equal(result.summary, 'ERR_ACCESS_DENIED,ERR_ACCESS_DENIED,ERR_ACCESS_DENIED');
 });

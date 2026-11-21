@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createFixtureClient } from '../lib/github.mjs';
 import { repoRoot } from '../lib/config.mjs';
-import { REGISTRY, apply, materialiseSettings, plan, validateRequest, writeSummary } from './admin-run.mjs';
+import { REGISTRY, apply, materialiseSettings, plan, validateRequest, writeOutputs, writeSummary } from './admin-run.mjs';
 import { mintInstallationToken, revokeInstallationToken } from './app-token.mjs';
 
 const ORG = 'acme';
@@ -1285,6 +1285,23 @@ test('withToken: the script target grant is absent until the file is parsed, the
   await apply(scriptApplyEnv(), overrides);
   assert.deepEqual(outcomes.map((outcome) => (outcome.startsWith('withToken refused') ? 'refused' : outcome)), ['refused', 'minted', 'refused', 'refused']);
   assert.equal(mints.length, 1);
+});
+
+test('plan: an op without a plan export builds no client for it', async () => {
+  let clients = 0;
+  const overrides = { ...planOverrides({}), registry: REGISTRY, createClient: () => { clients += 1; return createFixtureClient({}); } };
+  assert.equal((await plan(dispatchEnv({ INPUT_OP: 'create-issue-types', INPUT_TARGET_REPO: '' }), overrides)).exitCode, 0);
+  assert.equal(clients, 0);
+});
+
+test('writeOutputs: appends name=value lines and refuses a line break in a name or value', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'admin-run-output-'));
+  const file = path.join(directory, 'output');
+  await writeOutputs({ GITHUB_OUTPUT: file }, { script_sha256: 'abc' });
+  assert.equal(await readFile(file, 'utf8'), 'script_sha256=abc\n');
+  await assert.rejects(writeOutputs({ GITHUB_OUTPUT: file }, { name: 'a\nevil=1' }), { name: 'GitHubError' });
+  await assert.rejects(writeOutputs({ GITHUB_OUTPUT: file }, { 'a\rb': '1' }), { name: 'GitHubError' });
+  await rm(directory, { recursive: true });
 });
 
 test('apply: a module targetRepo(env) names ctx.repo', async () => {
