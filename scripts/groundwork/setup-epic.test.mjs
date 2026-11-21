@@ -103,7 +103,6 @@ test('parseSetupTemplates accepts CRLF text', () => {
   assert.equal(tasks[0].size, 'M');
 });
 
-
 test('parseSetupTemplates rejects two files with the same task number', () => {
   assertSettingsError({ '01-other.md': TASK_ONE }, /task 01.*more than one file/);
 });
@@ -277,6 +276,15 @@ test('openSetupEpic refuses a task marker written by another author (R2)', async
   const templates = parse();
   const { client, calls } = recordingClient({
     [ISSUES_KEY]: listing(issue(10, 100, templates.epic.body), issue(6, 60, templates.tasks[0].body, 'stranger')),
+  });
+  await assert.rejects(open(client, templates), SettingsError);
+  assert.equal(writes(calls).length, 0);
+});
+
+test('openSetupEpic checks every marker before creating anything (R5)', async () => {
+  const templates = parse();
+  const { client, calls } = recordingClient({
+    [ISSUES_KEY]: listing(issue(6, 60, templates.tasks[1].body, 'stranger')),
   });
   await assert.rejects(open(client, templates), SettingsError);
   assert.equal(writes(calls).length, 0);

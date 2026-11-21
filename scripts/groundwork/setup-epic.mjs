@@ -22,7 +22,7 @@ const PLACEHOLDER_PATTERN = /__(ORG|REPO|DESCRIPTION)__/g;
 const CREATION_SPACING_MS = 12_000;
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const taskMarker =(number) => `<!-- groundwork:setup-task ${number} -->`;
+const taskMarker = (number) => `<!-- groundwork:setup-task ${number} -->`;
 
 /** One pass, so a description that itself holds `__ORG__` is not expanded again. */
 function fillPlaceholders(text, { org, repo, description }) {
@@ -148,7 +148,10 @@ export async function openSetupEpic({ client, org, repo, templates, adminBot, sl
   const createIssue = pacedIssueCreator({ client, issuesPath, sleep });
   const created = [];
 
+  // Every author check runs before the first write, so a planted marker stops the run with nothing created.
   let epic = findMarkedIssue(existing, SETUP_EPIC_MARKER, adminBot);
+  const found = new Map(templates.tasks.map((task) => [task.number, findMarkedIssue(existing, taskMarker(task.number), adminBot)]));
+
   const epicExisted = epic !== undefined;
   if (!epicExisted) {
     epic = await createIssue({ ...templates.epic, type: 'Epic' });
@@ -158,9 +161,8 @@ export async function openSetupEpic({ client, org, repo, templates, adminBot, sl
   const issues = new Map();
   const createdNow = new Set();
   for (const task of templates.tasks) {
-    const found = findMarkedIssue(existing, taskMarker(task.number), adminBot);
-    if (found !== undefined) {
-      issues.set(task.number, found);
+    if (found.get(task.number) !== undefined) {
+      issues.set(task.number, found.get(task.number));
       continue;
     }
     const { title, body, type, size } = task;
