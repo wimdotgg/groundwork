@@ -36,9 +36,11 @@ const CODE_SCANNING_RULE = 'code_scanning';
 const CODEQL_WORKFLOW_NAME = 'CodeQL';
 // Advanced-setup workflows named CodeQL have other paths; only default setup runs from this one.
 const CODEQL_DEFAULT_SETUP_PATH = 'dynamic/github-code-scanning/codeql';
-// Issue-event workflows also report head_branch main; filtering by event keeps the setup run inside one full page.
+// Issue-event workflows also report head_branch main; filtering by event drops them.
 const CODEQL_RUN_EVENT = 'dynamic';
 const RUNS_PAGE_SIZE = 100;
+// The runs endpoint serves at most 1,000 results when filtered by branch, event or status: 10 pages of 100.
+const MAX_RUN_PAGES = 10;
 const DEFAULT_CODEQL_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_POLL_MS = 15 * 1000;
 const SETUP_READBACK_ATTEMPTS = 10;
@@ -92,6 +94,19 @@ export async function enableDefaultSetup({ client, org, repo, sleep = DEFAULT_DE
   throw new GitHubError(`code scanning default setup on ${org}/${repo} is not configured after the PATCH`);
 }
 
+// Dependabot update jobs also run as `dynamic`, so the setup run can sit behind many full pages.
+async function findDefaultSetupRun(client, repoRef) {
+  for (let page = 1; page <= MAX_RUN_PAGES; page += 1) {
+    const query = { branch: MAIN_BRANCH, status: 'completed', event: CODEQL_RUN_EVENT, per_page: RUNS_PAGE_SIZE };
+    if (page > 1) query.page = page;
+    const runs = (await get(client, `${REPO_PATH}/actions/runs`, repoRef, { query })).data?.workflow_runs ?? [];
+    // Default setup names its run "CodeQL Setup", so the path is the only stable key.
+    const found = runs.find((candidate) => candidate.path === CODEQL_DEFAULT_SETUP_PATH);
+    if (found || runs.length < RUNS_PAGE_SIZE) return found;
+  }
+  return undefined;
+}
+
 /**
  * The bound counts the sleeps, so tests need no clock.
  * @param {{ client: GitHubClient, org: string, repo: string, timeoutMs?: number, pollMs?: number,
@@ -102,11 +117,7 @@ export async function waitForFirstCodeqlRun({
   client, org, repo, timeoutMs = DEFAULT_CODEQL_TIMEOUT_MS, pollMs = DEFAULT_POLL_MS, sleep = DEFAULT_DEPENDENCIES.sleep,
 }) {
   for (let waited = 0; ; waited += pollMs) {
-    const response = await get(client, `${REPO_PATH}/actions/runs`, { owner: org, repo }, {
-      query: { branch: MAIN_BRANCH, status: 'completed', event: CODEQL_RUN_EVENT, per_page: RUNS_PAGE_SIZE },
-    });
-    // Default setup names its run "CodeQL Setup", so the path is the only stable key.
-    const found = (response.data?.workflow_runs ?? []).find((candidate) => candidate.path === CODEQL_DEFAULT_SETUP_PATH);
+    const found = await findDefaultSetupRun(client, { owner: org, repo });
     if (found) return { runId: found.id, conclusion: found.conclusion };
     if (waited + pollMs > timeoutMs) {
       throw new GitHubError(`no completed ${CODEQL_WORKFLOW_NAME} run on main in ${org}/${repo} within ${timeoutMs} ms`);

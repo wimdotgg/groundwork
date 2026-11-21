@@ -286,6 +286,27 @@ test('waitForFirstCodeqlRun matches the default-setup run by path, whatever its 
   assert.deepEqual(found, { runId: 12, conclusion: 'success' });
 });
 
+test('AC1, AC3: waitForFirstCodeqlRun finds the setup run on page 2 behind 100 other dynamic runs in two calls', async () => {
+  const dependabotRuns = Array.from({ length: 100 }, (_, index) => codeqlRun({ id: 1000 + index, path: 'dynamic/dependabot/dependabot-updates' }));
+  const routes = routesFor();
+  routes[`GET ${RUNS_PATH}`] = [{ status: 200, data: { total_count: 101, workflow_runs: dependabotRuns } }];
+  routes[`GET ${RUNS_PATH}&page=2`] = [{ status: 200, data: { total_count: 101, workflow_runs: [codeqlRun({ id: 77 })] } }];
+  const { client, calls } = recordingClient(routes);
+  const found = await waitForFirstCodeqlRun({ client, org: 'wimdotgg', repo: 'widget', sleep: instantSleep });
+  assert.deepEqual(found, { runId: 77, conclusion: 'success' });
+  assert.equal(calls.filter((call) => call.includes('/actions/runs')).length, 2);
+});
+
+test('AC3: waitForFirstCodeqlRun reads at most a bounded number of pages per poll', async () => {
+  const fullPage = Array.from({ length: 100 }, (_, index) => codeqlRun({ id: index, path: 'dynamic/dependabot/dependabot-updates' }));
+  const routes = routesFor();
+  routes[`GET ${RUNS_PATH}`] = { status: 200, data: { total_count: 100000, workflow_runs: fullPage } };
+  for (let page = 2; page <= 50; page += 1) routes[`GET ${RUNS_PATH}&page=${page}`] = routes[`GET ${RUNS_PATH}`];
+  const { client, calls } = recordingClient(routes);
+  await assert.rejects(() => waitForFirstCodeqlRun({ client, org: 'wimdotgg', repo: 'widget', timeoutMs: 5, pollMs: 10, sleep: instantSleep }), GitHubError);
+  assert.equal(calls.filter((call) => call.includes('/actions/runs')).length, 10);
+});
+
 test('waitForFirstCodeqlRun asks for dynamic runs only, a full page, so issue-event runs cannot push it out', async () => {
   const { client, calls } = recordingClient(routesFor());
   await waitForFirstCodeqlRun({ client, org: 'wimdotgg', repo: 'widget', sleep: instantSleep });
