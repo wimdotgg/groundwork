@@ -212,6 +212,7 @@ test('report: a task title appears only for a trusted author', () => {
 });
 
 const COMMENTS = 'GET /repos/o/r/issues/500/comments?per_page=100';
+const WORKFLOW = 'github-actions[bot]';
 const POST_COMMENT = 'POST /repos/o/r/issues/500/comments';
 const PATCH_COMMENT = 'PATCH /repos/o/r/issues/comments/55';
 
@@ -247,6 +248,14 @@ test('post: an identical report writes nothing', async () => {
   const { client, writes } = recordingClient({ [COMMENTS]: ok([marked('same')]) });
   assert.equal(await upsert(client, 'same\n<!-- groundwork:plan-lint -->\n'), 'unchanged');
   assert.deepEqual(writes, []);
+});
+
+test('post: the workflow bot and the agent App update each other report, never one from another author', async () => {
+  for (const [author, updater] of [[AGENT, WORKFLOW], [WORKFLOW, AGENT]]) {
+    const { client, writes } = recordingClient({ [COMMENTS]: ok([marked('old', author)]), [PATCH_COMMENT]: ok({}) });
+    assert.equal(await upsert(client, 'new\n<!-- groundwork:plan-lint -->\n'), 'updated', `${author} then ${updater}`);
+    assert.deepEqual(writes.map((write) => write.method), ['PATCH']);
+  }
 });
 
 test('post: a marker from another author is ignored, so a new comment is created', async () => {
@@ -416,12 +425,21 @@ test('close: not planned without a decision line fails, with one passes, and #4 
   const unexplained = [task(40, { state: 'closed', stateReason: 'not_planned' })];
   assert.deepEqual(closeFailures(unexplained), [['not-planned-without-reason', 40]]);
   assert.deepEqual(closeFailures(unexplained, acceptance(), '- #40 dropped'), []);
+  assert.deepEqual(closeFailures(unexplained, acceptance(), '- Split from #40 after review'), [['not-planned-without-reason', 40]]);
 });
 
-test('close: a closed spike without a decision line fails, naming the issue or its decision file passes', () => {
+test('close: a close reason other than completed needs the reason line', () => {
+  for (const stateReason of ['duplicate', null]) {
+    const nodes = [task(8, { state: 'closed', stateReason })];
+    assert.deepEqual(closeFailures(nodes), [['not-planned-without-reason', 8]], String(stateReason));
+    assert.deepEqual(closeFailures(nodes, acceptance(), '- #8 superseded by #2'), []);
+  }
+});
+
+test('close: a closed spike needs a line linking its decision file; a bare #N mention does not count', () => {
   const spike = [task(7, { state: 'closed', stateReason: 'completed', type: 'Spike' })];
   assert.deepEqual(closeFailures(spike), [['spike-without-decision', 7]]);
-  assert.deepEqual(closeFailures(spike, acceptance(), '- 2026-11-21: spike #7 chose A'), []);
+  assert.deepEqual(closeFailures(spike, acceptance(), '- 2026-11-21: #7 claimed by session x'), [['spike-without-decision', 7]]);
   assert.deepEqual(closeFailures(spike, acceptance(), '- 2026-11-21: see docs/decisions/7-choice.md'), []);
   assert.deepEqual(closeFailures(spike, acceptance(), '- 2026-11-21: see docs/decisions/17-choice.md'), [['spike-without-decision', 7]]);
 });
@@ -430,6 +448,23 @@ test('close: an epic criterion missing from the acceptance table fails, and so d
   assert.deepEqual(closeFailures(closeNodes(), acceptance(['E1'])), [['unmapped-criterion', null]]);
   const blank = { body: '| Criterion | Evidence |\n|---|---|\n| E1 a | PR #9 |\n| E2 b |  |\n' };
   assert.deepEqual(closeFailures(closeNodes(), blank), [['unmapped-criterion', null]]);
+});
+
+test('close: evidence of none, a dash, n/a or a leftover placeholder does not map a criterion', () => {
+  for (const evidence of ['none', '-', 'N/A', '_No response_', '<evidence>', 'see <link>']) {
+    const row = { body: ['| Criterion | Evidence |', '|---|---|', '| E1 a | PR #9 |', `| E2 b | ${evidence} |`].join('\n') };
+    assert.deepEqual(closeFailures(closeNodes(), row), [['unmapped-criterion', null]], evidence);
+  }
+});
+
+test('close: a row naming an epic criterion that does not exist fails', () => {
+  assert.deepEqual(closeFailures(closeNodes(), acceptance(['E1', 'E2', 'E9'])), [['unknown-criterion', null]]);
+});
+
+test('close: an epic with no sub-issues or no criteria fails', () => {
+  assert.deepEqual(closeFailures([], acceptance()), [['empty-epic', null]]);
+  const noCriteria = lintClose({ nodes: closeNodes(), epicCriteria: [], decisions: DECISIONS }, { body: '| Criterion | Evidence |\n|---|---|\n' });
+  assert.deepEqual(codes(noCriteria), ['empty-epic']);
 });
 
 test('close: no acceptance comment fails once, whatever the criteria', () => {
@@ -453,6 +488,14 @@ test('closeLint: the acceptance comment must come from the agent account', async
   assert.deepEqual(codes(forged.failures), ['spike-without-decision', 'not-planned-without-reason', 'no-acceptance-comment']);
 });
 
+test('closeLint: an agent comment without the acceptance marker, or the workflow bot marked one, is not the acceptance comment', async () => {
+  const unmarked = acceptanceComment(AGENT, acceptanceBody().replace('<!-- groundwork:acceptance -->', ''));
+  for (const comment of [unmarked, acceptanceComment(WORKFLOW)]) {
+    const context = { client: createFixtureClient(closeRoutes(closeNodes(), [comment])), repo: REPO, config };
+    assert.ok(codes((await closeLint(context, { epic: EPIC })).failures).includes('no-acceptance-comment'));
+  }
+});
+
 test('main --close: exit 0 when the epic is ready to close, 1 with the failures in --json otherwise', async () => {
   const ready = await runMain([String(EPIC), '--close', '--json'], closeRoutes([task(1, { state: 'closed', stateReason: 'completed' })], [acceptanceComment()]));
   assert.equal(ready.exitCode, 0);
@@ -460,7 +503,8 @@ test('main --close: exit 0 when the epic is ready to close, 1 with the failures 
   const open = await runMain([String(EPIC), '--close', '--json'], closeRoutes([task(1)], [acceptanceComment()]));
   assert.equal(open.exitCode, 1);
   assert.deepEqual(codes(JSON.parse(open.out[0]).failures), ['open-sub-issue']);
-  assert.deepEqual(open.err, ['1 planning failure']);
+  assert.deepEqual(open.err, ['1 close failure']);
+  assert.equal(JSON.parse(open.out[0]).reason, '1 close failure');
 });
 
 test('main --close: the plain report names the failing sub-issue', async () => {

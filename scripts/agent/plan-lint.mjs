@@ -23,7 +23,11 @@ import './token.mjs'; // exits on an unsupported Node before the script runs
 const REPO_PATH = '/repos/{owner}/{repo}';
 const PLAN_MARKER = 'plan-lint';
 const ACCEPTANCE_MARKER = 'acceptance';
-const NOT_PLANNED = 'not_planned';
+const COMPLETED = 'completed';
+const WORKFLOW_LOGIN = 'github-actions[bot]';
+const NOT_PLANNED_REASON = /not planned|dropped|won'?t|superseded|duplicate|obsolete|no longer|cancel/i;
+const EMPTY_EVIDENCE = /^(none|-|n\/a|_no response_)?$/i;
+const PLACEHOLDER = /<[^>]+>/;
 const TEMPLATE_FILE = 'templates/plan-comment.md';
 const USAGE = 'usage: plan-lint.mjs <epic> [--post | --close] [--json]';
 const FIRST_TASK_LEVEL = 2;
@@ -317,7 +321,7 @@ export function renderReport({ epic, plan, failures }, template) {
   return `${text.trimEnd()}\n`;
 }
 
-const findAgentComment = (comments, marker, config) => comments.findLast((comment) => sameLogin(comment.user?.login, config.accounts.agent)
+const findMarkedComment = (comments, marker, logins) => comments.findLast((comment) => logins.some((login) => sameLogin(comment.user?.login, login))
   && hasMarker(comment.body ?? '', marker));
 
 /**
@@ -328,7 +332,7 @@ const findAgentComment = (comments, marker, config) => comments.findLast((commen
  */
 export async function upsertReport({ client, repo, config }, { epic, body }) {
   const commentsPath = apiPath(`${REPO_PATH}/issues/{number}/comments`, { ...repo, number: epic });
-  const existing = findAgentComment(await client.paginate(commentsPath), PLAN_MARKER, config);
+  const existing = findMarkedComment(await client.paginate(commentsPath), PLAN_MARKER, [config.accounts.agent, WORKFLOW_LOGIN]);
   if (!existing) {
     await client.request('POST', commentsPath, { body: { body } });
     return 'created';
@@ -338,48 +342,59 @@ export async function upsertReport({ client, repo, config }, { epic, body }) {
   return 'updated';
 }
 
-// A decision line names its issue as `#N`, or a spike by its `docs/decisions/N-<slug>.md` file.
-const namesIssue = (text, number) => new RegExp(`(?<![\\w/])#${number}(?!\\d)|docs/decisions/${number}-`).test(text);
+const namesIssue = (line, number) => new RegExp(`(?<![\\w/])#${number}(?!\\d)`).test(line);
+const linksDecision = (decisions, number) => decisions.includes(`docs/decisions/${number}-`);
+// A reason line names the issue and says why it left the plan; a bare mention such as "claimed by" is not one.
+const givesReason = (decisions, number) => decisions.split(/\r?\n/).some((line) => namesIssue(line, number) && NOT_PLANNED_REASON.test(line));
 
 const closeFailure = (code, task, message) => ({ code, task, message });
 
 function subIssueCloseFailures({ number, state, stateReason, type }, decisions) {
   if (state === 'open') return [closeFailure('open-sub-issue', number, `#${number} is still open`)];
-  if (namesIssue(decisions, number)) return [];
-  if (stateReason === NOT_PLANNED) {
-    return [closeFailure('not-planned-without-reason', number, `#${number} is closed as not planned and no line in the epic's ## Decisions gives the reason`)];
+  if (stateReason !== COMPLETED) {
+    if (givesReason(decisions, number)) return [];
+    return [closeFailure('not-planned-without-reason', number, `#${number} is closed as ${stateReason ?? 'no reason'}; the epic's ## Decisions needs a line naming #${number} with the reason`)];
   }
-  if (type === 'Spike') {
-    return [closeFailure('spike-without-decision', number, `spike #${number} has no line in the epic's ## Decisions naming it or docs/decisions/${number}-<slug>.md`)];
+  if (type === 'Spike' && !linksDecision(decisions, number)) {
+    return [closeFailure('spike-without-decision', number, `spike #${number} has no line in the epic's ## Decisions linking docs/decisions/${number}-<slug>.md`)];
   }
   return [];
 }
 
-/** Epic criteria that have a row with evidence in the acceptance table. */
-function mappedCriteria(acceptance) {
-  const rows = parseTable(acceptance).filter((row) => (row.Evidence ?? '') !== '');
-  return new Set(rows.map((row) => /^E\d+/.exec(row.Criterion ?? '')?.[0]).filter(Boolean));
-}
+const criterionOf = (row) => /^E\d+/.exec(row.Criterion ?? '')?.[0];
+const hasEvidence = (row) => !EMPTY_EVIDENCE.test(row.Evidence ?? '') && !PLACEHOLDER.test(row.Evidence);
 
 function acceptanceFailures(acceptance, epicCriteria) {
   if (acceptance === null) return [closeFailure('no-acceptance-comment', null, 'no acceptance comment from the agent account on the epic')];
-  const mapped = mappedCriteria(acceptance.body);
-  return epicCriteria
-    .filter((id) => !mapped.has(id))
-    .map((id) => closeFailure('unmapped-criterion', null, `epic criterion ${id} has no evidence row in the acceptance comment`));
+  const rows = parseTable(acceptance.body).filter((row) => criterionOf(row) !== undefined);
+  const mapped = new Set(rows.filter(hasEvidence).map(criterionOf));
+  const unknown = [...new Set(rows.map(criterionOf))].filter((id) => !epicCriteria.includes(id));
+  return [
+    ...epicCriteria
+      .filter((id) => !mapped.has(id))
+      .map((id) => closeFailure('unmapped-criterion', null, `epic criterion ${id} has no evidence row in the acceptance comment`)),
+    ...unknown.map((id) => closeFailure('unknown-criterion', null, `the acceptance comment maps ${id}, which the epic does not have`)),
+  ];
+}
+
+function emptyEpicFailures({ nodes, epicCriteria }) {
+  if (nodes.length > 0 && epicCriteria.length > 0) return [];
+  return [closeFailure('empty-epic', null, 'the epic has no sub-issues or no E criteria, so there is nothing to close against')];
 }
 
 /**
- * The 4.5 epic close failures: every sub-issue closed (not planned only with a reason in `## Decisions`), every
- * closed spike recorded there, every epic criterion mapped to evidence in the acceptance comment.
+ * The 4.5 epic close failures: every sub-issue closed as completed (anything else needs a reason line in
+ * `## Decisions`), every closed spike linked there, every epic criterion mapped to evidence in the acceptance comment.
+ * "Decisions log current" is otherwise left to the owner.
  * @param {{ nodes: PlanNode[], epicCriteria: string[], decisions: string }} plan
  * @param {{ body: string }|null} acceptance the newest acceptance comment
  * @returns {Failure[]}
  */
-export function lintClose({ nodes, epicCriteria, decisions }, acceptance) {
+export function lintClose(plan, acceptance) {
   return [
-    ...nodes.flatMap((node) => subIssueCloseFailures(node, decisions)),
-    ...acceptanceFailures(acceptance, epicCriteria),
+    ...emptyEpicFailures(plan),
+    ...plan.nodes.flatMap((node) => subIssueCloseFailures(node, plan.decisions)),
+    ...acceptanceFailures(acceptance, plan.epicCriteria),
   ];
 }
 
@@ -393,7 +408,7 @@ export async function closeLint(context, { epic }) {
   const { client, repo, config } = context;
   const plan = await loadPlan(context, epic);
   const comments = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/comments`, { ...repo, number: epic }));
-  const failures = lintClose(plan, findAgentComment(comments, ACCEPTANCE_MARKER, config) ?? null);
+  const failures = lintClose(plan, findMarkedComment(comments, ACCEPTANCE_MARKER, [config.accounts.agent]) ?? null);
   const result = failures.length === 0 ? 'pass' : `fail (${failures.length})`;
   const lines = failures.map((failure) => `- ${failure.code}: ${failure.message}`);
   return { epic, tasks: plan.nodes.length, failures, report: [`Epic close #${epic}: ${result}`, ...lines].join('\n') };
@@ -436,9 +451,9 @@ export function parseArguments(argv) {
   return { epic, post: parsed.values.post === true, close: parsed.values.close === true, json: parsed.values.json === true };
 }
 
-function reportResult({ report, posted, ...fields }, { json }) {
+function reportResult({ report, posted, ...fields }, { json, close }) {
   const count = fields.failures.length;
-  const reason = `${count} planning failure${count === 1 ? '' : 's'}`;
+  const reason = `${count} ${close ? 'close' : 'planning'} failure${count === 1 ? '' : 's'}`;
   if (json) console.log(JSON.stringify({ ok: count === 0, ...(count === 0 ? {} : { reason }), ...fields, posted }));
   else console.log(removeMarker(report, PLAN_MARKER).trimEnd());
   if (count > 0) console.error(reason);
@@ -473,7 +488,7 @@ export async function main(argv, env, buildContext = createContext) {
     const request = parseArguments(argv);
     const context = await buildContext(env);
     const result = request.close ? await closeLint(context, request) : await planLint(context, request);
-    reportResult(result, { json });
+    reportResult(result, { json, close: request.close });
     return result.failures.length === 0 ? 0 : 1;
   } catch (error) {
     reportError(error instanceof Error ? error.message.split(/\r?\n/)[0] : 'plan-lint: failed', { json });
