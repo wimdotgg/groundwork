@@ -8,7 +8,9 @@ Date: 2026-11-21. Epic #167, task #178, `main` at `192c481`. Every run is an `ad
 | `bootstrap-pass2` | [44943060298](https://github.com/wimdotgg/groundwork/actions/runs/44943060298) | pass: default setup `configured`, CodeQL run 44943147788 `success`, `code_scanning` rule added |
 | `check` after pass 2 | [44943368540](https://github.com/wimdotgg/groundwork/actions/runs/44943368540) | pass: 88 rows, 87 match, 1 deferred |
 
-The `check` summary lists only mismatching rows, so the deferred rows are not named in it. A read-only local replay of `runCheck` at the same `main` (GET requests only, owner `gh` login, because the agent token cannot read ruleset bypass actors) named them:
+Pass 2 sent `PATCH code-scanning/default-setup` (202) and logged `code_scanning rule: added`, so before it default setup was off and the rule absent.
+
+The `check` summary lists only mismatching rows, so it does not name the deferred rows. As supplementary evidence, the orchestrator ran a read-only local replay of `runCheck` at the same `main` (GET requests only, owner `gh` login for reads, because the agent token cannot read ruleset bypass actors). It named them:
 
 - Before pass 2: `security code_scanning_default_setup.state`, `variables DEPLOY_ENABLED`, `rulesets main.rules.code_scanning`.
 - After pass 2: `variables DEPLOY_ENABLED`. `config.json` keeps `"deploy": "none"`, so the variable stays unset.
