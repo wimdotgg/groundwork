@@ -11,7 +11,7 @@ Values below use the current org `wimdotgg`, owner `wianvdm` and agent App `wimd
 1. Create a free organization at https://github.com/organizations/plan.
 2. Open https://github.com/organizations/wimdotgg/settings/security and require two-factor authentication.
 3. Open https://github.com/organizations/wimdotgg/settings/member_privileges: set Base permissions to Read and turn off repository creation for members (bootstrap creates repos).
-4. Open https://github.com/organizations/wimdotgg/settings/personal-access-tokens: allow fine-grained tokens and require administrator approval.
+4. Open https://github.com/organizations/wimdotgg/settings/personal-access-tokens: require administrator approval for fine-grained tokens. No groundwork identity uses a PAT; this only gates tokens members create.
 5. Open https://github.com/organizations/wimdotgg/settings/actions: require actions pinned to a full-length commit SHA. Set fork pull request workflows to "Require approval for all external contributors" and leave "Allow GitHub Actions to create and approve pull requests" off. `apply-settings` also sets these per repository.
 
 Verify: each page shows the value you set after a reload.
@@ -120,4 +120,6 @@ Available now for existing repos: `apply-settings --repo <name> [--ref <sha>]` (
 
 - Secrets live only in environments restricted to `main` or `v*` tags. PR runs and other branches reach none.
 - `admin` needs your approval on every run and always executes `admin-run.yml` from `main`; code under `.github/`, `scripts/groundwork/`, `scripts/lib/` and `admin-ops/` reaches `main` only with your CODEOWNERS approval.
-- Owner-only tier 3 tasks, always in the browser: creating Apps, secret values, PAT rotation (every 90 days), billing, org ownership.
+- Owner-only tier 3 tasks, always in the browser: creating Apps, secret values, App private key rotation, billing, org ownership.
+
+Rotate a key in the App settings: generate a new one, store it where the old one lives, delete the old one. The agent key lives on the agent machine (part 1, section 3, step 4). The admin key is `ADMIN_APP_KEY` in the `admin` environment. The release key is `RELEASE_APP_KEY` in the `admin` environment: update that secret, run `apply-settings --repo <name>` for `groundwork` and each project so the `release` environment copies refresh, then delete the old key. Prove each by its next use: `token.mjs exec`, an `admin` run, the next release-please run.
