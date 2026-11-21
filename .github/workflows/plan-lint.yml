@@ -2,7 +2,7 @@ name: plan-lint
 
 on:
   issues:
-    types: [opened, edited, labeled]
+    types: [opened, edited, labeled, typed]
   workflow_dispatch:
     inputs:
       epic:
