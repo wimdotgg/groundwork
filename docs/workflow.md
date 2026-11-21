@@ -48,6 +48,14 @@ A worker session runs these as `node scripts/agent/<name>.mjs` on Node 24+. Ever
 
 Marking ready and enqueueing (`gh pr ready`, `gh pr merge N --auto --squash`) also run through the wrapper. The session id is the harness session id, so the hooks match the PR footer. Subagents share their parent's id and fire no hooks; parallel workers are separate top-level sessions. Exit 3 from `resume`, `checkpoint` or `release --decision` means the PR footer names another session: stop. Exit 3 from `claim` means held or not ready: run `next` again. Details in [6.3, 6.4](spec.md) and [13](spec.md).
 
+Planner and reviewer sessions use two more scripts, driven by the `groundwork-planner` and `groundwork-reviewer` skills:
+
+| Role | Command | Does |
+|---|---|---|
+| Planner | `plan-lint N [--post]` | Lints the epic's plan and prints lane width; `--post` creates or updates the one report comment. `plan-lint.yml` posts it on epic events too |
+| Planner | `plan-lint N --close` | Checks the epic against the close list (4.5) before you close it; writes nothing |
+| Reviewer | `review-queue` | Ready PRs with no review from the agent account on the current head, and Dependabot PRs |
+
 Sections: planning [6.2](spec.md), worker loop [6.3](spec.md), PR contract [7](spec.md), CI [8](spec.md), rulesets [9](spec.md), releases [11](spec.md).
 
 ## Your touchpoints
@@ -63,7 +71,7 @@ Everything else merges on green checks through the queue.
 
 ## Your inbox
 
-`scripts/human/inbox` lists what waits for you: epics to accept, `needs-decision` issues, PRs on protected paths, release PRs, alert issues. Arrives in Phase 3.
+`node scripts/agent/token.mjs exec -- node scripts/human/inbox.mjs` lists what waits for you: epics to accept, `needs-decision` issues, PRs on protected paths awaiting your approval, the release PR, pending `production` and `admin` approvals, alert issues, orphaned claims. `--json` prints the sections. A section the App cannot read prints `unreadable` (403 or 404). It prints links; you act in the browser.
 
 ## Admin tiers
 

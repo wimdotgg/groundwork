@@ -268,6 +268,14 @@ An Epic carrying a valid `accepted` is never `proposed`: it is `blocked` or `rea
 - Acceptance comment maps every E criterion to evidence
 - Decisions log current
 
+`plan-lint --close` checks these rules and writes nothing; closing stays with you:
+- Every sub-issue is closed. One closed as anything but completed needs a line in the epic's `## Decisions` that names its number and gives a reason (for example "not planned", "dropped", "superseded").
+- A closed spike needs a `## Decisions` line linking `docs/decisions/<N>-<slug>.md`.
+- The acceptance comment (from the agent account, marker `acceptance`) has an evidence row for every E criterion; empty, `none`, `-` and `n/a` cells do not count, and a row for an unknown criterion fails.
+- An epic with no sub-issues or no E criteria fails.
+
+The rest of "Decisions log current" stays with you.
+
 ### 4.6 Hotfix lane
 
 A Bug with `priority:p0` applied by you skips epic acceptance: no parent required, `next` ranks it first, `PR metadata` accepts it without an accepted epic. After merge you merge the release PR for a patch release.
@@ -313,6 +321,8 @@ That removal is hygiene, not the gate: a removal by `GITHUB_TOKEN` fires no `unl
 | Reviewer | Reviews PRs opened by another session; posts comment reviews | Approves or requests changes (GitHub forbids both on a PR from the same account) |
 
 Review threads must be resolved before merge (ruleset). The worker resolves each thread after fixing or answering it and records it in `## Review log`; that is how advisory findings (D12) get closed without the reviewer holding a veto.
+
+A review starts with `Reviewer: <model>/<harness> · session <id>` (first or last non-empty line); `review-queue` (13) clears a PR only for a review with that line on its current head.
 
 Roles are prompts packaged as `.claude/skills/groundwork-*` and described in `AGENTS.md`. All roles act as the agent App (2.2); the session id separates them.
 
@@ -511,7 +521,7 @@ The validator scripts and `.github/groundwork/config.json` are checked out from 
 |---|---|---|
 | `issue-format.yml` | `issues`: opened, edited, reopened, typed, untyped | Validates headings for the type and unique criterion IDs. Invalid (or no type): adds `needs-format` and posts or updates one comment with the errors. Valid: removes `needs-format`. Permissions `issues: write`. The parent link is not checked here: it is added after creation and fires no `issues` event, so `plan-lint`, `next` and `PR metadata` check parent and depth instead. |
 | `protected-labels.yml` | `issues`: labeled; `pull_request_target`: labeled, synchronize, reopened | Removes protected labels applied by anyone but their required actor (section 5; `github.event.sender.login`, V9), and removes `no-issue` on every `synchronize` and `reopened` (hygiene; the freshness rule in 8.3 is the gate). Checks out nothing from the PR and only calls the API. Permissions `issues: write`, `pull-requests: write`. |
-| `plan-lint.yml` | `issues`: opened, edited, labeled, filtered to type Epic by a job `if`; `workflow_dispatch` with input `epic` | Runs `plan-lint` and posts or updates one report comment on the epic. Permissions `issues: write`. |
+| `plan-lint.yml` | `issues`: opened, edited, labeled, typed, filtered to type Epic by a job `if`; `workflow_dispatch` with input `epic` | Runs `plan-lint --post` and posts or updates one report comment on the epic. The step fails only on an API or usage error: a lint failure (output with a `failures` key) still exits the step green, so a bad plan never turns the check red. The report comment is shared with the planner: the lookup accepts a marked comment from the agent App or `github-actions[bot]` and no other login, so the App's `--post` finds the workflow's comment and reports `unchanged`. Permissions `issues: write`. |
 
 ### 8.5 Release and operations workflows
 
@@ -636,7 +646,7 @@ Consequence: a bad release tag cannot be moved or deleted by anyone, including y
 /.release-please-manifest.json  @wianvdm
 /version.txt                    @wianvdm
 ```
-Projects append their test, lint and coverage config paths. The four scanner configs are protected because the scanners read them from the PR checkout, so an unprotected edit could silence a finding.
+`inbox` matches protected-path PRs against the working copy of `.github/CODEOWNERS`, while GitHub reads it from the base branch; a PR that edits CODEOWNERS is listed by the old rules until it merges. Projects append their test, lint and coverage config paths. The four scanner configs are protected because the scanners read them from the PR checkout, so an unprotected edit could silence a finding.
 Release PRs touch the manifest and `version.txt`, so they need your approval; you merge them anyway (section 11). `scripts/groundwork/` is protected because `admin-run` executes it (bootstrap, check, app-token) with the admin App token; unprotected, a merged agent PR would run with admin rights at your next approval. `scripts/agent/`, `scripts/admin/` and `kit-update.mjs` are deliberately unprotected: they run with the agent's own credentials and gate nothing. `scripts/deploy`, `scripts/smoke` and `scripts/rollback` run with `production` secrets, but only after your approval of each deploy.
 
 ### 9.5 `issue-branches`
@@ -776,9 +786,9 @@ Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent mac
 | `agent/checkpoint.mjs` | `--session <id>`, `--input <path>`, `--auto` (hook mode: no-op unless on `issue/N` with a draft PR; pushes even without an input file), `--json` | Push, rewrite `## State`, journal comment. Exit 0 done or `--auto` no-op, 1 refused or error, 3 footer names another session. A footer-less PR exits 1; a non-auto run on a ready PR is allowed. `--auto` without a session id from flag, env or hook stdin `session_id` is a no-op (exit 0) |
 | `agent/resume.mjs` | `N`, `--session <id>` (optional), `--json` | Bounded briefing (6.5), no writes. Exit 0, 3 the PR footer names another session, 1 error or, with `--session`, a PR without a footer. Re-reads the PR body, because `loadIssueFacts` exposes none |
 | `agent/release.mjs` | `N`, `--decision` or `--merged`, `--session <id>`, `--json` | Releases claim or posts handover; a rerun changes nothing. Exit 0, 1 refused (`--merged` on an unmerged PR, `--decision` on a closed PR, or neither or both modes) or error, 3 `--decision` and the footer names another session |
-| `agent/plan-lint.mjs` | epic number, `--close` | Lint report; exit non-zero on failure |
-| `agent/review-queue.mjs` | | PRs ready for review without a review from another session |
-| `human/inbox.mjs` | | Proposed epics, `needs-decision`, protected-path PRs awaiting you, release PR, pending `production` and `admin` approvals, alert issues, orphaned claims. Run by an agent with the PAT; it prints links you open in the browser. |
+| `agent/plan-lint.mjs` | epic number, `--post` or `--close` (not both), `--json` | Planning lint (6.2) or, with `--close`, the 4.5 epic close check; reads only. `--post` creates or updates the one report comment, found by the hidden marker `<!-- groundwork:plan-lint -->`, from `templates/plan-comment.md` (keys `epic`, `result`, `width`, `lanes`, `failures`). `--close` reports from the same `failures` shape and posts nothing; its acceptance template `templates/acceptance-comment.md` has keys `criteria` and `gaps` and marker `acceptance`. `--json`: `{ ok, reason?, epic, tasks, width?, failures[], posted }` (`posted` is `created`, `updated`, `unchanged` or `null`). Exit 0 clean; 1 on a lint failure (`--json` carries `failures`) and on an error (`{ ok: false, reason }`, no `failures`), so callers tell them apart by the `failures` key. |
+| `agent/review-queue.mjs` | `--json` | Open ready PRs that need a review, and Dependabot PRs with green checks for the reviewer to enqueue. A PR is reviewed only when the agent account posted a review on its current head SHA whose first or last non-empty line is `Reviewer: <model>/<harness> · session <id>`; any push reopens it. `--json`: `{ ok, review[], dependabot[] }`. Exit 0 whenever it answers, 1 error. It does not exclude the caller's own session (the reviewer drops entries whose PR footer names its own); PRs without an agent footer (owner, release-please) are always listed. A Dependabot entry is minor or patch only; entries touching `.github/` carry no owner-approval note. Only the agent account's reviews count, so a separate reviewer App (`apps.reviewer`) needs a `review-queue` change first. |
+| `human/inbox.mjs` | `--json` | Proposed epics, `needs-decision`, protected-path PRs awaiting you (owner-approved on head, matched against the working copy of `.github/CODEOWNERS`), release PR, pending `production` and `admin` approvals, alert issues, orphaned claims. Run by an agent with the agent App token (reads only); it prints links you open in the browser. `--json`: `{ ok, empty, sections[{ key, heading, items[{ title, url, detail? }], unreadable? }] }`. A section the token cannot read (403 or 404) is `unreadable` and exits 0; any other error exits 1. Titles from untrusted authors are fenced. |
 | `admin/request.mjs` | `op` (`apply-settings`, `check`, `create-issue-types`, `probe`), `--repo`, `--ref` (`apply-settings`; defaults to the target `main` head), `--args` | Dispatches `admin-run` on `main` of `groundwork` (org and control repo name from `config.json`); prints the run URL to approve. `request.mjs probe --repo <r>` dispatches nothing: it runs the push probe below locally with the PAT, no approval. |
 | `ci/*.mjs` | event payload path, env | CI validators (section 8); contracts in 13.1 |
 | `lib/*.mjs` | | Shared modules; contracts in 13.1 |
@@ -1129,7 +1139,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 **Out of scope:** language-specific tooling beyond the `scripts/verify` contract; infrastructure-as-code, databases, migrations and backups (rollback covers code, not data); private or sensitive code; multi-person teams; monorepos with several deployables; app-store and signed desktop builds; the agent runtime itself.
 
-**Later:** preview deployments per PR; production monitoring beyond failure alerts; a metrics view (rework rate, flake rate, queue ejections, time to merge); optional quality gates in `scripts/verify` (coverage floors, performance budgets, accessibility, visual regression); ADRs beyond spike decision records and epic decision logs; a separate rules repo (D3).
+**Later:** preview deployments per PR; production monitoring beyond failure alerts; a metrics view (rework rate, flake rate, queue ejections, time to merge); optional quality gates in `scripts/verify` (coverage floors, performance budgets, accessibility, visual regression); ADRs beyond spike decision records and epic decision logs; a separate rules repo (D3); moving `isUnder` and `namesHotspot`, exported from `agent/next.mjs` for `plan-lint`, into `scripts/lib`; a `review-queue` change that counts reviews from a separate reviewer App (`apps.reviewer`).
 
 ---
 
@@ -1176,6 +1186,10 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-21: Phase 3b integration (#98)
+
+Live runs on #75 and #74 are in PR #139. 4.5: `plan-lint --close` rules written out (reason line, spike decision link, evidence cells, empty epic). 6.1: `Reviewer:` line rule. 8.4: `plan-lint.yml` has the `typed` trigger, fails its step only on an API or usage error, and shares the marker comment with the App (agent App or `github-actions[bot]`). 9.4: `inbox` reads CODEOWNERS from the working copy, GitHub from the base branch. 13: rows for `plan-lint` (`--post` or `--close`, not the earlier `--close` only; marker, template keys, `--json` shape, exit 1 for both a lint failure and an error, told apart by `failures`), `review-queue` (inputs, JSON, Reviewer line first or last, head-SHA rule, own session not excluded, footer-less PRs listed) and `inbox` (App token, `--json`, sections, 403 and 404 unreadable). 18: `isUnder` and `namesHotspot` move to `scripts/lib` later; a reviewer App needs a `review-queue` change first.
 
 ### 2026-11-21: wrapped deny rules (#130)
 
