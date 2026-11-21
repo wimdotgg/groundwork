@@ -39,7 +39,8 @@ const ALL_REPOSITORIES = 'all';
 const LEVEL_RANK = { read: 1, write: 2 };
 const SETTINGS_SEGMENTS = ['.github', 'groundwork'];
 const CHECK_SETTINGS_DIR = 'check';
-const BOOTSTRAP_OPS = new Set(['bootstrap', 'bootstrap-pass2']);
+const OP_BOOTSTRAP = 'bootstrap';
+const BOOTSTRAP_OPS = new Set([OP_BOOTSTRAP, 'bootstrap-pass2']);
 const CONTROL_TARGET_REASON = 'target_repo must not be the control repository for this op';
 const SECRET_ENV_NAMES = ['ADMIN_APP_KEY', 'RELEASE_APP_KEY'];
 const MIN_SCRUBBED_LINE_LENGTH = 17;
@@ -63,9 +64,12 @@ function safeText(text) {
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** Bootstrap ops hold a write grant on the target: aimed at `groundwork` it would be write access to the control repo. */
-const targetsControlRepo = (request, controlRepo) => BOOTSTRAP_OPS.has(request.op)
-  && request.targetRepo.toLowerCase() === String(controlRepo).toLowerCase();
+const isControlRepo = (targetRepo, controlRepo) => targetRepo.toLowerCase() === String(controlRepo).toLowerCase();
+/** `bootstrap` creates the target, so aimed at the control repository it would overwrite it; `bootstrap-pass2` only configures an existing repository and may target it (epic #167). */
+const refusesControlRepo = (request, controlRepo) => request.op === OP_BOOTSTRAP && isControlRepo(request.targetRepo, controlRepo);
+
+/** Tokens are restricted by repository name, so the control repository is always minted under the spelling in config. */
+const withCanonicalTarget = (request, controlRepo) => (isControlRepo(request.targetRepo, controlRepo) ? { ...request, targetRepo: controlRepo } : request);
 
 /**
  * @param {Record<string, string|undefined>} env
@@ -199,20 +203,27 @@ function renderPermissions(permissions) {
   ];
 }
 
-function renderFacts({ org, request, ancestry }) {
+function describeTarget({ org, request, controlRepo }) {
+  const { module, targetRepo } = request;
+  if (module.TOKEN_SCOPE === 'org') return `organisation \`${org}\``;
+  const repository = `\`${org}/${targetRepo}\``;
+  return isControlRepo(targetRepo, controlRepo) ? `${repository} (the control repository)` : repository;
+}
+
+function renderFacts({ org, request, ancestry, controlRepo }) {
   const { op, module, targetRepo, ref } = request;
   return [
     `- Op: \`${op}\``,
-    `- Target: ${module.TOKEN_SCOPE === 'org' ? `organisation \`${org}\`` : `\`${org}/${targetRepo}\``}`,
+    `- Target: ${describeTarget({ org, request, controlRepo })}`,
     `- Ref: ${ref === '' ? 'none' : `\`${ref}\``}`,
     ...(ancestry === undefined ? [] : [`- Ancestry: ${ancestry}`]),
     `- Token: ${describeScope(module, targetRepo)}`,
   ];
 }
 
-function renderRequest({ org, request, ancestry }) {
+function renderRequest({ org, request, ancestry, controlRepo }) {
   return [
-    ...renderFacts({ org, request, ancestry }),
+    ...renderFacts({ org, request, ancestry, controlRepo }),
     '',
     'Args:',
     '',
@@ -237,10 +248,11 @@ export async function plan(env, overrides = {}) {
   const deps = { ...DEFAULTS, ...overrides };
   const heading = 'admin-run plan';
   if (env.GITHUB_REF !== MAIN_REF) return failure(heading, `runs only from ${MAIN_REF}`);
-  const { problems, request } = validateRequest(readInputs(env), deps.registry);
+  const { problems, request: dispatched } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
-  if (targetsControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
+  const request = withCanonicalTarget(dispatched, controlRepo);
+  if (refusesControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   let ancestry;
   if (request.op === OP_WITH_REF) {
     const checked = await checkAncestry(deps.createClient({ env }), { org, repo: request.targetRepo, ref: request.ref });
@@ -252,7 +264,7 @@ export async function plan(env, overrides = {}) {
     '',
     'Result: **pass**. Approve the `admin` environment to apply.',
     '',
-    ...renderRequest({ org, request, ancestry }),
+    ...renderRequest({ org, request, ancestry, controlRepo }),
     '',
     ...renderRequestedPermissions(request.module, { controlRepo, targetRepo: request.targetRepo }),
   ].join('\n');
@@ -494,13 +506,13 @@ function renderCalls(calls) {
   ];
 }
 
-function renderApplySummary({ org, request, outcome, calls, logs }) {
+function renderApplySummary({ org, controlRepo, request, outcome, calls, logs }) {
   const lines = [
     '## admin-run apply',
     '',
     outcome.ok ? 'Result: **pass**' : `Result: **fail**${outcome.error ? `: ${inCodeSpan(outcome.error)}` : ''}`,
     '',
-    ...renderFacts({ org, request, ancestry: outcome.ancestry }),
+    ...renderFacts({ org, request, ancestry: outcome.ancestry, controlRepo }),
     '',
   ];
   for (const part of outcome.parts ?? []) lines.push(part.summary, '');
@@ -535,7 +547,7 @@ export async function apply(env, overrides = {}) {
   const heading = 'admin-run apply';
   if (env === process.env) return failure(heading, 'apply needs a copy of process.env');
   if (env.GITHUB_REF !== MAIN_REF) return failure(heading, `runs only from ${MAIN_REF}`);
-  const { problems, request } = validateRequest(readInputs(env), deps.registry);
+  const { problems, request: dispatched } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
   if (!env.ADMIN_APP_CLIENT_ID || !env.ADMIN_APP_KEY) return failure(heading, 'ADMIN_APP_CLIENT_ID and ADMIN_APP_KEY must be set');
 
@@ -543,7 +555,8 @@ export async function apply(env, overrides = {}) {
   delete process.env.ADMIN_APP_KEY;
 
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
-  if (targetsControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
+  const request = withCanonicalTarget(dispatched, controlRepo);
+  if (refusesControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   const calls = [];
   const logs = [];
   const secrets = SECRET_ENV_NAMES.map((name) => env[name]);
@@ -583,7 +596,7 @@ export async function apply(env, overrides = {}) {
     const problems = [revokeProblem, ...tokens.revokeProblems].filter((problem) => problem !== undefined);
     if (problems.length > 0) outcome = { ...outcome, ok: false, error: [outcome?.error, ...problems].filter(Boolean).join('; ') };
   }
-  const summary = scrub(renderApplySummary({ org, request, outcome, calls, logs }), secrets);
+  const summary = scrub(renderApplySummary({ org, controlRepo, request, outcome, calls, logs }), secrets);
   const reason = outcome.ok ? undefined : scrub(outcome.error ?? 'an op reported failure', secrets);
   return { exitCode: outcome.ok ? 0 : 1, summary, reason };
 }
