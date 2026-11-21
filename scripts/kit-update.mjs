@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { CONFIG_DIR, loadConfig, repoRoot } from './lib/config.mjs';
@@ -44,6 +44,7 @@ const EXECUTABLE_MODE = '100755';
 const USAGE = 'usage: kit-update.mjs <vX.Y.Z> [--json]';
 const MAX_TAG_DEREFERENCES = 5;
 const KIT_PATH_MATCHERS = KIT_PATHS.map(toMatcher);
+const WORKFLOWS_DIR = '.github/workflows';
 
 export class KitUpdateRefusal extends Error {}
 
@@ -84,6 +85,24 @@ function mergeValue({ base, ours, theirs }) {
   const bothObjects = isPlainObject(ours) && isPlainObject(theirs);
   if (bothObjects && (base === undefined || isPlainObject(base))) return mergeConfig({ base: base ?? {}, ours, theirs });
   return sameValue(ours, base) ? theirs : ours;
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Points every `uses: <org>/<controlRepo>/.github/workflows/reusable-*.yml@<ref>` at the tag's commit, with the tag as
+ * the trailing comment (spec 8.6). Other `uses:` lines are left alone.
+ * @param {{ text: string, org: string, controlRepo: string, tag: string, tagSha: string }} options
+ * @returns {string}
+ */
+export function rewritePins({ text, org, controlRepo, tag, tagSha }) {
+  const reference = new RegExp(
+    `(uses:[ \\t]*${escapeRegExp(org)}/${escapeRegExp(controlRepo)}/\\.github/workflows/reusable-[\\w-]+\\.yml)@[^\\s#]+[ \\t]*(#[^\\r\\n]*)?`,
+    'gi',
+  );
+  return text.replace(reference, `$1@${tagSha} # ${tag}`);
 }
 
 /** @returns {string} the blob SHA git computes for `content` */
@@ -188,6 +207,24 @@ async function planConfigMerge({ client, control, root, oldTree, newTree }) {
   return { content: Buffer.from(`${JSON.stringify(merged, null, 2)}\n`), executable: false };
 }
 
+function ignoreMissing(error) {
+  if (error.code === 'ENOENT') return [];
+  throw error;
+}
+
+/** Rewrites the pins of every project workflow, on top of the copy this run already plans for it. */
+async function planPinRewrites({ root, writes, pinTarget }) {
+  const names = (await readdir(path.join(root, WORKFLOWS_DIR)).catch(ignoreMissing)).filter((name) => name.endsWith('.yml'));
+  for (const name of names) {
+    const filePath = `${WORKFLOWS_DIR}/${name}`;
+    const planned = writes.get(filePath);
+    const current = planned?.content ?? (await readLocal(root, filePath));
+    const rewritten = Buffer.from(rewritePins({ text: current.toString('utf8'), ...pinTarget }));
+    if (rewritten.equals(current)) continue;
+    writes.set(filePath, { content: rewritten, executable: planned?.executable ?? false });
+  }
+}
+
 async function applyPlan({ root, writes, removals }) {
   for (const [filePath, { content, executable }] of writes) {
     const target = path.join(root, filePath);
@@ -216,14 +253,15 @@ async function isAheadOfRemote(git, branch) {
 /** Undoes a failed run. The tree was clean, so only the plan's own new files are removed, never other untracked files. */
 async function restoreTree({ git, paths }) {
   await git(['reset', '--hard', 'HEAD']);
-  await git(['clean', '-fd', '--', ...paths]);
+  await git(['clean', '-fdx', '--', ...paths]);
 }
 
 async function commitPlan({ root, git, publish, plan, tag }) {
   const paths = [...plan.writes.keys(), ...plan.removals];
   try {
     await applyPlan({ root, ...plan });
-    await git(['add', '-A', '--', ...paths]);
+    // --force: a plan path the project gitignores would otherwise make `add` fail.
+    await git(['add', '-A', '--force', '--', ...paths]);
     await publish(['git', 'commit', '-m', `chore(kit): update to ${tag}`]);
   } catch (error) {
     try {
@@ -260,11 +298,12 @@ export async function run({ root, tag, client, git, publish }) {
     return { ok: true, tag, changed: [], skipped: [] };
   }
 
-  const readTagTree = async (name) => readTree({ client, control, root, commitSha: await resolveTagCommit(client, control, name) });
-  const [newTree, oldTree] = await Promise.all([readTagTree(tag), readTagTree(currentTag)]);
+  const [tagSha, currentTagSha] = await Promise.all([tag, currentTag].map((name) => resolveTagCommit(client, control, name)));
+  const [newTree, oldTree] = await Promise.all([tagSha, currentTagSha].map((commitSha) => readTree({ client, control, root, commitSha })));
   const { writes, removals, skipped } = await planFileWrites({ client, control, root, oldTree, newTree });
   const mergedConfig = await planConfigMerge({ client, control, root, oldTree, newTree });
   if (mergedConfig) writes.set(CONFIG_PATH, mergedConfig);
+  await planPinRewrites({ root, writes, pinTarget: { org, controlRepo, tag, tagSha } });
   writes.set(KIT_VERSION_PATH, { content: Buffer.from(`${tag}\n`), executable: false });
 
   await commitPlan({ root, git, publish, plan: { writes, removals }, tag });

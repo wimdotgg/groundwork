@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createFixtureClient } from './lib/github.mjs';
 import { repoRoot } from './lib/config.mjs';
-import { KIT_PATHS, UNMODIFIED_ONLY_PATHS, isKitPath, main, mergeConfig, run } from './kit-update.mjs';
+import { KIT_PATHS, UNMODIFIED_ONLY_PATHS, isKitPath, main, mergeConfig, rewritePins, run } from './kit-update.mjs';
 
 const execFileAsync = promisify(execFile);
 const realConfigText = await readFile(path.join(repoRoot(import.meta.url), '.github/groundwork/config.json'), 'utf8');
@@ -344,5 +344,62 @@ test('R10 a failed restore keeps the original failure in the message', async () 
     const client = releasesClient(OLD_TREE, NEW_TREE);
     const publish = (args) => project.publish(args);
     await assert.rejects(run({ root: project.root, tag: NEW_TAG, client, git, publish }), /commit failed.*reset broke/);
+  });
+});
+
+const REUSABLE = `${realConfig.org}/${realConfig.controlRepo}/.github/workflows`;
+const OLD_SHA = 'a'.repeat(40);
+const CI_BEFORE = [
+  'jobs:',
+  '  verify:',
+  `    uses: ${REUSABLE}/reusable-verify.yml@${OLD_SHA} # ${OLD_TAG}`,
+  '  security:',
+  `    uses: ${REUSABLE}/reusable-security.yml@${OLD_SHA} # ${OLD_TAG}`,
+  '  steps:',
+  '    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+  '',
+].join('\n');
+const CI_AFTER = CI_BEFORE.replaceAll(OLD_SHA, COMMITS[NEW_TAG]).replaceAll(`# ${OLD_TAG}`, `# ${NEW_TAG}`);
+
+test('AC1 rewritePins moves the reusable-workflow pins and leaves other uses lines unchanged', () => {
+  const options = { org: realConfig.org, controlRepo: realConfig.controlRepo, tag: NEW_TAG, tagSha: COMMITS[NEW_TAG] };
+  assert.equal(rewritePins({ text: CI_BEFORE, ...options }), CI_AFTER);
+  const bare = `uses: ${REUSABLE}/reusable-verify.yml@${OLD_SHA}\n`;
+  assert.equal(rewritePins({ text: bare, ...options }), `uses: ${REUSABLE}/reusable-verify.yml@${COMMITS[NEW_TAG]} # ${NEW_TAG}\n`);
+  const foreign = `uses: other/groundwork/.github/workflows/reusable-verify.yml@${OLD_SHA} # v0.1.0\n`;
+  assert.equal(rewritePins({ text: foreign, ...options }), foreign);
+});
+
+test('AC1 AC3 run rewrites the pins in the project workflows to the tag in kit-version.txt', async () => {
+  const files = { ...PROJECT_FILES, '.github/workflows/ci.yml': CI_BEFORE };
+  await withProject(files, {}, async (project) => {
+    const result = await execute(project, releasesClient(OLD_TREE, NEW_TREE));
+    assert.equal(await readProject(project, '.github/workflows/ci.yml'), CI_AFTER);
+    assert.ok(result.changed.includes('.github/workflows/ci.yml'));
+    assert.match(await project.git(['show', '--name-only', '--format=', 'HEAD']), /\.github\/workflows\/ci\.yml/);
+  });
+});
+
+test('AC2 an annotated tag resolves to its commit, not the tag object', async () => {
+  const tagObjectSha = 'e'.repeat(40);
+  const client = createFixtureClient({
+    ...tagRoutes(OLD_TAG, OLD_TREE),
+    ...tagRoutes(NEW_TAG, NEW_TREE),
+    [`GET ${CONTROL_API}/git/ref/tags/${NEW_TAG}`]: reply(200, { object: { type: 'tag', sha: tagObjectSha } }),
+    [`GET ${CONTROL_API}/git/tags/${tagObjectSha}`]: reply(200, { object: { type: 'commit', sha: COMMITS[NEW_TAG] } }),
+  });
+  await withProject({ ...PROJECT_FILES, '.github/workflows/ci.yml': CI_BEFORE }, {}, async (project) => {
+    await execute(project, client);
+    const pinned = await readProject(project, '.github/workflows/ci.yml');
+    assert.ok(pinned.includes(`@${COMMITS[NEW_TAG]} # ${NEW_TAG}`));
+    assert.ok(!pinned.includes(tagObjectSha));
+  });
+});
+
+test('R11 a plan path the project gitignores is still committed', async () => {
+  const files = { ...PROJECT_FILES, '.gitignore': 'scripts/agent/\n' };
+  await withProject(files, {}, async (project) => {
+    await execute(project, releasesClient(OLD_TREE, NEW_TREE));
+    assert.match(await project.git(['show', '--name-only', '--format=', 'HEAD']), /scripts\/agent\/fresh\.mjs/);
   });
 });

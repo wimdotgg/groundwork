@@ -15,3 +15,6 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "build"
+    ignore:
+      # kit-update owns the reusable-workflow SHA pins (spec 8.6).
+      - dependency-name: "*/groundwork"
