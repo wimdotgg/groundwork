@@ -65,7 +65,7 @@ function rewriteReusableReferences(text, { org, controlRepo, tag }) {
 }
 
 function requireContent(contents, path) {
-  const text = contents[path];
+  const text = Object.hasOwn(contents, path) ? contents[path] : undefined;
   if (typeof text !== 'string') throw new SettingsError(`missing release content: ${path}`, path);
   return text;
 }
@@ -106,8 +106,8 @@ function isReplacedByStub(path, stubs, generated) {
 }
 
 function keptEntry(entry, contents, names) {
-  if (isUnder(entry.path, SETTINGS_DIR) || !(entry.path in contents)) return entry;
-  const original = contents[entry.path];
+  if (isUnder(entry.path, SETTINGS_DIR) || !isUnder(entry.path, '.github/')) return entry;
+  const original = requireContent(contents, entry.path);
   const text = fillPlaceholders(rewriteReusableReferences(original, names), entry.path, names);
   return textEntry(entry, entry.path, { text, original });
 }

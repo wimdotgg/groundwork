@@ -137,11 +137,36 @@ test('AC6: a missing stub throws a one-line SettingsError naming the path', () =
     );
   }
   const noDocs = fixture({ omit: ['scripts/groundwork/stubs/docs/guide.md', 'scripts/groundwork/stubs/docs/sub/more.md'] });
-  assert.throws(() => buildBootstrapTree({ ...noDocs, ...OPTIONS }), /stubs\/docs\//);
+  assert.throws(
+    () => buildBootstrapTree({ ...noDocs, ...OPTIONS }),
+    (error) => error instanceof SettingsError && /stubs\/docs\//.test(error.message),
+  );
 });
 
-test('output is sorted by path and holds blobs only', () => {
-  const paths = build().map(({ path }) => path);
+test('a kept .github blob or a stub without release text throws SettingsError naming the path', () => {
+  for (const path of ['.github/workflows/ci.yml', 'scripts/groundwork/stubs/verify']) {
+    const { entries, contents } = fixture();
+    const withoutText = { ...contents };
+    delete withoutText[path];
+    assert.throws(
+      () => buildBootstrapTree({ entries, contents: withoutText, ...OPTIONS }),
+      (error) => error instanceof SettingsError && error.message.includes(path),
+    );
+  }
+});
+
+test('a release blob named like an Object.prototype key throws SettingsError, not TypeError', () => {
+  const { entries, contents } = fixture();
+  const inherited = [...entries, { path: '.github/constructor', mode: '100644', sha: 'sha-constructor' }];
+  assert.throws(
+    () => buildBootstrapTree({ entries: inherited, contents, ...OPTIONS }),
+    (error) => error instanceof SettingsError && error.message.includes('.github/constructor'),
+  );
+});
+
+test('output is sorted by path and each entry has exactly one of sha and content', () => {
+  const tree = build();
+  const paths = tree.map(({ path }) => path);
   assert.deepEqual(paths, [...paths].sort());
-  assert.ok(find(build(), 'package.json').sha);
+  for (const entry of tree) assert.equal(Number('sha' in entry) + Number('content' in entry), 1, entry.path);
 });
