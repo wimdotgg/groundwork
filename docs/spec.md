@@ -1,6 +1,6 @@
 # groundwork: specification v1
 
-Status: agreed design; Phase 0 probes done (section 19); Phase 2 done (`v0.1.0`); agents act as the `wimdotgg-agent` App (`v0.2.0`); Phase 3a done (`v0.3.0`); Phase 3b in progress; `v0.4.0` released 2026-11-21. Date: 2026-11-16. Owner: `wianvdm`. Organization: `wimdotgg`.
+Status: agreed design; Phase 0 probes done (section 19); Phase 2 done (`v0.1.0`); agents act as the `wimdotgg-agent` App (`v0.2.0`); Phase 3a done (`v0.3.0`); Phase 3b done (`v0.4.0`); Phase 4 in progress. Date: 2026-11-16. Owner: `wianvdm`. Organization: `wimdotgg`.
 
 `groundwork` is three things in one public repository:
 
@@ -43,7 +43,7 @@ Its purpose: a solo human orchestrates, AI agents do the work (plan, implement, 
 
 | Identity | Kind | Role | Credentials on the agent machine |
 |---|---|---|---|
-| `wianvdm` | Your user | Org owner | **None.** You act in the browser or GitHub mobile app. Bootstrap and admin work go through tier 2 (section 12). Until #75 closes, a delegation applies (section 21, 2026-11-21). |
+| `wianvdm` | Your user | Org owner | **None.** You act in the browser or GitHub mobile app. Bootstrap and admin work go through tier 2 (section 12). Until the Phase 4 epic closes, a delegation applies (section 21, "2026-11-21: Phase 4 owner delegation"). |
 | `wimdotgg-agent` | GitHub App (App ID 5853598, client ID `Iv23lic380KcYz17cWxi`) | Installed on all org repos, permissions in 2.2 | Key encrypted on the agent machine (2.2); installation tokens minted per command. |
 | `wimdotgg-release` | GitHub App | Installed on all org repos | None. Key only in each repo's `release` environment. |
 | `wimdotgg-admin` | GitHub App (App ID 5782869, client ID `Iv23lipUuaiDCWGAKcYI`) | Installed on all org repos | None. Key only in the control repo's `admin` environment. |
@@ -1059,7 +1059,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 1. Create the free organization; enable 2FA requirement and the settings in 2.5.
 2. Transfer `wianvdm/groundwork` into the organization (done: `wimdotgg/groundwork`); mark it as a template repository. Its `main` must already contain `admin-run.yml`: nothing below works before that.
-3. Create `wimdotgg-agent` as an organization-owned App (2.2; `docs/setup.md`), install it on the org with All repositories, and store its key on the agent machine. Remove your own `gh` and Git Credential Manager login for github.com from that machine (temporary exception: section 21, 2026-11-21).
+3. Create `wimdotgg-agent` as an organization-owned App (2.2; `docs/setup.md`), install it on the org with All repositories, and store its key on the agent machine. Remove your own `gh` and Git Credential Manager login for github.com from that machine (temporary exception: section 21, "2026-11-21: Phase 4 owner delegation").
 4. Create `wimdotgg-admin` and `wimdotgg-release` as organization-owned Apps (no manifests; `docs/setup.md` gives the manual form) and install both on the org with All repositories. The slugs are recorded in `config.json`.
 5. In `groundwork`, create environment `admin` (reviewer you, deployment branch `main`, selected-branches policy, "Allow administrators to bypass" off) and store both App keys and their App IDs or client IDs there.
 6. Approve `admin-run op=create-issue-types`, then `admin-run op=apply-settings --repo groundwork --ref <main sha>`. The second run creates groundwork's `release` environment with its key, sets `GROUNDWORK_READY`, applies the rulesets and ends with `check`. From here `main` is protected; the agent runs `request.mjs probe --repo groundwork` to confirm.
@@ -1186,6 +1186,19 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-21: Phase 4 owner delegation (#141)
+
+The delegation of the #81 entry is extended through Phase 4 epic #140 and ends when #140 closes. A reopen does not revive it: any close ends it. The local owner script (outside the repository, your `gh` login) performs only these actions, each with a "Delegated owner" marker on GitHub:
+
+- Approve agent PRs, including ones touching `.github/`, `scripts/groundwork/`, `scripts/ci/` or `.claude/settings.json`. Every approval needs an agent comment review on the head SHA from a session other than the PR's author session; for the protected paths its Reviewer line must name a Fable reviewer.
+- Merge release PRs.
+- Apply `size-exception` to reviewed over-limit PRs.
+- Apply `accepted` to #140 after #75 closes.
+- Approve pending `admin` environment deployments, only for `admin-run.yml` runs on `main` whose op is `bootstrap`, `bootstrap-pass2` or `check` and whose target repo matches `gw-p4-*` (op, target, ref and args read from the run name).
+- Inside `gw-p4-*` repositories: `approve-pr` under the same review rules, and accepting the "Project setup" epic opened by the admin App.
+
+A check run with a set conclusion counts as finished. Phase 5 owner actions (G1, G4, G6) stay in person. 2.1 and 14.1 point here.
 
 ### 2026-11-21: Phase 3b integration (#98)
 
