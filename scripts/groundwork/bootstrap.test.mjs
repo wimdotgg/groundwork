@@ -86,6 +86,8 @@ const RELEASE_FILES = {
   'scripts/groundwork/stubs/verify.cmd': 'stub verify\n',
   'scripts/groundwork/stubs/README.md': '# __REPO__\n\n__DESCRIPTION__\n',
   'scripts/groundwork/stubs/docs/guide.md': 'guide\n',
+  ...Object.fromEntries(['deploy', 'smoke', 'rollback'].flatMap((name) => [name, `${name}.cmd`])
+    .map((file) => [`scripts/groundwork/stubs/deploy/${file}`, 'stub deploy\n'])),
   [`${SETUP_DIR}epic.md`]: '# Set up __REPO__\n\n## Goal\n\n__DESCRIPTION__\n',
   [`${SETUP_DIR}01-stack.md`]: '# Pick the stack\n<!-- size: M -->\n\n## Outcome\n\nStack.\n',
   [`${SETUP_DIR}02-deploy.md`]: '# Decide deploy\n<!-- size: S -->\n<!-- blocked-by: 01 -->\n\n## Outcome\n\nDeploy.\n',

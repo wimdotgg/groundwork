@@ -24,6 +24,10 @@ const FIXED_STUBS = [
   ['verify', 'scripts/verify'],
   ['verify.cmd', 'scripts/verify.cmd'],
   ['README.md', 'README.md'],
+  // Inert until a project moves them to scripts/ (spec 8.5), so "deploy": "none" leaves no scripts/deploy.
+  ...['deploy', 'smoke', 'rollback'].flatMap((name) => [name, `${name}.cmd`].map(
+    (file) => [`deploy/${file}`, `scripts/stubs/deploy/${file}`],
+  )),
 ];
 const STUB_DOCS_DIR = `${STUBS_DIR}docs/`;
 const PROJECT_DOCS_DIR = 'docs/';

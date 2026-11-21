@@ -1,0 +1,82 @@
+name: deploy
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  # Skipped until a project sets DEPLOY_ENABLED, so groundwork itself never deploys.
+  deploy:
+    if: vars.DEPLOY_ENABLED == 'true' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      # The project setup epic maps the production secrets from settings.json here, for scripts/deploy to read from the environment.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Find previous tag
+        id: previous
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        # Assigned first so a helper failure stops the job before deploy.
+        run: |
+          previous=$(node scripts/ci/deploy-record.mjs previous-tag "$TAG")
+          echo "tag=$previous" >> "$GITHUB_OUTPUT"
+      - name: Deploy
+        id: deploy
+        continue-on-error: true
+        run: ./scripts/deploy "$TAG"
+      - name: Smoke
+        id: smoke
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        run: ./scripts/smoke
+      - name: Roll back
+        id: rollback
+        if: always() && steps.previous.outputs.tag != '' && (steps.deploy.outcome == 'failure' || steps.smoke.outcome == 'failure')
+        continue-on-error: true
+        env:
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: ./scripts/rollback "$PREVIOUS_TAG"
+      - name: Smoke after rollback
+        id: rollback-smoke
+        if: steps.rollback.outcome == 'success'
+        continue-on-error: true
+        run: ./scripts/smoke
+      - name: Record deploy
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          ROLLBACK_SMOKE_OUTCOME: ${{ steps.rollback-smoke.outcome }}
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: |
+          result=failed
+          if [ "$DEPLOY_OUTCOME" = success ] && [ "$SMOKE_OUTCOME" = success ]; then result=deployed; fi
+          if [ "$ROLLBACK_SMOKE_OUTCOME" = success ]; then result=rolled-back; fi
+          node scripts/ci/deploy-record.mjs record --tag "$TAG" --result "$result" \
+            --previous "${PREVIOUS_TAG:-none}" --run-url "$RUN_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail the job
+        if: always() && (steps.deploy.outcome != 'success' || steps.smoke.outcome != 'success')
+        run: |
+          echo "Deploy or smoke failed for $TAG." >&2
+          exit 1
