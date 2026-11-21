@@ -945,8 +945,8 @@ test('plan: bootstrap-pass2 may target the control repository and the summary sa
   for (const targetRepo of [CONTROL_REPO, 'Groundwork']) {
     const result = await plan(dispatchEnv({ INPUT_OP: 'bootstrap-pass2', INPUT_TARGET_REPO: targetRepo }), { ...planOverrides({}), registry: REGISTRY });
     assert.equal(result.exitCode, 0, result.reason);
-    assert.ok(result.summary.includes(`- Target: \`${ORG}/${targetRepo}\` (the control repository)`), result.summary);
-    assert.match(result.summary, new RegExp(`- Token: restricted to \`${targetRepo}\``));
+    assert.ok(result.summary.includes(`- Target: \`${ORG}/${CONTROL_REPO}\` (the control repository)`), result.summary);
+    assert.match(result.summary, new RegExp(`- Token: restricted to \`${CONTROL_REPO}\``));
     for (const [name, level] of Object.entries(PASS2.PERMISSIONS)) assert.ok(result.summary.includes(`| ${name} | ${level} |`), name);
   }
   const other = await plan(dispatchEnv({ INPUT_OP: 'bootstrap-pass2' }), { ...planOverrides({}), registry: REGISTRY });
@@ -955,17 +955,19 @@ test('plan: bootstrap-pass2 may target the control repository and the summary sa
 
 test('apply: bootstrap-pass2 on the control repository mints once, restricted to it, with the op permissions', async () => {
   const onControl = (routes) => Object.fromEntries(Object.entries(routes).map(([key, value]) => [key.replace(`/repos/${ORG}/${TARGET}`, `/repos/${ORG}/${CONTROL_REPO}`), value]));
-  const seen = [];
-  const run = (name) => async () => { seen.push(name); return { ok: true, summary: `${name} done` }; };
-  const { overrides, mints } = harness({ registry: stubRegistry({ 'bootstrap-pass2': run('pass2'), check: run('check') }), routes: onControl(withTokenRoutes()) });
-  const result = await apply(dispatchEnv({ INPUT_OP: 'bootstrap-pass2', INPUT_TARGET_REPO: CONTROL_REPO }), overrides);
-  assert.equal(result.exitCode, 0, result.reason);
-  assert.deepEqual(seen, ['pass2', 'check']);
-  assert.equal(mints.length, 1);
-  assert.deepEqual(mints[0].repositories, [CONTROL_REPO]);
-  assert.deepEqual(mints[0].permissions, PASS2.PERMISSIONS);
-  assert.match(result.summary, /\(the control repository\)/);
-  assert.match(result.summary, new RegExp(`git/trees/${HEAD}\` \\| 200`));
+  for (const targetRepo of [CONTROL_REPO, 'Groundwork']) {
+    const seen = [];
+    const run = (name) => async () => { seen.push(name); return { ok: true, summary: `${name} done` }; };
+    const { overrides, mints } = harness({ registry: stubRegistry({ 'bootstrap-pass2': run('pass2'), check: run('check') }), routes: onControl(withTokenRoutes()) });
+    const result = await apply(dispatchEnv({ INPUT_OP: 'bootstrap-pass2', INPUT_TARGET_REPO: targetRepo }), overrides);
+    assert.equal(result.exitCode, 0, result.reason);
+    assert.deepEqual(seen, ['pass2', 'check']);
+    assert.equal(mints.length, 1, targetRepo);
+    assert.deepEqual(mints[0].repositories, [CONTROL_REPO], targetRepo);
+    assert.deepEqual(mints[0].permissions, PASS2.PERMISSIONS);
+    assert.match(result.summary, /\(the control repository\)/);
+    assert.match(result.summary, new RegExp(`git/trees/${HEAD}\` \\| 200`));
+  }
 });
 
 test('withToken: a failed revoke fails the run even when the op swallows the outcome', async () => {
