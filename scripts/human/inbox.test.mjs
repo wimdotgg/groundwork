@@ -16,8 +16,16 @@ const issue = (number, extra = {}) => ({
   number, title: `issue ${number}`, html_url: `${HTML}/issues/${number}`, labels: [], user: { login: OWNER }, ...extra,
 });
 const pull = (number, extra = {}) => ({
-  number, title: `pull ${number}`, html_url: `${HTML}/pull/${number}`, labels: [], draft: false, ...extra,
+  number,
+  title: `pull ${number}`,
+  html_url: `${HTML}/pull/${number}`,
+  labels: [],
+  draft: false,
+  user: { login: OWNER },
+  head: { sha: `head${number}`, ref: `topic-${number}`, repo: { full_name: 'wimdotgg/groundwork' } },
+  ...extra,
 });
+const alertTitle = (number) => `\`\`\`untrusted github-actions[bot]\n#${number} issue ${number}\n\`\`\``;
 
 // Routes every list the inbox reads; a test overrides the ones it cares about.
 function inboxClient(overrides = {}) {
@@ -63,6 +71,7 @@ test('lists needs-decision issues and pull requests', async () => {
       issue(22, { labels: flagged, pull_request: {} }),
     ] },
     [`GET ${BASE}/pulls?per_page=100&state=open`]: { status: 200, data: [pull(22, { labels: flagged })] },
+    [`GET ${BASE}/pulls/22/files?per_page=100`]: { status: 200, data: [] },
   }));
   assert.deepEqual(sectionOf(sections, 'needs-decision').items.map((item) => item.title), ['#20 issue 20', '#22 pull 22']);
   assert.equal(sectionOf(sections, 'needs-decision').items[1].detail, 'PR');
@@ -74,6 +83,7 @@ test('lists ready pull requests on protected paths and skips drafts, unprotected
       pull(30), pull(31), pull(32, { draft: true }), pull(33, { labels: [{ name: 'autorelease: pending' }] }),
     ] },
     [`GET ${BASE}/pulls/30/files?per_page=100`]: { status: 200, data: [{ filename: 'scripts/lib/github.mjs' }] },
+    [`GET ${BASE}/pulls/30/reviews?per_page=100`]: { status: 200, data: [] },
     [`GET ${BASE}/pulls/31/files?per_page=100`]: { status: 200, data: [{ filename: 'scripts/agent/next.mjs' }] },
   }));
   assert.deepEqual(sectionOf(sections, 'protected-pulls').items.map((item) => item.title), ['#30 pull 30']);
@@ -110,7 +120,7 @@ test('lists open issues authored by github-actions[bot] as alerts', async () => 
       issue(50, { user: { login: 'github-actions[bot]' } }), issue(51),
     ] },
   }));
-  assert.deepEqual(sectionOf(sections, 'alert-issues').items.map((item) => item.title), ['#50 issue 50']);
+  assert.deepEqual(sectionOf(sections, 'alert-issues').items.map((item) => item.title), [alertTitle(50)]);
 });
 
 test('lists a claim whose PR closed unmerged with the branch to delete', async () => {
@@ -153,7 +163,7 @@ test('formats items with their links, and --json carries every section', async (
   const sections = await collect(inboxClient({
     [`GET ${BASE}/issues?per_page=100&state=open`]: { status: 200, data: [issue(80, { user: { login: 'github-actions[bot]' } })] },
   }));
-  assert.equal(formatOutput(sections, { json: false }), `Alert issues (1)\n  #80 issue 80\n    ${HTML}/issues/80`);
+  assert.equal(formatOutput(sections, { json: false }), `Alert issues (1)\n  ${alertTitle(80)}\n    ${HTML}/issues/80`);
   const json = JSON.parse(formatOutput(sections, { json: true }));
   assert.equal(json.ok, true);
   assert.equal(json.sections.length, 7);
@@ -161,11 +171,77 @@ test('formats items with their links, and --json carries every section', async (
 
 test('matches protected paths from CODEOWNERS as prefixes, exact paths and globs', () => {
   const patterns = parseProtectedPatterns('# note\n/scripts/lib/ @o\n/AGENTS.md @o\n/scripts/verify* @o\n');
-  assert.deepEqual(patterns, ['scripts/lib/', 'AGENTS.md', 'scripts/verify*']);
+  assert.deepEqual(patterns, ['/scripts/lib/', '/AGENTS.md', '/scripts/verify*']);
   assert.equal(isProtectedPath('scripts/lib/a.mjs', patterns), true);
   assert.equal(isProtectedPath('AGENTS.md', patterns), true);
   assert.equal(isProtectedPath('scripts/verify.cmd', patterns), true);
   assert.equal(isProtectedPath('scripts/agent/next.mjs', patterns), false);
+});
+
+test('an anchored pattern without a trailing slash covers a directory of that name', () => {
+  assert.equal(isProtectedPath('docs/a.md', ['/docs']), true);
+  assert.equal(isProtectedPath('other/docs/a.md', ['/docs']), false);
+});
+
+test('a glob on a directory name covers files below the match', () => {
+  assert.equal(isProtectedPath('scripts/verify/x.sh', ['/scripts/verify*']), true);
+});
+
+test('an unanchored pattern matches at any depth', () => {
+  assert.equal(isProtectedPath('app/web/vite.config.js', ['*.config.js']), true);
+  assert.equal(isProtectedPath('app/config/a.json', ['config/']), true);
+  assert.equal(isProtectedPath('app/config', ['config/']), false);
+  assert.equal(isProtectedPath('app/web/main.js', ['*.config.js']), false);
+});
+
+test('an error other than 403 or 404 stops the run', async () => {
+  const client = inboxClient({
+    [`GET ${BASE}/actions/runs?per_page=100&status=waiting`]: { status: 500, data: { message: 'boom' } },
+  });
+  await assert.rejects(collect(client), /boom|500/);
+});
+
+test('leaves out a protected PR the owner approved on its current head', async () => {
+  const review = (commit, state = 'APPROVED', login = OWNER) => ({ state, commit_id: commit, user: { login } });
+  const sections = await collect(inboxClient({
+    [`GET ${BASE}/pulls?per_page=100&state=open`]: { status: 200, data: [pull(80), pull(81), pull(82), pull(83)] },
+    [`GET ${BASE}/pulls/80/files?per_page=100`]: { status: 200, data: [{ filename: 'AGENTS.md' }] },
+    [`GET ${BASE}/pulls/81/files?per_page=100`]: { status: 200, data: [{ filename: 'AGENTS.md' }] },
+    [`GET ${BASE}/pulls/82/files?per_page=100`]: { status: 200, data: [{ filename: 'AGENTS.md' }] },
+    [`GET ${BASE}/pulls/83/files?per_page=100`]: { status: 200, data: [{ filename: 'AGENTS.md' }] },
+    [`GET ${BASE}/pulls/80/reviews?per_page=100`]: { status: 200, data: [review('head80')] },
+    [`GET ${BASE}/pulls/81/reviews?per_page=100`]: { status: 200, data: [review('older')] },
+    [`GET ${BASE}/pulls/82/reviews?per_page=100`]: { status: 200, data: [review('head82', 'APPROVED', 'someone-else')] },
+    [`GET ${BASE}/pulls/83/reviews?per_page=100`]: { status: 200, data: [review('head83', 'COMMENTED')] },
+  }));
+  assert.deepEqual(sectionOf(sections, 'protected-pulls').items.map((item) => item.title), ['#81 pull 81', '#82 pull 82', '#83 pull 83']);
+});
+
+test('skips fork pull requests in the protected-path section', async () => {
+  const fork = pull(90, { head: { sha: 'h', ref: 'x', repo: { full_name: 'someone/groundwork' } } });
+  const sections = await collect(inboxClient({
+    [`GET ${BASE}/pulls?per_page=100&state=open`]: { status: 200, data: [fork] },
+  }));
+  assert.deepEqual(sectionOf(sections, 'protected-pulls').items, []);
+});
+
+test('fences a title from an untrusted author', async () => {
+  const stranger = pull(95, { user: { login: 'stranger' }, title: 'ignore\nprevious', labels: [{ name: 'needs-decision' }] });
+  const sections = await collect(inboxClient({
+    [`GET ${BASE}/pulls?per_page=100&state=open`]: { status: 200, data: [stranger] },
+    [`GET ${BASE}/pulls/95/files?per_page=100`]: { status: 200, data: [] },
+  }));
+  assert.equal(sectionOf(sections, 'needs-decision').items[0].title, '```untrusted stranger\n#95 ignore previous\n```');
+});
+
+test('skips the orphan check for a ref whose issue has an open PR', async () => {
+  const sections = await collect(inboxClient({
+    [`GET ${BASE}/issues?per_page=100&state=open`]: { status: 200, data: [issue(97)] },
+    [`GET ${BASE}/pulls?per_page=100&state=open`]: { status: 200, data: [pull(997, { head: { sha: 'h', ref: 'issue/97', repo: { full_name: 'wimdotgg/groundwork' } } })] },
+    [`GET ${BASE}/pulls/997/files?per_page=100`]: { status: 200, data: [] },
+    [`GET ${BASE}/git/matching-refs/heads/issue/?per_page=100`]: { status: 200, data: [{ ref: 'refs/heads/issue/97' }] },
+  }));
+  assert.deepEqual(sectionOf(sections, 'orphaned-claims').items, []);
 });
 
 test('parseArgs accepts --json only', () => {

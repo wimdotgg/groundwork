@@ -3,13 +3,15 @@ import path from 'node:path';
 import { GitHubError, apiPath, createClient, currentRepo } from '../lib/github.mjs';
 import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { deriveStatus, loadIssueFacts } from '../lib/issue-model.mjs';
-import { normalizeLabel, sameLogin, validLabels } from '../lib/trust.mjs';
+import { isTrustedAuthor, normalizeLabel, sameLogin, untrustedBlock, validLabels } from '../lib/trust.mjs';
 import '../agent/token.mjs'; // exits on an unsupported Node before the script runs
 
 /** @typedef {{ title: string, url: string, detail?: string }} InboxItem */
 /** @typedef {{ key: string, heading: string, items: InboxItem[], unreadable?: string }} Section */
 
 const REPO_PATH = '/repos/{owner}/{repo}';
+const UNREADABLE_STATUSES = [403, 404];
+const APPROVED = 'APPROVED';
 const USAGE = 'usage: inbox.mjs [--json]';
 const CODEOWNERS_PATH = '.github/CODEOWNERS';
 const ALERT_AUTHOR = 'github-actions[bot]';
@@ -21,11 +23,19 @@ const EMPTY_INBOX = 'inbox empty: nothing waits on you';
 const labelName = (label) => (typeof label === 'string' ? label : label?.name);
 const labelNames = (item) => (item.labels ?? []).map(labelName).filter(Boolean);
 const hasLabel = (labels, name) => labels.some((label) => normalizeLabel(label) === name);
-const issueItem = (issue) => ({ title: `#${issue.number} ${issue.title}`, url: issue.html_url });
+const sameRepository = (fullName, { owner, repo }) => String(fullName ?? '').toLowerCase() === `${owner}/${repo}`.toLowerCase();
+
+// Titles come from whoever opened the item: an untrusted author's text is fenced, never shown as plain text.
+function itemFor(item, { kind, config }) {
+  const heading = `#${item.number} ${String(item.title).replace(/\s+/g, ' ')}`;
+  const login = item.user?.login ?? '';
+  const title = isTrustedAuthor({ login, kind }, config) ? heading : untrustedBlock(heading, login);
+  return { title, url: item.html_url };
+}
 const isReleasePull = (pull) => labelNames(pull).some((label) => normalizeLabel(label).startsWith(RELEASE_LABEL_PREFIX));
 
 /**
- * Protected path patterns from CODEOWNERS, without the leading slash. A trailing slash marks a directory prefix.
+ * CODEOWNERS patterns as written (a leading slash anchors, a trailing slash marks a directory).
  * @param {string} codeowners
  * @returns {string[]}
  */
@@ -33,40 +43,69 @@ export function parseProtectedPatterns(codeowners) {
   return codeowners.split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line !== '' && !line.startsWith('#'))
-    .map((line) => line.split(/\s+/)[0].replace(/^\//, ''));
+    .map((line) => line.split(/\s+/)[0]);
+}
+
+// Gitignore-style: a pattern with a slash before its last character is anchored to the root, otherwise it
+// matches a path segment at any depth. A match on a directory covers every file below it.
+function matchesPattern(parts, pattern) {
+  const directoryOnly = pattern.endsWith('/');
+  const glob = pattern.replace(/^\//, '').replace(/\/$/, '');
+  const anchored = pattern.replace(/\/$/, '').includes('/');
+  return parts.some((_, index) => {
+    const isDirectory = index < parts.length - 1;
+    if (directoryOnly && !isDirectory) return false;
+    return path.posix.matchesGlob(anchored ? parts.slice(0, index + 1).join('/') : parts[index], glob);
+  });
 }
 
 export function isProtectedPath(file, patterns) {
-  return patterns.some((pattern) => (pattern.endsWith('/') ? file.startsWith(pattern) : path.posix.matchesGlob(file, pattern)));
+  const parts = file.split('/');
+  return patterns.some((pattern) => matchesPattern(parts, pattern));
 }
 
 async function proposedEpics({ openIssues, client, repoRef, config }) {
   const items = [];
   for (const epic of (await openIssues()).filter((issue) => issue.type?.name === 'Epic')) {
     const timeline = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/timeline`, { ...repoRef, number: epic.number }));
-    if (!hasLabel(validLabels({ labels: labelNames(epic), timeline }, config), 'accepted')) items.push(issueItem(epic));
+    if (!hasLabel(validLabels({ labels: labelNames(epic), timeline }, config), 'accepted')) items.push(itemFor(epic, { kind: 'issue', config }));
   }
   return items;
 }
 
-async function needsDecision({ openIssues, openPulls }) {
+async function needsDecision({ openIssues, openPulls, config }) {
   const issues = (await openIssues()).filter((issue) => hasLabel(labelNames(issue), 'needs-decision'));
   const pulls = (await openPulls()).filter((pull) => hasLabel(labelNames(pull), 'needs-decision'));
-  return [...issues.map(issueItem), ...pulls.map((pull) => ({ ...issueItem(pull), detail: 'PR' }))];
+  const pullItems = pulls.map((pull) => ({ ...itemFor(pull, { kind: 'pull-request', config }), detail: 'PR' }));
+  return [...issues.map((issue) => itemFor(issue, { kind: 'issue', config })), ...pullItems];
 }
 
-async function protectedPulls({ openPulls, client, repoRef, root }) {
+async function isApprovedOnHead(pull, { client, repoRef, config }) {
+  const reviews = await client.paginate(apiPath(`${REPO_PATH}/pulls/{number}/reviews`, { ...repoRef, number: pull.number }));
+  return reviews.some((review) => review.state === APPROVED && review.commit_id === pull.head?.sha
+    && sameLogin(review.user?.login, config.accounts.owner));
+}
+
+async function touchesProtectedPath(pull, { client, repoRef }, patterns) {
+  const files = await client.paginate(apiPath(`${REPO_PATH}/pulls/{number}/files`, { ...repoRef, number: pull.number }));
+  return files.some(({ filename }) => isProtectedPath(filename, patterns));
+}
+
+// GitHub reads CODEOWNERS from the base branch; this reads the working copy.
+async function protectedPulls(context) {
+  const { openPulls, repoRef, root, config } = context;
   const patterns = parseProtectedPatterns(await readFile(path.join(root, CODEOWNERS_PATH), 'utf8'));
   const items = [];
-  for (const pull of (await openPulls()).filter((candidate) => !candidate.draft && !isReleasePull(candidate))) {
-    const files = await client.paginate(apiPath(`${REPO_PATH}/pulls/{number}/files`, { ...repoRef, number: pull.number }));
-    if (files.some(({ filename }) => isProtectedPath(filename, patterns))) items.push(issueItem(pull));
+  for (const pull of await openPulls()) {
+    if (pull.draft || isReleasePull(pull) || !sameRepository(pull.head?.repo?.full_name, repoRef)) continue;
+    if (!await touchesProtectedPath(pull, context, patterns)) continue;
+    if (!await isApprovedOnHead(pull, context)) items.push(itemFor(pull, { kind: 'pull-request', config }));
   }
   return items;
 }
 
-async function releasePulls({ openPulls }) {
-  return (await openPulls()).filter(isReleasePull).map(issueItem);
+async function releasePulls({ openPulls, config }) {
+  return (await openPulls()).filter(isReleasePull).map((pull) => itemFor(pull, { kind: 'pull-request', config }));
 }
 
 async function pendingApprovals({ client, repoRef }) {
@@ -81,20 +120,23 @@ async function pendingApprovals({ client, repoRef }) {
   return items;
 }
 
-async function alertIssues({ openIssues }) {
-  return (await openIssues()).filter((issue) => sameLogin(issue.user?.login, ALERT_AUTHOR)).map(issueItem);
+async function alertIssues({ openIssues, config }) {
+  const alerts = (await openIssues()).filter((issue) => sameLogin(issue.user?.login, ALERT_AUTHOR));
+  return alerts.map((issue) => itemFor(issue, { kind: 'issue', config }));
 }
 
-async function orphanedClaims({ openIssues, client, repoRef, config }) {
+async function orphanedClaims({ openIssues, openPulls, client, repoRef, config }) {
   const refs = await client.paginate(apiPath(`${REPO_PATH}/git/matching-refs/heads/issue/`, repoRef));
-  const openNumbers = new Set((await openIssues()).map((issue) => issue.number));
-  const claimed = refs.map(({ ref }) => ISSUE_BRANCH.exec(ref)?.[1]).filter(Boolean).map(Number).filter((number) => openNumbers.has(number));
+  const issuesByNumber = new Map((await openIssues()).map((issue) => [issue.number, issue]));
+  const withOpenPull = new Set((await openPulls()).map((pull) => pull.head?.ref));
+  const claimed = refs.map(({ ref }) => ISSUE_BRANCH.exec(ref)?.[1]).filter(Boolean).map(Number)
+    .filter((number) => issuesByNumber.has(number) && !withOpenPull.has(`issue/${number}`));
   const items = [];
   for (const number of claimed) {
     const facts = await loadIssueFacts(client, { ...repoRef, number }, { config });
     if (deriveStatus(facts, { config, now: new Date() }).status !== 'orphaned') continue;
-    const url = `https://github.com/${repoRef.owner}/${repoRef.repo}/issues/${number}`;
-    items.push({ title: `#${number} ${facts.title}`, url, detail: `delete branch issue/${number}` });
+    const claim = itemFor(issuesByNumber.get(number), { kind: 'issue', config });
+    items.push({ ...claim, detail: `delete branch issue/${number}` });
   }
   return items;
 }
@@ -117,6 +159,16 @@ function memoize(load) {
   };
 }
 
+// Only 403 and 404 mean "this token cannot read it"; any other failure is a real error and stops the run.
+async function loadSection({ key, heading, load }, context) {
+  try {
+    return { key, heading, items: await load(context) };
+  } catch (error) {
+    if (!(error instanceof GitHubError) || !UNREADABLE_STATUSES.includes(error.status)) throw error;
+    return { key, heading, items: [], unreadable: error.message.split(/\r?\n/)[0] };
+  }
+}
+
 /**
  * Each section loads on its own: a read the token cannot make marks that section unreadable and never drops it.
  * @param {{ client: import('../lib/github.mjs').GitHubClient, repoRef: { owner: string, repo: string }, config: object, root: string }} context
@@ -126,15 +178,9 @@ export async function collectInbox({ client, repoRef, config, root }) {
   const listOpen = (resource) => client.paginate(apiPath(`${REPO_PATH}/${resource}`, repoRef), { query: { state: 'open' } });
   const openIssues = memoize(async () => (await listOpen('issues')).filter((issue) => !issue.pull_request));
   const openPulls = memoize(() => listOpen('pulls'));
+  const context = { client, repoRef, config, root, openIssues, openPulls };
   const sections = [];
-  for (const { key, heading, load } of SECTIONS) {
-    try {
-      sections.push({ key, heading, items: await load({ client, repoRef, config, root, openIssues, openPulls }) });
-    } catch (error) {
-      if (!(error instanceof GitHubError)) throw error;
-      sections.push({ key, heading, items: [], unreadable: error.message.split(/\r?\n/)[0] });
-    }
-  }
+  for (const section of SECTIONS) sections.push(await loadSection(section, context));
   return sections;
 }
 
