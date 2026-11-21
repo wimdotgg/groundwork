@@ -127,12 +127,12 @@ async function open(client, templates, sleeps = []) {
 }
 
 // Epic 10 (id 100) and tasks 01 to 03 at numbers 11 to 13 (ids 101 to 103).
-function existingIssues(templates, { skip = [] } = {}) {
+function existingIssues(templates, { without = [] } = {}) {
   const all = [
     issue(10, 100, templates.epic.body),
     ...templates.tasks.map((task, index) => issue(11 + index, 101 + index, task.body)),
   ];
-  return all.filter((item) => !skip.includes(item.number));
+  return all.filter((item) => !without.includes(item.number));
 }
 
 const postPaths = (calls) => writes(calls).map((call) => call.path);
@@ -200,7 +200,7 @@ test('openSetupEpic on a rerun creates only the missing task and the links it la
   const templates = parse();
   const sleeps = [];
   const { client, calls } = recordingClient({
-    [ISSUES_KEY]: listing(...existingIssues(templates, { skip: [13] })),
+    [ISSUES_KEY]: listing(...existingIssues(templates, { without: [13] })),
     [ISSUES_POST]: creation(13, 103),
     [`GET ${SUB_ISSUES(10)}?per_page=100`]: listing({ id: 101 }, { id: 102 }),
     [`POST ${SUB_ISSUES(10)}`]: CREATED,
@@ -240,7 +240,7 @@ test('openSetupEpic resumes after the first link request failed (R1)', async () 
 test('openSetupEpic adds a blocker link to an existing task when the blocker is new (R1)', async () => {
   const templates = parse();
   const { client, calls } = recordingClient({
-    [ISSUES_KEY]: listing(...existingIssues(templates, { skip: [11] })),
+    [ISSUES_KEY]: listing(...existingIssues(templates, { without: [11] })),
     [ISSUES_POST]: creation(14, 104),
     [`GET ${SUB_ISSUES(10)}?per_page=100`]: listing({ id: 102 }, { id: 103 }),
     [`POST ${SUB_ISSUES(10)}`]: CREATED,
