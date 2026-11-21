@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/wimdotgg/groundwork/compare/v0.6.0...v0.7.0) (2026-11-21)
+
+
+### Features
+
+* **groundwork:** add deploy.yml and the deploy-record helper ([#204](https://github.com/wimdotgg/groundwork/issues/204)) ([529c0e9](https://github.com/wimdotgg/groundwork/commit/529c0e99d1518269f8cdb26ef154d4204278d334))
+* **groundwork:** add the deploy, smoke and rollback project stubs ([#206](https://github.com/wimdotgg/groundwork/issues/206)) ([0f7903d](https://github.com/wimdotgg/groundwork/commit/0f7903d97e7e57a5224fd68af09c6501bc7986c6))
+* **groundwork:** add the script admin op and admin-ops/ ([#203](https://github.com/wimdotgg/groundwork/issues/203)) ([45b4223](https://github.com/wimdotgg/groundwork/commit/45b4223c52fa3519765d64a3d844816b379fefd1))
+* **groundwork:** add the selftest admin op ([#209](https://github.com/wimdotgg/groundwork/issues/209)) ([9356443](https://github.com/wimdotgg/groundwork/commit/93564435c196e6df049e4670fed0cccc9edcf64e))
+* **groundwork:** add the selftest probes ([#207](https://github.com/wimdotgg/groundwork/issues/207)) ([3bec183](https://github.com/wimdotgg/groundwork/commit/3bec18314f99e471075d0c97ba14f76946b6ef24))
+* **groundwork:** fix the Phase 4c contract and register script and selftest ops ([#201](https://github.com/wimdotgg/groundwork/issues/201)) ([817e102](https://github.com/wimdotgg/groundwork/commit/817e1023e8a2807b313a6f3a7d8502e02823fba1))
+* **kit:** add kit-update to copy kit paths from a release tag ([#205](https://github.com/wimdotgg/groundwork/issues/205)) ([51c5541](https://github.com/wimdotgg/groundwork/commit/51c5541f0c9c85ffc12c447d7348ac8c4b2674e6))
+* **kit:** kit-update owns the reusable-workflow SHA pins ([#208](https://github.com/wimdotgg/groundwork/issues/208)) ([95429e4](https://github.com/wimdotgg/groundwork/commit/95429e4bf6f3007fa62aaae22e9e4dc3c851c066))
+
 ## [0.6.0](https://github.com/wimdotgg/groundwork/compare/v0.5.0...v0.6.0) (2026-11-21)
 
 
