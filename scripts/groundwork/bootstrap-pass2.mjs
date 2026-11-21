@@ -36,9 +36,10 @@ const CODE_SCANNING_RULE = 'code_scanning';
 const CODEQL_WORKFLOW_NAME = 'CodeQL';
 // Advanced-setup workflows named CodeQL have other paths; only default setup runs from this one.
 const CODEQL_DEFAULT_SETUP_PATH = 'dynamic/github-code-scanning/codeql';
-// Issue-event workflows also report head_branch main; filtering by event keeps the setup run inside one full page.
+// Issue-event workflows also report head_branch main; filtering by event drops them.
 const CODEQL_RUN_EVENT = 'dynamic';
 const RUNS_PAGE_SIZE = 100;
+// The runs endpoint serves at most 1,000 results when filtered by branch, event or status: 10 pages of 100.
 const MAX_RUN_PAGES = 10;
 const DEFAULT_CODEQL_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_POLL_MS = 15 * 1000;
