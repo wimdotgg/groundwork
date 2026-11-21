@@ -1,3 +1,15 @@
+import { setTimeout as delay } from 'node:timers/promises';
+import { SettingsError, repoKind } from '../lib/settings.mjs';
+import { applySections, requireReleaseValues } from './apply-settings.mjs';
+import {
+  commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readBlobContents, readBlobTexts, readKitVersion,
+  readReleaseTree,
+} from './bootstrap-repo.mjs';
+import { buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
+import { openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
+
+const SETUP_TEMPLATES_DIR = 'scripts/groundwork/stubs/setup/';
+
 /** Op identity, read by admin-run (12.1). */
 export const OP = 'bootstrap';
 
@@ -40,7 +52,96 @@ export function validateArgs(args) {
   return unknown;
 }
 
-/** Skeleton: the pass 1 behaviour arrives with the lane tasks (#140). */
-export async function run() {
-  return { ok: false, summary: 'not implemented' };
+/** @param {Record<string, string|undefined>} env the dispatch input, re-validated because `ctx` carries no args */
+function readDescription(env) {
+  let args;
+  try {
+    args = JSON.parse(env.INPUT_ARGS);
+  } catch {
+    throw new SettingsError('bootstrap: INPUT_ARGS is not valid JSON');
+  }
+  const problems = validateArgs(args);
+  if (problems.length > 0) throw new SettingsError(`bootstrap: ${problems.join('; ')}`);
+  return args.description;
+}
+
+function setupTemplateFiles(contents) {
+  return Object.fromEntries(Object.entries(contents)
+    .filter(([path]) => path.startsWith(SETUP_TEMPLATES_DIR))
+    .map(([path, text]) => [path.slice(SETUP_TEMPLATES_DIR.length), text]));
+}
+
+/** Steps 1 and 2 of 14.2 plus everything derived from the release tree, so a bad template fails before any write. */
+async function readSource({ client, org, controlRepo, repo, description, adminBot }) {
+  const state = await inspectRepo({ client, org, repo, adminBot });
+  if (state === 'foreign') {
+    throw new SettingsError(`${org}/${repo} exists and is neither a groundwork project nor a fresh auto_init repository`);
+  }
+  const tag = state === 'ours'
+    ? await readKitVersion({ client, org, repo })
+    : await latestReleaseTag({ client, org, controlRepo });
+  const entries = await readReleaseTree({ client, org, controlRepo, tag });
+  const contents = await readBlobTexts({ client, org, controlRepo, entries, paths: contentPaths(entries) });
+  const treeEntries = buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag });
+  const templates = parseSetupTemplates(setupTemplateFiles(contents), { org, repo, description });
+  // An `ours` repository already holds the commit, which reads no blob.
+  const blobs = state === 'ours' ? new Map() : await readBlobContents({ client, org, controlRepo, entries: treeEntries });
+  return { state, tag, treeEntries, contents, templates, blobs };
+}
+
+/** @returns {string[]} the `- step: result` lines of an `applySections` summary */
+const stepLines = ({ summary }) => summary.split('\n').filter((line) => line.startsWith('- '));
+
+async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
+  const { client, token } = minted;
+  const { sleep, settingsDependencies } = seams;
+  const { org, repo } = ctx;
+  const { settingsRoot, config } = await ctx.writeSettings(settingsFiles(source.treeEntries, source.contents));
+  const targetContext = { ...ctx, client, token, settingsRoot, config };
+  const sections = (groups) => applySections(targetContext, groups, settingsDependencies);
+  const lines = [];
+
+  lines.push(...stepLines(await sections(['labels'])));
+  const commit = await commitBootstrapTree({
+    client, org, repo, tag: source.tag, treeEntries: source.treeEntries, blobs: source.blobs, sleep,
+  });
+  lines.push(`- bootstrap commit: ${commit.created ? `pushed ${commit.sha}` : 'already on main'}`);
+  for (const groups of [['settings'], ['rulesets'], ['variables']]) lines.push(...stepLines(await sections(groups)));
+  const epic = await openSetupEpic({ client, org, repo, templates: source.templates, adminBot, sleep });
+  lines.push(`- setup epic: #${epic.epic}, ${epic.created.length} issue(s) created`);
+  return lines;
+}
+
+/**
+ * Pass 1 of spec 14.2, steps 1 to 9; admin-run adds the closing `check`. Every step is idempotent, so a
+ * rerun after a failure resumes.
+ * @param {object} ctx admin-run context for a `deferred` op
+ * @param {{ sleep?: (ms: number) => Promise<unknown>, settingsDependencies?: object }} [seams] tests only
+ * @returns {Promise<{ ok: boolean, summary: string }>}
+ */
+export async function run(ctx, { sleep = delay, settingsDependencies } = {}) {
+  const { org, repo } = ctx;
+  const { controlRepo, apps } = ctx.config;
+  if (repoKind(repo, ctx.config) === 'control') throw new SettingsError(`bootstrap must not target the control repository ${controlRepo}`);
+  const description = readDescription(ctx.env);
+  // The settings group needs these after the repository and the commit exist; failing here leaves nothing half-made.
+  requireReleaseValues(ctx.env);
+  const adminBot = `${apps.admin}[bot]`;
+
+  ctx.log('reading the release tree');
+  const source = await ctx.withToken(
+    { repositories: [controlRepo], permissions: CONTROL_READ_PERMISSIONS },
+    ({ client }) => readSource({ client, org, controlRepo, repo, description, adminBot }),
+  );
+  const lines = [`- inspect: ${source.state}`, `- release tag: ${source.tag}`];
+  if (source.state === 'absent') {
+    ctx.log('creating the repository');
+    await createRepo({ withToken: ctx.withToken, org, controlRepo, repo, description, permissions: CREATE_PERMISSIONS });
+  }
+  lines.push(`- create repository: ${source.state === 'absent' ? 'created' : 'skipped'}`);
+  const applied = await ctx.withToken(
+    { repositories: [repo], permissions: PERMISSIONS },
+    (minted) => applyToTarget({ ctx, source, adminBot, minted, seams: { sleep, settingsDependencies } }),
+  );
+  return { ok: true, summary: [`### ${OP} ${org}/${repo}`, '', ...lines, ...applied].join('\n') };
 }

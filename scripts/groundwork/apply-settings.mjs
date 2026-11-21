@@ -226,7 +226,7 @@ function ghEnvironment({ env, token }) {
   return childEnv;
 }
 
-function requireReleaseValues(env) {
+export function requireReleaseValues(env) {
   const missing = RELEASE_WRITES.find(({ name }) => !env[name]);
   if (missing) throw new SettingsError(`${missing.name} is not set in the environment`);
 }
@@ -340,16 +340,20 @@ async function applyRulesets(context) {
   return describeCounts(counts);
 }
 
+/** `settings` is repository, team access, security, Actions and environments (spec 13.1). */
+export const SECTION_GROUPS = ['labels', 'settings', 'variables', 'rulesets'];
+
+// One list for every caller: `run` keeps this order, and a subset keeps the relative order.
 const STEPS = [
-  { name: 'repository', apply: applyRepository },
-  { name: 'teamAccess', apply: applyTeamAccess },
-  { name: 'security', apply: applySecurity },
-  { name: 'actions', apply: applyActions },
-  { name: 'variables', apply: applyVariables },
-  { name: 'environments', apply: applyEnvironments },
-  { name: 'release environment', apply: applyReleaseEnvironment },
-  { name: 'labels', apply: applyLabels },
-  { name: 'rulesets', apply: applyRulesets },
+  { name: 'repository', group: 'settings', apply: applyRepository },
+  { name: 'teamAccess', group: 'settings', apply: applyTeamAccess },
+  { name: 'security', group: 'settings', apply: applySecurity },
+  { name: 'actions', group: 'settings', apply: applyActions },
+  { name: 'variables', group: 'variables', apply: applyVariables },
+  { name: 'environments', group: 'settings', apply: applyEnvironments },
+  { name: 'release environment', group: 'settings', apply: applyReleaseEnvironment },
+  { name: 'labels', group: 'labels', apply: applyLabels },
+  { name: 'rulesets', group: 'rulesets', apply: applyRulesets },
 ];
 
 function nameStep(label, error) {
@@ -367,26 +371,41 @@ async function runStep(log, label, action) {
   }
 }
 
+function assertKnownGroups(groups) {
+  const unknown = groups.find((group) => !SECTION_GROUPS.includes(group));
+  if (unknown !== undefined) throw new SettingsError(`${OP}: unknown section group "${unknown}"`);
+  if (groups.length === 0) throw new SettingsError(`${OP}: no section group named`);
+}
+
 /**
- * Syncs the target repository to the settings files in `settingsRoot`. Stops at the first failed call; every
- * completed step was logged before its calls, so re-running is the recovery path.
+ * Syncs only the named groups of the target repository to the settings files in `settingsRoot`, in the
+ * order of `run`. Stops at the first failed call; every completed step was logged before its calls, so
+ * re-running is the recovery path.
  * @param {OpContext} ctx
+ * @param {string[]} groups subset of `SECTION_GROUPS`
  * @param {Dependencies} [dependencies] test seam for the `gh` subprocess
  * @returns {Promise<{ ok: boolean, summary: string }>}
  */
-export async function run(ctx, dependencies = DEFAULT_DEPENDENCIES) {
+export async function applySections(ctx, groups, dependencies = DEFAULT_DEPENDENCIES) {
   if (typeof ctx.repo !== 'string' || ctx.repo === '') throw new SettingsError(`${OP} needs a target repository`);
-  requireReleaseValues(ctx.env);
+  assertKnownGroups(groups);
+  if (groups.includes('settings')) requireReleaseValues(ctx.env);
   const repoRef = { owner: ctx.org, repo: ctx.repo };
   const kind = repoKind(ctx.repo, ctx.config);
   const desired = await loadDesiredState({ root: ctx.settingsRoot });
   const signals = await runStep(ctx.log, 'reading live signals', () => readSignals(ctx.client, repoRef, { repoKind: kind }));
-  assertPass2Gate(desired.rulesets, signals);
+  if (groups.includes('rulesets')) assertPass2Gate(desired.rulesets, signals);
   const context = { ...ctx, desired, kind, repoRef, dependencies, signals };
+  const selected = STEPS.filter((step) => groups.includes(step.group));
   const outcomes = [];
-  for (const [index, step] of STEPS.entries()) {
-    const label = `step ${index + 1}/${STEPS.length} ${step.name}`;
+  for (const [index, step] of selected.entries()) {
+    const label = `step ${index + 1}/${selected.length} ${step.name}`;
     outcomes.push(`- ${step.name}: ${await runStep(ctx.log, label, () => step.apply(context))}`);
   }
   return { ok: true, summary: [`### ${OP} ${ctx.org}/${ctx.repo}`, '', ...outcomes].join('\n') };
+}
+
+/** Syncs every group, in the fixed step order. */
+export function run(ctx, dependencies = DEFAULT_DEPENDENCIES) {
+  return applySections(ctx, SECTION_GROUPS, dependencies);
 }
