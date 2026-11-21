@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createFixtureClient } from '../lib/github.mjs';
 import { repoRoot } from '../lib/config.mjs';
-import { REGISTRY, apply, materialiseSettings, plan, validateRequest, writeSummary } from './admin-run.mjs';
+import { REGISTRY, apply, materialiseSettings, plan, validateRequest, writeOutputs, writeSummary } from './admin-run.mjs';
 import { mintInstallationToken, revokeInstallationToken } from './app-token.mjs';
 
 const ORG = 'acme';
@@ -889,7 +889,6 @@ test('admin-run.yml: lists script and selftest, declares script_path and carries
 
 const SCRIPT_PATH = 'admin-ops/example.mjs';
 const SKELETON_ENVS = {
-  script: { INPUT_OP: 'script', INPUT_REF: REF, INPUT_SCRIPT_PATH: SCRIPT_PATH },
   selftest: { INPUT_OP: 'selftest', INPUT_TARGET_REPO: '' },
 };
 
@@ -909,7 +908,7 @@ test('validateRequest: script needs a SHA ref and an admin-ops path, selftest ta
   ];
   for (const [label, candidate] of rejected) assert.ok(validateRequest(candidate, REGISTRY).problems.length > 0, label);
   const onlySkeletonProblem = (candidate) => validateRequest(candidate, REGISTRY).problems;
-  assert.deepEqual(onlySkeletonProblem(script), ['args: not implemented']);
+  assert.deepEqual(onlySkeletonProblem(script), []);
   assert.deepEqual(onlySkeletonProblem(inputs({ op: 'selftest', targetRepo: '' })), ['args: not implemented']);
 });
 
@@ -921,7 +920,7 @@ for (const [op, env] of Object.entries(SKELETON_ENVS)) {
     assert.match(planned.reason, /not implemented/);
     assert.deepEqual(calls, []);
     const { overrides, mints, jwts, tempDirs } = deferredHarness(async () => assert.fail('op must not run'));
-    const applied = await apply(dispatchEnv({ INPUT_TARGET_REPO: op === 'script' ? TARGET : '', ...env }), { ...overrides, registry: REGISTRY });
+    const applied = await apply(dispatchEnv({ INPUT_TARGET_REPO: '', ...env }), { ...overrides, registry: REGISTRY });
     assert.equal(applied.exitCode, 1);
     assert.match(applied.reason, /not implemented/);
     assert.deepEqual([mints.length, jwts.length, tempDirs.length], [0, 0, 0]);
@@ -1219,8 +1218,99 @@ test('selftest targetRepo builds selftest-<run id> from digits only', () => {
   }
 });
 
-test('skeleton ops export an empty grant list and refuse every script file', () => {
-  assert.deepEqual(REGISTRY.script.grants({}), []);
+test('the selftest skeleton exports an empty grant list', () => {
   assert.deepEqual(REGISTRY.selftest.grants({}), []);
-  assert.throws(() => REGISTRY.script.parseScript('export const permissions = {};'), { message: 'not implemented' });
+});
+
+// --- script op and the grants seam ---------------------------------------------------------------------------------
+
+const SCRIPT_FILE = 'admin-ops/example.mjs';
+const SCRIPT_SOURCE = 'export const permissions = { "issues": "read" };\nexport async function run({ log }) {\n  log(JSON.stringify(Object.keys(process.env)));\n  return { ok: true, summary: "ran" };\n}\n';
+const SCRIPT_SHA256 = createHash('sha256').update(SCRIPT_SOURCE).digest('hex');
+const SCRIPT_ENV = { INPUT_OP: 'script', INPUT_REF: REF, INPUT_SCRIPT_PATH: SCRIPT_FILE, INPUT_ARGS: '{}' };
+const controlMainPath = `/repos/${ORG}/${CONTROL_REPO}/git/ref/heads/main`;
+const scriptRoutes = (source = SCRIPT_SOURCE) => ({
+  [`GET /repos/${ORG}/${CONTROL_REPO}/contents/${SCRIPT_FILE}?ref=${REF}`]: ok({ type: 'file', encoding: 'base64', content: Buffer.from(source).toString('base64') }),
+  [`GET ${controlMainPath}`]: ok({ object: { sha: REF } }),
+});
+
+test('plan: script prints the file, its SHA-256 and permissions, and publishes the hash as a job output', async () => {
+  const result = await plan(dispatchEnv(SCRIPT_ENV), { ...planOverrides(scriptRoutes()), registry: REGISTRY });
+  assert.equal(result.exitCode, 0, result.reason);
+  assert.deepEqual(result.outputs, { script_sha256: SCRIPT_SHA256 });
+  for (const text of [SCRIPT_SOURCE, `- SHA-256: ${SCRIPT_SHA256}`, `- Script: ${SCRIPT_FILE}`, '| issues | read |', 'Token grant, `proj`, exactly:']) assert.ok(result.summary.includes(text), text);
+});
+
+test('plan: script refuses a ref that is not the main head and a file without permissions', async () => {
+  const moved = { ...scriptRoutes(), [`GET ${controlMainPath}`]: ok({ object: { sha: MAIN_SHA } }) };
+  assert.match((await plan(dispatchEnv(SCRIPT_ENV), { ...planOverrides(moved), registry: REGISTRY })).reason, /not the current main head/);
+  const bare = scriptRoutes('export async function run() {}');
+  assert.match((await plan(dispatchEnv(SCRIPT_ENV), { ...planOverrides(bare), registry: REGISTRY })).reason, /refused/);
+});
+
+const scriptHarness = () => harness({ registry: { ...stubRegistry(), script: REGISTRY.script }, routes: { ...scriptRoutes(), ...revokeRoute } });
+const scriptApplyEnv = (overrides = {}) => dispatchEnv({ ...SCRIPT_ENV, RELEASE_APP_KEY: 'RELEASE-KEY', PLAN_SCRIPT_SHA256: SCRIPT_SHA256, ...overrides });
+
+test('apply: script mints the control read, then one target token with exactly the script permissions, and its child sees no secret', async () => {
+  const { overrides, mints } = scriptHarness();
+  const result = await apply(scriptApplyEnv(), overrides);
+  assert.equal(result.exitCode, 0, result.reason);
+  assert.deepEqual(mints.map(({ repositories, permissions }) => ({ repositories, permissions })), [
+    { repositories: [CONTROL_REPO], permissions: { contents: 'read' } },
+    { repositories: [TARGET], permissions: { issues: 'read' } },
+  ]);
+  assert.match(result.summary, /ran/);
+  assert.doesNotMatch(result.summary, /ADMIN_APP_KEY|RELEASE_APP_KEY|INPUT_OP|GITHUB_REF/);
+});
+
+test('apply: script refuses an empty or different planned SHA-256 before the target mint', async () => {
+  for (const [planned, mintCount] of [['', 0], ['0'.repeat(64), 1]]) {
+    const { overrides, mints } = scriptHarness();
+    const result = await apply(scriptApplyEnv({ PLAN_SCRIPT_SHA256: planned }), overrides);
+    assert.equal(result.exitCode, 1);
+    assert.equal(mints.length, mintCount, `planned ${planned || 'empty'}`);
+  }
+});
+
+test('withToken: the script target grant is absent until the file is parsed, then exact', async () => {
+  const outcomes = [];
+  const attempt = (ctx, permissions) => ctx.withToken({ repositories: [TARGET], permissions }, async () => 'minted').catch((error) => error.message);
+  const registry = { ...stubRegistry(), script: { ...REGISTRY.script, run: async (ctx) => {
+    outcomes.push(await attempt(ctx, { issues: 'read' }));
+    ctx.setScriptPermissions({ issues: 'read' });
+    outcomes.push(await attempt(ctx, { issues: 'read' }), await attempt(ctx, { issues: 'write' }), await attempt(ctx, { issues: 'read', contents: 'read' }));
+    return { ok: true, summary: 'done' };
+  } } };
+  const { overrides, mints } = harness({ registry, routes: revokeRoute });
+  await apply(scriptApplyEnv(), overrides);
+  assert.deepEqual(outcomes.map((outcome) => (outcome.startsWith('withToken refused') ? 'refused' : outcome)), ['refused', 'minted', 'refused', 'refused']);
+  assert.equal(mints.length, 1);
+});
+
+test('plan: an op without a plan export builds no client for it', async () => {
+  let clients = 0;
+  const overrides = { ...planOverrides({}), registry: REGISTRY, createClient: () => { clients += 1; return createFixtureClient({}); } };
+  assert.equal((await plan(dispatchEnv({ INPUT_OP: 'create-issue-types', INPUT_TARGET_REPO: '' }), overrides)).exitCode, 0);
+  assert.equal(clients, 0);
+});
+
+test('writeOutputs: appends name=value lines and refuses a line break in a name or value', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'admin-run-output-'));
+  const file = path.join(directory, 'output');
+  await writeOutputs({ GITHUB_OUTPUT: file }, { script_sha256: 'abc' });
+  assert.equal(await readFile(file, 'utf8'), 'script_sha256=abc\n');
+  await assert.rejects(writeOutputs({ GITHUB_OUTPUT: file }, { name: 'a\nevil=1' }), { name: 'GitHubError' });
+  await assert.rejects(writeOutputs({ GITHUB_OUTPUT: file }, { 'a\rb': '1' }), { name: 'GitHubError' });
+  await rm(directory, { recursive: true });
+});
+
+test('apply: a module targetRepo(env) names ctx.repo', async () => {
+  let repo;
+  const { overrides } = deferredHarness(async (ctx) => {
+    repo = ctx.repo;
+    return stopHere;
+  });
+  overrides.registry.bootstrap.targetRepo = () => 'derived-1';
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.equal(repo, 'derived-1');
 });

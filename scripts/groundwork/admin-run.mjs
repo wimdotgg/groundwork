@@ -78,6 +78,9 @@ const refusesControlRepo = (request, controlRepo) => request.op === OP_BOOTSTRAP
 /** Tokens are restricted by repository name, so the control repository is always minted under the spelling in config. */
 const withCanonicalTarget = (request, controlRepo) => (isControlRepo(request.targetRepo, controlRepo) ? { ...request, targetRepo: controlRepo } : request);
 
+/** An op that names its own repository (`selftest`) exports `targetRepo(env)`; every other op keeps the dispatched one (12.1). */
+const withModuleTarget = (request, env) => (typeof request.module.targetRepo === 'function' ? { ...request, targetRepo: request.module.targetRepo(env) } : request);
+
 /**
  * @param {Record<string, string|undefined>} env
  * @returns {{ op: string, targetRepo: string, ref: string, scriptPath: string, argsText: string }}
@@ -202,14 +205,22 @@ function describeScope(module, targetRepo) {
 }
 
 /** A deferred op lists every grant `withToken` can mint, the create grant included, so the owner approves all of them. */
-function renderRequestedPermissions(module, { controlRepo, targetRepo }) {
+function renderRequestedPermissions(module, grantInputs) {
+  const { controlRepo, targetRepo } = grantInputs;
   if (module.TOKEN_SCOPE !== SCOPE_DEFERRED) return ['Requested token permissions:', '', ...renderPermissions(module.PERMISSIONS)];
+  if (typeof module.grants === 'function') return renderGrantList(listGrants({ module, ...grantInputs }));
   const grants = [
     [`target repository \`${targetRepo}\`, any subset of`, module.PERMISSIONS],
     [`create call on \`${controlRepo}\``, module.CREATE_PERMISSIONS],
     [`control repository \`${controlRepo}\` read`, module.CONTROL_READ_PERMISSIONS],
   ];
   return grants.flatMap(([label, permissions]) => [`Token grant, ${label}:`, '', ...renderPermissions(permissions), '']);
+}
+
+function renderGrantList(grants) {
+  return grants.flatMap(({ repositories, permissions, match }) => [
+    `Token grant, ${repositories.map((name) => `\`${safeText(name)}\``).join(', ')}, ${match === 'exact' ? 'exactly' : 'any subset of'}:`, '', ...renderPermissions(permissions), '',
+  ]);
 }
 
 function renderPermissions(permissions) {
@@ -268,7 +279,7 @@ export async function plan(env, overrides = {}) {
   const { problems, request: dispatched } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
-  const request = withCanonicalTarget(dispatched, controlRepo);
+  const request = withModuleTarget(withCanonicalTarget(dispatched, controlRepo), env);
   if (refusesControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   let ancestry;
   if (request.op === OP_WITH_REF) {
@@ -276,6 +287,8 @@ export async function plan(env, overrides = {}) {
     if (checked.problem !== undefined) return failure(heading, checked.problem);
     ancestry = describeAncestry(checked.aheadBy);
   }
+  const details = await planDetails({ createClient: deps.createClient, env, org, controlRepo, request });
+  if (details.problem !== undefined) return failure(heading, details.problem);
   const summary = [
     `## ${heading}`,
     '',
@@ -283,9 +296,26 @@ export async function plan(env, overrides = {}) {
     '',
     ...renderRequest({ org, request, ancestry, controlRepo }),
     '',
-    ...renderRequestedPermissions(request.module, { controlRepo, targetRepo: request.targetRepo }),
+    ...renderPlanDetails(details),
+    ...renderRequestedPermissions(request.module, { controlRepo, targetRepo: request.targetRepo, env, scriptPermissions: details.scriptPermissions }),
   ].join('\n');
-  return { exitCode: 0, summary };
+  return { exitCode: 0, summary, outputs: details.outputs };
+}
+
+/** An op that must show the owner more than its inputs (the `script` file) exports `plan`; a refusal is its `problem`. */
+async function planDetails({ createClient: makeClient, env, org, controlRepo, request }) {
+  if (typeof request.module.plan !== 'function') return {};
+  try {
+    return await request.module.plan({ client: makeClient({ env }), org, controlRepo, request });
+  } catch (error) {
+    if (!(error instanceof GitHubError)) throw error;
+    return { problem: error.message };
+  }
+}
+
+function renderPlanDetails({ facts = [], source }) {
+  if (source === undefined) return [];
+  return [...facts.map((fact) => `- ${safeText(fact)}`), '', fencedBlock(source, 'js'), ''];
 }
 
 /**
@@ -389,23 +419,31 @@ const samePermissionSets = (first, second) => Object.keys(first).length === Obje
 
 const isRepositoryList = (repositories, expected) => Array.isArray(repositories) && repositories.length === 1 && repositories[0] === expected;
 
-/** Same or lower level than the op's own permissions, and at least one. */
+/** Same or lower level than the granted permissions, and at least one. */
 function isPermissionSubset(requested, allowed) {
   const entries = Object.entries(requested);
   return entries.length > 0 && entries.every(([name, level]) => Object.hasOwn(allowed, name) && Object.hasOwn(LEVEL_RANK, level) && LEVEL_RANK[level] <= LEVEL_RANK[allowed[name]]);
 }
 
-/** Why a request is not one of the op's three declared grants (12.1), or undefined. Runs before any mint. */
-function grantProblem(requested, { module, targetRepo, controlRepo }) {
+/** A module without `grants` keeps its three constants (12.1). `scriptPermissions` exists only once the script op has parsed its file. */
+function listGrants({ module, targetRepo, controlRepo, env, scriptPermissions }) {
+  if (typeof module.grants === 'function') return module.grants({ env, targetRepo, controlRepo, scriptPermissions });
+  return [
+    { repositories: [targetRepo], permissions: module.PERMISSIONS, match: 'subset' },
+    { repositories: [controlRepo], permissions: module.CONTROL_READ_PERMISSIONS, match: 'exact' },
+    { repositories: [controlRepo], permissions: module.CREATE_PERMISSIONS, match: 'exact' },
+  ].filter((grant) => isPlainObject(grant.permissions));
+}
+
+const grantAllows = (permissions, grant) => (grant.match === 'exact' ? samePermissionSets(permissions, grant.permissions) : isPermissionSubset(permissions, grant.permissions));
+
+/** Why a request is not one of the op's declared grants (12.1), or undefined. Runs before any mint. */
+function grantProblem(requested, { module, grants }) {
   const { repositories, permissions } = requested ?? {};
   if (module.TOKEN_SCOPE !== SCOPE_DEFERRED) return 'this op already has its token';
   if (!isPlainObject(permissions)) return 'permissions must be an object';
-  if (isRepositoryList(repositories, targetRepo)) {
-    return isPermissionSubset(permissions, module.PERMISSIONS) ? undefined : 'permissions exceed the op permissions for the target';
-  }
-  if (isRepositoryList(repositories, controlRepo) && samePermissionSets(permissions, module.CONTROL_READ_PERMISSIONS)) return undefined;
-  if (isRepositoryList(repositories, controlRepo) && samePermissionSets(permissions, module.CREATE_PERMISSIONS)) return undefined;
-  return 'request is not one of the declared grants';
+  const sameRepositories = grants.filter((grant) => isRepositoryList(repositories, grant.repositories[0]));
+  return sameRepositories.some((grant) => grantAllows(permissions, grant)) ? undefined : 'request is not one of the declared grants';
 }
 
 /** Signs a fresh JWT (one lasts minutes) and mints; the JWT never leaves this function. */
@@ -433,14 +471,14 @@ function snapshotRequest(requested) {
 }
 
 /** `ctx.withToken`: one grant at a time, revoked in a `finally`. A failed revoke is collected, so it fails the run even if the op swallows the error. */
-function createWithToken({ deps, env, opEnv, org, record, mask, clean, grants }) {
+function createWithToken({ deps, env, opEnv, org, record, mask, clean, module, currentGrants }) {
   const revokeProblems = [];
   let active = false;
   const withToken = async (requested, callback) => {
     if (active) throw new GitHubError('withToken calls do not nest');
     // Validate and mint the same frozen copy: the caller's objects can change while the mint awaits.
     const { repositories, permissions } = snapshotRequest(requested);
-    const problem = grantProblem({ repositories, permissions }, grants);
+    const problem = grantProblem({ repositories, permissions }, { module, grants: currentGrants() });
     if (problem !== undefined) throw new GitHubError(`withToken refused: ${problem}`);
     active = true;
     try {
@@ -487,7 +525,7 @@ async function runOp(context) {
   const repo = request.module.TOKEN_SCOPE === 'org' ? null : request.targetRepo;
   const ctx = {
     client, token, org, repo, settingsRoot, config, env, log: (line) => logs.push(clean(line)), recordCall,
-    withToken: context.withToken, writeSettings: (files) => writeSettingsFiles({ deps, directory }, files),
+    withToken: context.withToken, setScriptPermissions: context.setScriptPermissions, writeSettings: (files) => writeSettingsFiles({ deps, directory }, files),
   };
   const parts = [await request.module.run(ctx)];
   if (OPS_THEN_CHECK.has(request.op) && parts[0].ok) {
@@ -572,7 +610,7 @@ export async function apply(env, overrides = {}) {
   delete process.env.ADMIN_APP_KEY;
 
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
-  const request = withCanonicalTarget(dispatched, controlRepo);
+  const request = withModuleTarget(withCanonicalTarget(dispatched, controlRepo), env);
   if (refusesControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   const calls = [];
   const logs = [];
@@ -588,9 +626,10 @@ export async function apply(env, overrides = {}) {
   delete opEnv.ADMIN_APP_KEY;
 
   const deferred = request.module.TOKEN_SCOPE === SCOPE_DEFERRED;
-  const grants = { module: request.module, targetRepo: request.targetRepo, controlRepo };
-  const tokens = createWithToken({ deps, env, opEnv, org, record, mask, clean, grants });
-  const context = { deps, request, client: null, token: null, org, env: opEnv, logs, clean, recordCall: record, withToken: tokens.withToken };
+  const grantInputs = { module: request.module, targetRepo: request.targetRepo, controlRepo, env: opEnv, scriptPermissions: undefined };
+  const tokens = createWithToken({ deps, env, opEnv, org, record, mask, clean, module: request.module, currentGrants: () => listGrants(grantInputs) });
+  const setScriptPermissions = (permissions) => { grantInputs.scriptPermissions = permissions; };
+  const context = { deps, request, client: null, token: null, org, env: opEnv, logs, clean, recordCall: record, withToken: tokens.withToken, setScriptPermissions };
 
   let outcome;
   let token;
@@ -616,6 +655,15 @@ export async function apply(env, overrides = {}) {
   const summary = scrub(renderApplySummary({ org, controlRepo, request, outcome, calls, logs }), secrets);
   const reason = outcome.ok ? undefined : scrub(outcome.error ?? 'an op reported failure', secrets);
   return { exitCode: outcome.ok ? 0 : 1, summary, reason };
+}
+
+/** Job outputs for later jobs, e.g. `script_sha256` (12.1). */
+export async function writeOutputs(env, outputs = {}) {
+  if (!env.GITHUB_OUTPUT) return;
+  const entries = Object.entries(outputs);
+  if (entries.flat().some((text) => /[\r\n]/.test(String(text)))) throw new GitHubError('job output names and values must be single lines');
+  const lines = entries.map(([name, value]) => `${name}=${value}\n`);
+  await appendFile(env.GITHUB_OUTPUT, lines.join(''));
 }
 
 /** The step summary is unreadable through the API, so a run also prints it to the log inside a group. */
@@ -647,8 +695,9 @@ async function runCli() {
   const command = process.argv[2];
   try {
     if (!Object.hasOwn(COMMANDS, command)) throw new GitHubError('usage: admin-run.mjs <plan|apply>');
-    const { exitCode, summary, reason } = await COMMANDS[command]({ ...process.env });
+    const { exitCode, summary, reason, outputs } = await COMMANDS[command]({ ...process.env });
     await writeSummary(process.env, summary);
+    await writeOutputs(process.env, outputs);
     if (reason !== undefined) process.stderr.write(`admin-run: ${reason}\n`);
     process.exitCode = exitCode;
   } catch (error) {
