@@ -2,12 +2,16 @@
 
 Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/spec.md); section numbers below point into it. The spec wins over this file.
 
-`scripts/agent/*` commands (`next`, `claim`, `checkpoint`, `resume`, `release`, `plan-lint`, `review-queue`) arrive in Phase 3. Until then follow the worker loop (6.3) by hand with `gh api`.
+`scripts/agent/*` runs the worker loop (6.3): `next`, `claim`, `checkpoint`, `resume`, `release`. `plan-lint` and `review-queue` arrive in Phase 3b.
+
+- Node 24+ first on PATH, for agents and hooks. An older `node` makes every agent script exit 1 with one stderr line; `token.mjs` checks it.
+- Session id: your harness session id (Claude Code's `session_id`), for `--session` and `GROUNDWORK_SESSION`. The hooks read the same id, so it matches the PR footer. Never invent one.
+- Subagents share their parent's session id and fire no Stop or PreCompact hooks. Concurrent workers run as separate top-level sessions, or with distinct explicit ids.
 
 ## Identity and pacing (2.2)
 
 - Act only as `wimdotgg-agent[bot]`. Never write to GitHub under another login, whatever `gh` or Git are logged in as.
-- Every GitHub write goes through `node scripts/agent/token.mjs exec -- <gh or git command>`. It mints an installation token and sets the bot name and noreply email on commits. Plain `git push` and bare `gh` writes are forbidden.
+- Every GitHub write goes through `node scripts/agent/token.mjs exec -- <gh or git command>`, enqueue and `gh pr ready` included. It mints an installation token and sets the bot name and noreply email on commits. Plain `git push` and bare `gh` writes are forbidden, as is `gh api` with `-X`, `--method`, `-f`, `-F`, `--field`, `--raw-field` or `--input`. Read-only GraphQL goes through the wrapper too.
 - Pace writes: at most 5 issue creations and 10 comments per minute, a pause between bulk writes, no polling loops against the API.
 
 ## Never
@@ -42,7 +46,7 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 ## Planning for width (6.2)
 
 - Order: contract task (types, schema, API shape), then concurrent lane tasks, then one integration task blocked by all lanes.
-- Overlapping `## Touches` means a `blocked-by` link or one merged task. Name hotspots in `## Touches`.
+- Overlapping `## Touches` means a `blocked-by` link or one merged task. Name hotspots in `## Touches`. `hotspots.json` paths are exact paths or directory prefixes, not globs.
 - Plan comment on the epic lists lanes and lane width.
 - `plan-lint` fails on: cycle, task without AC (spikes excepted), task without `## Serves`, epic without integration task, over 12 sub-issues, depth over limit, overlapping Touches without a link.
 - Run `plan-lint` locally as the last step and post its report; adding sub-issues fires no event.
@@ -72,19 +76,23 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 
 ## Worker loop (6.3)
 
-1. `next`: ready task, Definition of Ready met, hotspot free. Takeover candidates first, then `priority:p0`, epic priority, sub-issue order.
-2. `claim N`:
-   - empty commit `chore(claim): #N [session <id>]` via `POST /git/commits` (tree and parent from `main`); never send author or committer dates;
-   - `POST /git/refs` for `refs/heads/issue/N`. Only HTTP 201 means claimed; anything else (422 if it exists) means try the next candidate;
+Run every script as `node scripts/agent/<name>.mjs`. Scripts that write run under `node scripts/agent/token.mjs exec -- ` (`claim`, `checkpoint`, `release`; the hooks already do). Exit codes: 0 done, 1 error or refusal, 3 held by another session.
+
+1. `next`: ready task, Definition of Ready met, hotspot free. Takeover candidates first, then `priority:p0`, epic priority (ties by epic number), sub-issue order. Nothing ready: stop and report the skipped reasons.
+2. `claim N --session <id> --agent <model>/<harness>`:
+   - empty commit `chore(claim): #N [session <id>]` via `POST /git/commits` (tree and parent from `main`), no author or committer dates;
+   - `POST /git/refs` for `refs/heads/issue/N`. Only HTTP 201 means claimed;
    - pointer comment on the issue with `<!-- groundwork:claim -->`;
    - draft PR from `issue/N` with the PR template, `Closes #N`, initial `## State`; then the claim comment on the PR.
-3. Build; push early; merge main in, never rebase.
-4. `checkpoint` at the required moments (below).
-5. Mark ready when Definition of Done is met.
-6. Fix review findings. After 3 rounds raise `needs-decision`.
-7. Enqueue: `gh pr merge N --auto --squash`.
-8. If ejected from the queue or new findings arrive, return to that PR before new work.
-9. After merge: handover comment on the issue (`release.mjs N --merged`).
+   - Exit 3: held, not claimable, or Definition of Ready unmet; run `next` again. Exit 1: stop and report. A rerun by the same session completes missing steps. On a takeover candidate `claim` takes over (6.4).
+3. After a takeover, or when revived: `resume N --session <id>`, then continue from its briefing. Exit 3 or 1: stop.
+4. Build on `issue/N`; push early through the wrapper; merge main in, never rebase.
+5. `node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --session <id>` at the required moments (6.5), from `.artifacts/checkpoint.json`.
+6. Mark ready when Definition of Done is met: `node scripts/agent/token.mjs exec -- gh pr ready N`.
+7. Fix review findings. After 3 rounds raise `needs-decision` (`node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --decision --session <id>`).
+8. Enqueue: `node scripts/agent/token.mjs exec -- gh pr merge N --auto --squash`.
+9. If ejected from the queue or new findings arrive, return to that PR before new work.
+10. After merge: `node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --merged --session <id>` posts the handover comment on the issue.
 
 ## Leases and takeover (6.4)
 
@@ -93,9 +101,11 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 - A ref with no PR expires 15 minutes after the pointer comment, or when there is none, after the claim commit's committer date (GitHub stamps it, since `claim` creates it through the API).
 - Takeover candidates: draft PRs with an expired lease or the `<!-- groundwork:released -->` body marker, and no `needs-decision` label. Release adds the marker; takeover removes it.
 - Takeover is compare-and-swap: read head SHA, create `chore(claim): #N takeover [session <id>]` with that parent, then `PATCH /git/refs/heads/issue/N` with `force: false`. If the head moved, the update fails; move on. Winner posts a takeover comment.
+- A head that is another session's takeover commit, younger than `claimWithoutPrMinutes` (15), holds the PR: `claim` exits 3.
+- `next` offers a takeover only while the task passes every status check except `claimed` (format and size are not re-checked). A direct `claim N` on a takeover candidate does not re-check it (accepted gap).
 - A revived worker runs `resume` first and stops if the PR footer names another session.
 - Takeover continues from `resume` output; never restart the task.
-- `needs-decision` releases the claim (`release.mjs N --decision`); the PR stays open with its `## State`.
+- `needs-decision` releases the claim (`node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --decision --session <id>`): a ready PR turns back to draft, the PR stays open with its `## State`, and the released marker makes it a takeover candidate.
 
 ## Context preservation (6.5)
 
@@ -109,7 +119,8 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 
 - `## State` fields: Done, In progress, Next, Proven, Unproven, Rejected, Gotchas, Open. Header carries checkpoint number, time, model/harness, session. Exact format in 6.5; no `<...>` placeholders left (`PR metadata` fails on them).
 - Checkpoint before: ending a session, raising `needs-decision`, marking ready, completing a takeover. `checkpoint` pushes, rewrites `## State` and posts the journal comment in one command.
-- `resume N` gives the bounded briefing (~300 lines).
+- A non-auto `checkpoint` is allowed on a ready PR. A rerun after a failed journal post bumps the checkpoint number again and keeps the input file. The `Stop` and `PreCompact` hooks run `checkpoint --auto`, which push a draft `issue/N` and, when `.artifacts/checkpoint.json` exists, also rewrite State and post the journal; they take the session from `GROUNDWORK_SESSION`, else the hook's stdin `session_id`.
+- `resume N --session <id>` gives the bounded briefing (~300 lines); no writes.
 
 ## Escalation (6.6)
 
