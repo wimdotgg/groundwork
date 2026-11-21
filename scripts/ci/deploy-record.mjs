@@ -9,6 +9,7 @@ const RESULTS = ['deployed', 'rolled-back', 'failed'];
 const NO_PREVIOUS = 'none';
 const RECORD_MARKER = '<!-- groundwork:deploy -->';
 const RECORD_HEADING = '### Deploy';
+const RECORD_BLOCK_START = new RegExp(`^${RECORD_MARKER}\\n${RECORD_HEADING}$`, 'm');
 const USAGE = 'usage: deploy-record.mjs previous-tag <tag> | record --tag <tag> --result <r> --previous <tag|none> --run-url <url>';
 
 function parseTag(tag) {
@@ -52,7 +53,8 @@ export function renderRecord({ result, tag, previous, runUrl }) {
  */
 export function upsertRecord({ notes, record }) {
   const text = notes.replaceAll('\r\n', '\n');
-  const start = text.indexOf(RECORD_MARKER);
+  // Whole-line match: commit subjects in the notes may quote the marker.
+  const start = text.search(RECORD_BLOCK_START);
   if (start === -1) return `${text.trimEnd()}${text.trim() === '' ? '' : '\n\n'}${record}`;
   const blockEnd = text.slice(start).search(/\n\s*\n/);
   const after = blockEnd === -1 ? '' : text.slice(start + blockEnd).replace(/^\n+/, '\n');
@@ -64,7 +66,7 @@ function requireValue(name, value, pattern) {
   return value;
 }
 
-function validateRecordInput(values) {
+export function validateRecordInput(values) {
   requireValue('tag', values.tag, TAG_PATTERN);
   requireValue('previous', values.previous, new RegExp(`^(${NO_PREVIOUS}|v\\d+\\.\\d+\\.\\d+)$`));
   requireValue('result', values.result, new RegExp(`^(${RESULTS.join('|')})$`));
@@ -98,8 +100,9 @@ async function runCli(argv, env) {
   }
   if (argv[0] !== 'record') throw new GitHubError(USAGE);
   const input = validateRecordInput(values);
-  await writeRecord({ client, repo, input });
+  // Printed first so the job summary has the record even when the release PATCH fails.
   process.stdout.write(renderRecord(input));
+  await writeRecord({ client, repo, input });
 }
 
 if (import.meta.main) {

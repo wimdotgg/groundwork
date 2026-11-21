@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { repoRoot } from '../lib/config.mjs';
-import { previousTag, renderRecord, upsertRecord, writeRecord } from './deploy-record.mjs';
+import { createFixtureClient } from '../lib/github.mjs';
+import { previousTag, renderRecord, upsertRecord, validateRecordInput, writeRecord } from './deploy-record.mjs';
 
 const WORKFLOW_FILE = path.join(repoRoot(import.meta.url), '.github', 'workflows', 'deploy.yml');
 const REPO = { owner: 'wimdotgg', repo: 'groundwork' };
@@ -64,21 +65,39 @@ test('upsertRecord replaces an existing block on a rerun and keeps the rest', ()
   assert.equal(upsertRecord({ notes: withTail, record: second }), `${second}\nFooter text\n`);
 });
 
-test('writeRecord patches the release notes found by tag', async () => {
-  const calls = [];
-  const client = {
-    request: async (method, requestPath, options) => {
-      calls.push({ method, requestPath, body: options?.body });
-      return { status: 200, data: { id: 7, body: '## Notes\n' } };
-    },
-  };
+test('upsertRecord ignores a marker quoted inside a changelog line', () => {
+  const notes = '- fix: mention <!-- groundwork:deploy -->\n- next line\n\nmore text\n';
+  const record = renderRecord(input());
+  assert.equal(upsertRecord({ notes, record }), `${notes.trimEnd()}\n\n${record}`);
+});
+
+test('writeRecord looks up the release by tag and patches its notes', async () => {
+  const paths = [];
+  const client = createFixtureClient({
+    'GET /repos/wimdotgg/groundwork/releases/tags/v1.2.0': { status: 200, data: { id: 7, body: '## Notes\n' } },
+    'PATCH /repos/wimdotgg/groundwork/releases/7': { status: 200, data: {} },
+  }, { onCall: ({ method, path: calledPath }) => paths.push(`${method} ${calledPath}`) });
   await writeRecord({ client, repo: REPO, input: input() });
-  assert.deepEqual(calls.map(({ method, requestPath }) => `${method} ${requestPath}`), [
+  assert.deepEqual(paths, [
     'GET /repos/wimdotgg/groundwork/releases/tags/v1.2.0',
     'PATCH /repos/wimdotgg/groundwork/releases/7',
   ]);
-  assert.equal(calls[1].body.body, `## Notes\n\n${renderRecord(input())}`);
 });
+
+const validValues = () => ({ tag: 'v1.2.0', result: 'rolled-back', previous: 'none', 'run-url': RUN_URL });
+
+test('validateRecordInput maps valid flags to the record input', () => {
+  assert.deepEqual(validateRecordInput(validValues()), { result: 'rolled-back', tag: 'v1.2.0', previous: 'none', runUrl: RUN_URL });
+});
+
+for (const [flag, bad] of [
+  ['tag', 'v1.2'], ['tag', undefined], ['result', 'ok'], ['result', 'deployed\n- injected'],
+  ['previous', 'v2'], ['previous', 'None'], ['run-url', 'http://example.com'], ['run-url', 'https://a b'],
+]) {
+  test(`validateRecordInput rejects --${flag} ${JSON.stringify(bad)}`, () => {
+    assert.throws(() => validateRecordInput({ ...validValues(), [flag]: bad }), new RegExp(`--${flag} is missing or malformed`));
+  });
+}
 
 const workflow = await readFile(WORKFLOW_FILE, 'utf8');
 const lineOf = (text) => {
@@ -111,6 +130,27 @@ test('deploy.yml checks out without persisting credentials and pins every action
   assert.match(workflow, /persist-credentials: false/);
   const uses = workflow.match(/^\s*- uses: .+$/gm);
   for (const line of uses) assert.match(line, /@[0-9a-f]{40} # v\d+\.\d+\.\d+$/);
+});
+
+const steps = workflow.split(/\r?\n {6}- /).slice(1).map((step) => `- ${step}`);
+const stepNamed = (name) => steps.find((step) => step.includes(`name: ${name}\n`));
+
+test('deploy.yml gives GITHUB_TOKEN only to the previous-tag and record steps', () => {
+  const withToken = steps.filter((step) => step.includes('GITHUB_TOKEN')).map((step) => /name: (.+)/.exec(step)[1]);
+  assert.deepEqual(withToken, ['Find previous tag', 'Record deploy']);
+  assert.equal(workflow.match(/GITHUB_TOKEN/g).length, 2);
+});
+
+test('deploy.yml never expands an expression inside a run block', () => {
+  const runBlocks = steps.filter((step) => step.includes('run:')).map((step) => step.slice(step.indexOf('run:')));
+  assert.equal(runBlocks.length, 7);
+  for (const block of runBlocks) assert.doesNotMatch(block, /\$\{\{/);
+});
+
+test('deploy.yml runs Smoke only after a successful deploy and stops before deploy when previous-tag fails', () => {
+  assert.match(stepNamed('Smoke'), /if: steps\.deploy\.outcome == 'success'/);
+  assert.match(stepNamed('Find previous tag'), /previous=\$\(node scripts\/ci\/deploy-record\.mjs previous-tag "\$TAG"\)\n\s+echo "tag=\$previous"/);
+  assert.doesNotMatch(stepNamed('Find previous tag'), /continue-on-error|if:/);
 });
 
 test('deploy.yml runs deploy, smoke, rollback on failure, smoke again, then fails the job', () => {

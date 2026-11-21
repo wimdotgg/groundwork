@@ -36,7 +36,10 @@ jobs:
         id: previous
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: echo "tag=$(node scripts/ci/deploy-record.mjs previous-tag "$TAG")" >> "$GITHUB_OUTPUT"
+        # Assigned first so a helper failure stops the job before deploy.
+        run: |
+          previous=$(node scripts/ci/deploy-record.mjs previous-tag "$TAG")
+          echo "tag=$previous" >> "$GITHUB_OUTPUT"
       - name: Deploy
         id: deploy
         continue-on-error: true
