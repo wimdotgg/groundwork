@@ -423,6 +423,15 @@ test('rewritePins keeps the quotes around a quoted pin', () => {
   assert.equal(rewritePins({ text: `uses: '${REUSABLE}/reusable-verify.yml@${OLD_SHA}'\n`, ...options }), `uses: '${pinned}' # ${NEW_TAG}\n`);
 });
 
+test('R6 run leaves a project workflow that calls its own local reusable workflow unchanged', async () => {
+  const own = 'jobs:\n  build:\n    uses: ./.github/workflows/reusable-build.yml\n';
+  await withProject({ ...PROJECT_FILES, '.github/workflows/build.yml': own }, {}, async (project) => {
+    const result = await execute(project, releasesClient(OLD_TREE, NEW_TREE));
+    assert.equal(await readProject(project, '.github/workflows/build.yml'), own);
+    assert.ok(!result.changed.includes('.github/workflows/build.yml'));
+  });
+});
+
 test('R1 run copies the new tag ci.yml with its local reusable-workflow references pinned', async () => {
   const localReference = './.github/workflows/reusable-verify.yml # zizmor: ignore[self-repository] bootstrap rewrites it';
   const tagCi = `jobs:\n  verify:\n    uses: ${localReference}\n  extra:\n    runs-on: ubuntu-latest\n`;

@@ -94,10 +94,9 @@ function escapeRegExp(text) {
 }
 
 /**
- * Points every reusable-workflow reference at the tag's commit with the tag as the trailing comment (spec 8.6),
- * the output `bootstrap` writes: a local `./.github/workflows/reusable-*.yml` (and its `# zizmor: ignore[self-repository]`
- * comment) and an existing `uses: [quote]<org>/<controlRepo>/.github/workflows/reusable-*.yml@<ref>[quote]`. Any other
- * trailing comment on a pin is replaced. Other `uses:` lines are left alone.
+ * Points every existing `uses: [quote]<org>/<controlRepo>/.github/workflows/reusable-*.yml@<ref>[quote]` at the tag's
+ * commit with the tag as the trailing comment (spec 8.6), as `bootstrap` writes it. Any other trailing comment on a
+ * pin is replaced. Other `uses:` lines, local `./.github/...` references included, are left alone.
  * @param {{ text: string, org: string, controlRepo: string, tag: string, tagSha: string }} options
  * @returns {string}
  */
@@ -106,8 +105,12 @@ export function rewritePins({ text, org, controlRepo, tag, tagSha }) {
     `(uses:[ \\t]*)(["']?)(${escapeRegExp(org)}/${escapeRegExp(controlRepo)}/\\.github/workflows/reusable-[\\w-]+\\.yml)@[^\\s#"']+\\2[ \\t]*(#[^\\r\\n]*)?`,
     'gi',
   );
-  const pinned = text.replace(existingPin, `$1$2$3@${tagSha}$2 # ${tag}`);
-  return pinned.replace(
+  return text.replace(existingPin, `$1$2$3@${tagSha}$2 # ${tag}`);
+}
+
+/** The tag's own `ci.yml` calls the reusable workflows locally; `bootstrap` writes them as pins, and so does this. */
+function pinLocalReferences({ text, org, controlRepo, tag, tagSha }) {
+  return text.replace(
     LOCAL_REFERENCE,
     (_match, name) => `${org}/${controlRepo}/.github/workflows/${name}@${tagSha} # ${tag}`,
   );
@@ -224,7 +227,7 @@ function ignoreMissing(error) {
 async function planCiWorkflow({ client, control, root, newTree, writes, pinTarget }) {
   if (!newTree.has(CI_WORKFLOW_PATH)) return;
   const original = await readBlob(client, control, newTree.get(CI_WORKFLOW_PATH));
-  const content = Buffer.from(rewritePins({ text: original.toString('utf8'), ...pinTarget }));
+  const content = Buffer.from(pinLocalReferences({ text: original.toString('utf8'), ...pinTarget }));
   const local = await readLocal(root, CI_WORKFLOW_PATH);
   if (local !== null && content.equals(local)) return;
   writes.set(CI_WORKFLOW_PATH, { content, executable: newTree.get(CI_WORKFLOW_PATH).mode === EXECUTABLE_MODE });
