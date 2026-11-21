@@ -533,6 +533,7 @@ function scrub(text, secrets) {
 export async function apply(env, overrides = {}) {
   const deps = { ...DEFAULTS, ...overrides };
   const heading = 'admin-run apply';
+  if (env === process.env) return failure(heading, 'apply needs a copy of process.env');
   if (env.GITHUB_REF !== MAIN_REF) return failure(heading, `runs only from ${MAIN_REF}`);
   const { problems, request } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));

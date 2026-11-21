@@ -779,8 +779,8 @@ test('apply: op code reads no ADMIN_APP_KEY from process.env while minting still
   const previous = process.env.ADMIN_APP_KEY;
   process.env.ADMIN_APP_KEY = 'PRIVATE-KEY-MATERIAL';
   context.after(() => {
-    if (previous === undefined) delete process.env.ADMIN_APP_KEY;
-    else process.env.ADMIN_APP_KEY = previous;
+    if (previous === undefined) return delete process.env.ADMIN_APP_KEY;
+    process.env.ADMIN_APP_KEY = previous;
   });
   let seenInProcess = 'not run';
   const registry = stubRegistry({
@@ -794,6 +794,14 @@ test('apply: op code reads no ADMIN_APP_KEY from process.env while minting still
   assert.equal(result.exitCode, 0);
   assert.equal(seenInProcess, undefined);
   assert.equal(mints[0].env.ADMIN_APP_KEY, 'PRIVATE-KEY-MATERIAL');
+});
+
+test('apply: refuses process.env itself before any mint', async () => {
+  const { overrides, mints } = harness();
+  const result = await apply(process.env, overrides);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.reason, /needs a copy of process\.env/);
+  assert.equal(mints.length, 0);
 });
 
 test('apply: the token is revoked even when building the op client throws', async () => {
