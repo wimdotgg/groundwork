@@ -319,3 +319,30 @@ test('R4 symlink entries are dropped and a path that leaves the project is refus
     await assertRefusedWithoutWrites({ project, client: releasesClient(OLD_TREE, escaping), tag: NEW_TAG, reason: /leaves the project/ });
   });
 });
+
+test('R8 untracked files are seen when status.showUntrackedFiles is no and survive the refusal', async () => {
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    await project.git(['config', 'status.showUntrackedFiles', 'no']);
+    await writeFile(path.join(project.root, 'notes.txt'), 'mine\n');
+    await assertRefusedWithoutWrites({ project, client: NO_NETWORK_CLIENT, tag: NEW_TAG, reason: /uncommitted changes/ });
+    assert.equal(await readProject(project, 'notes.txt'), 'mine\n');
+  });
+});
+
+test('R9 the equal-tag path succeeds and pushes when the remote-tracking ref is missing', async () => {
+  await withProject(PROJECT_FILES, { kitVersion: NEW_TAG }, async (project) => {
+    await project.git(['update-ref', '-d', 'refs/remotes/origin/issue/5']);
+    assert.deepEqual(await execute(project, NO_NETWORK_CLIENT), { ok: true, tag: NEW_TAG, changed: [], skipped: [] });
+    assert.deepEqual(project.published, [['git', 'push', 'origin', 'issue/5']]);
+  });
+});
+
+test('R10 a failed restore keeps the original failure in the message', async () => {
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    project.failPublishWhen = ([, subcommand]) => subcommand === 'commit';
+    const git = (args) => (args[0] === 'reset' ? Promise.reject(new Error('reset broke')) : project.git(args));
+    const client = releasesClient(OLD_TREE, NEW_TREE);
+    const publish = (args) => project.publish(args);
+    await assert.rejects(run({ root: project.root, tag: NEW_TAG, client, git, publish }), /commit failed.*reset broke/);
+  });
+});

@@ -201,23 +201,36 @@ async function applyPlan({ root, writes, removals }) {
 async function requireCleanIssueBranch(git) {
   const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
   if (!BRANCH_PATTERN.test(branch)) throw new KitUpdateRefusal(`run on an issue/N branch, not ${branch}`);
-  if ((await git(['status', '--porcelain'])).trim() !== '') throw new KitUpdateRefusal('working tree has uncommitted changes');
+  const status = await git(['status', '--porcelain', '--untracked-files=all']);
+  if (status.trim() !== '') throw new KitUpdateRefusal('working tree has uncommitted changes');
   return branch;
 }
 
 async function isAheadOfRemote(git, branch) {
-  return Number((await git(['rev-list', '--count', `origin/${branch}..HEAD`])).trim()) > 0;
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  // Without a remote-tracking ref nothing says the commit is on the remote, and pushing an up-to-date branch is a no-op.
+  if ((await git(['for-each-ref', '--format=%(objectname)', remoteRef])).trim() === '') return true;
+  return Number((await git(['rev-list', '--count', `${remoteRef}..HEAD`])).trim()) > 0;
 }
 
-/** The tree was clean before the plan, so a failed write or commit is undone completely and the run can be repeated. */
+/** Undoes a failed run. The tree was clean, so only the plan's own new files are removed, never other untracked files. */
+async function restoreTree({ git, paths }) {
+  await git(['reset', '--hard', 'HEAD']);
+  await git(['clean', '-fd', '--', ...paths]);
+}
+
 async function commitPlan({ root, git, publish, plan, tag }) {
+  const paths = [...plan.writes.keys(), ...plan.removals];
   try {
     await applyPlan({ root, ...plan });
-    await git(['add', '-A']);
+    await git(['add', '-A', '--', ...paths]);
     await publish(['git', 'commit', '-m', `chore(kit): update to ${tag}`]);
   } catch (error) {
-    await git(['reset', '--hard', 'HEAD']);
-    await git(['clean', '-fd']);
+    try {
+      await restoreTree({ git, paths });
+    } catch (restoreError) {
+      throw new AggregateError([error, restoreError], `${error.message}; restoring the tree also failed: ${restoreError.message}`);
+    }
     throw error;
   }
 }
