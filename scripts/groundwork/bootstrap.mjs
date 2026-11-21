@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { SettingsError, repoKind } from '../lib/settings.mjs';
-import { applySections } from './apply-settings.mjs';
+import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
   commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readBlobContents, readBlobTexts, readKitVersion,
   readReleaseTree,
@@ -124,6 +124,8 @@ export async function run(ctx, { sleep = delay, settingsDependencies } = {}) {
   const { controlRepo, apps } = ctx.config;
   if (repoKind(repo, ctx.config) === 'control') throw new SettingsError(`bootstrap must not target the control repository ${controlRepo}`);
   const description = readDescription(ctx.env);
+  // The settings group needs these after the repository and the commit exist; failing here leaves nothing half-made.
+  requireReleaseValues(ctx.env);
   const adminBot = `${apps.admin}[bot]`;
 
   ctx.log('reading the release tree');

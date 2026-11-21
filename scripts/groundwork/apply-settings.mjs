@@ -226,7 +226,7 @@ function ghEnvironment({ env, token }) {
   return childEnv;
 }
 
-function requireReleaseValues(env) {
+export function requireReleaseValues(env) {
   const missing = RELEASE_WRITES.find(({ name }) => !env[name]);
   if (missing) throw new SettingsError(`${missing.name} is not set in the environment`);
 }

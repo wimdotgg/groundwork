@@ -219,12 +219,13 @@ test('AC1 a fresh run reads the control repo under the read grant, creates under
   for (const call of controlCalls) assert.deepEqual(call.grant, { repositories: [CONTROL], permissions: CONTROL_READ_PERMISSIONS });
   const create = world.calls.find((call) => call.path === `/orgs/${ORG}/repos`);
   assert.deepEqual(create.grant, { repositories: [CONTROL], permissions: CREATE_PERMISSIONS });
-  const inspection = new Set([TARGET_PATH, KIT_PATH, `${TARGET_PATH}/commits`, `${TARGET_PATH}/contents/`]);
-  for (const call of world.calls.filter((candidate) => candidate.path.startsWith(TARGET_PATH))) {
-    const expected = call.method === 'GET' && inspection.has(call.path) && call.grant.repositories[0] === CONTROL
-      ? { repositories: [CONTROL], permissions: CONTROL_READ_PERMISSIONS }
-      : { repositories: [REPO], permissions: PERMISSIONS };
-    assert.deepEqual(call.grant, expected, lineOf(call));
+  const createIndex = world.calls.findIndex((call) => call.path === `/orgs/${ORG}/repos`);
+  const targetCalls = world.calls.map((call, index) => ({ ...call, index })).filter((call) => call.path.startsWith(TARGET_PATH));
+  const inspection = targetCalls.filter((call) => call.index < createIndex);
+  assert.deepEqual(inspection.map(lineOf), [`GET ${TARGET_PATH}`]);
+  for (const call of inspection) assert.deepEqual(call.grant, { repositories: [CONTROL], permissions: CONTROL_READ_PERMISSIONS });
+  for (const call of targetCalls.filter((candidate) => candidate.index > createIndex)) {
+    assert.deepEqual(call.grant, { repositories: [REPO], permissions: PERMISSIONS }, lineOf(call));
   }
 
   const labels = indexOfLine(world, `POST ${TARGET_PATH}/labels`);
@@ -266,6 +267,8 @@ test('AC2 an ours target takes the tag from kit-version.txt and makes no commit'
   const world = createWorld({ state: 'ours' });
   const result = await run(world.ctx, world.seams);
   assert.equal(world.calls.some((call) => call.path.includes('matching-refs')), false);
+  const controlBlobReads = world.calls.filter((call) => call.path.startsWith(`${CONTROL_PATH}/git/blobs/`));
+  assert.equal(controlBlobReads.length, contentPaths(releaseEntries(RELEASE_FILES)).length);
   assert.equal(world.calls.some((call) => call.path.includes('/git/blobs') && call.method === 'POST'), false);
   assert.equal(world.calls.some((call) => call.path.includes('/git/commits') || call.path.includes('/git/refs/')), false);
   assert.match(result.summary, new RegExp(`- release tag: ${TAG}`));
@@ -342,6 +345,16 @@ test('a bad description in INPUT_ARGS fails before any token is minted', async (
   const unparsable = createWorld();
   unparsable.ctx.env.INPUT_ARGS = 'not json';
   await assert.rejects(run(unparsable.ctx, unparsable.seams), /not valid JSON/);
+});
+
+test('a missing release value fails before any token is minted', async () => {
+  for (const missing of ['RELEASE_APP_KEY', 'RELEASE_APP_CLIENT_ID']) {
+    const world = createWorld({ state: 'absent' });
+    delete world.ctx.env[missing];
+    await assert.rejects(run(world.ctx, world.seams), new RegExp(`${missing} is not set`));
+    assert.deepEqual(world.grants, []);
+    assert.deepEqual(world.calls, []);
+  }
 });
 
 test('a broken setup template fails before the repository or any other write', async () => {
