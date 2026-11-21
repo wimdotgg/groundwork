@@ -1,0 +1,52 @@
+name: plan-lint
+
+on:
+  issues:
+    types: [opened, edited, labeled, typed]
+  workflow_dispatch:
+    inputs:
+      epic:
+        description: Epic issue number to lint
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One run per epic at a time, so two events cannot race to create the report comment; a started run is never cancelled.
+concurrency:
+  group: plan-lint-${{ github.event.issue.number || inputs.epic }}
+  cancel-in-progress: false
+
+jobs:
+  plan-lint:
+    # Issue events lint Epics only; a dispatch names its epic and lints whatever it is.
+    if: github.event_name == 'workflow_dispatch' || github.event.issue.type.name == 'Epic'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Lint the epic and post the report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EPIC: ${{ github.event.issue.number || inputs.epic }}
+        run: |
+          if ! [[ "$EPIC" =~ ^[0-9]+$ ]]; then
+            echo "::error::epic must be an issue number"
+            exit 1
+          fi
+          # Exit 1 covers both a lint failure and an error. Only a lint failure carries `failures`
+          # and has already posted its report; any other result fails the job.
+          result="$RUNNER_TEMP/plan-lint.json"
+          node scripts/agent/plan-lint.mjs "$EPIC" --post --json > "$result" || true
+          cat "$result"
+          jq -e '.ok or has("failures")' "$result" > /dev/null
