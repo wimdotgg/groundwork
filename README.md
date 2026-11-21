@@ -12,10 +12,10 @@ For one owner who works with agents on GitHub. Everything assumes a free GitHub 
 
 ## How a project starts
 
-1. The agent requests `scripts/admin/request.mjs bootstrap --repo <name>`; the owner approves.
+1. The agent requests `scripts/admin/request.mjs bootstrap --repo <name> --args '{"description":"..."}'`; the owner approves.
 2. Bootstrap pass 1 creates the repo, labels, settings and rulesets, writes the kit files from the release tag and opens a "Project setup" epic.
 3. The owner accepts the epic. Agents choose the stack, fill `scripts/verify` and write the project README.
-4. The agent requests `bootstrap-pass2`; the owner approves once. It enables CodeQL and the deploy switch.
+4. The agent requests `bootstrap-pass2`; the owner approves once. It enables CodeQL, and sets the deploy switch unless `config.json` says `"deploy": "none"`.
 
 Agents work one issue per PR through the worker loop in [AGENTS.md](AGENTS.md); the merge queue lands the PRs.
 
