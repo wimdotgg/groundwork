@@ -24,12 +24,13 @@ const FIXED_STUBS = [
   ['verify', 'scripts/verify'],
   ['verify.cmd', 'scripts/verify.cmd'],
   ['README.md', 'README.md'],
+  // Inert until a project moves them to scripts/ (spec 8.5), so "deploy": "none" leaves no scripts/deploy.
+  ...['deploy', 'smoke', 'rollback'].flatMap((name) => [name, `${name}.cmd`].map(
+    (file) => [`deploy/${file}`, `scripts/stubs/deploy/${file}`],
+  )),
 ];
 const STUB_DOCS_DIR = `${STUBS_DIR}docs/`;
 const PROJECT_DOCS_DIR = 'docs/';
-const STUB_DEPLOY_DIR = `${STUBS_DIR}deploy/`;
-// Inert until a project moves them to scripts/ (spec 8.5), so "deploy": "none" leaves no scripts/deploy.
-const PROJECT_DEPLOY_DIR = 'scripts/stubs/deploy/';
 
 const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
@@ -93,10 +94,7 @@ function stubSources(entries) {
     .filter((entry) => isUnder(entry.path, STUB_DOCS_DIR))
     .map((entry) => ({ source: entry, projectPath: PROJECT_DOCS_DIR + entry.path.slice(STUB_DOCS_DIR.length) }));
   if (docs.length === 0) throw new SettingsError(`missing stub: ${STUB_DOCS_DIR}`, STUB_DOCS_DIR);
-  const deploy = entries
-    .filter((entry) => isUnder(entry.path, STUB_DEPLOY_DIR))
-    .map((entry) => ({ source: entry, projectPath: PROJECT_DEPLOY_DIR + entry.path.slice(STUB_DEPLOY_DIR.length) }));
-  return [...fixed, ...docs, ...deploy];
+  return [...fixed, ...docs];
 }
 
 function generatedFiles(tag) {

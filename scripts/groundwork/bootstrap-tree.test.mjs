@@ -46,8 +46,10 @@ function fixture({ omit = [] } = {}) {
     blob('scripts/groundwork/stubs/README.md', '# __REPO__\n__DESCRIPTION__ by __ORG__\n'),
     blob('scripts/groundwork/stubs/docs/guide.md', 'Guide for __REPO__: __DESCRIPTION__\n'),
     blob('scripts/groundwork/stubs/docs/sub/more.md', 'more\n'),
-    blob('scripts/groundwork/stubs/deploy/deploy', '#!/bin/sh\nexit 1\n', '100755'),
-    blob('scripts/groundwork/stubs/deploy/deploy.cmd', '@echo off\n'),
+    ...DEPLOY_STUB_NAMES.flatMap((name) => [
+      blob(`scripts/groundwork/stubs/deploy/${name}`, '#!/bin/sh\nexit 1\n', '100755'),
+      blob(`scripts/groundwork/stubs/deploy/${name}.cmd`, '@echo off\n'),
+    ]),
     blob('admin-ops/op.json', '{}'),
     blob('scripts/verify', 'groundwork own verify', '100755'),
     blob('scripts/verify.cmd', 'groundwork own verify'),
@@ -116,10 +118,15 @@ test('AC3: generated files, stub verify with its mode, README and docs from stub
 
 test('AC2: deploy stubs land in scripts/stubs/deploy/ with their mode; no project deploy, smoke or rollback script', () => {
   const tree = build();
-  const deploy = find(tree, 'scripts/stubs/deploy/deploy');
-  assert.equal(deploy.mode, '100755');
-  assert.equal(deploy.sha, 'sha-scripts/groundwork/stubs/deploy/deploy');
-  assert.equal(find(tree, 'scripts/stubs/deploy/deploy.cmd').mode, '100644');
+  const received = tree.filter(({ path }) => path.startsWith('scripts/stubs/deploy/')).map(({ path, mode }) => [path, mode]);
+  assert.deepEqual(received, [
+    ['scripts/stubs/deploy/deploy', '100755'],
+    ['scripts/stubs/deploy/deploy.cmd', '100644'],
+    ['scripts/stubs/deploy/rollback', '100755'],
+    ['scripts/stubs/deploy/rollback.cmd', '100644'],
+    ['scripts/stubs/deploy/smoke', '100755'],
+    ['scripts/stubs/deploy/smoke.cmd', '100644'],
+  ]);
   const projectScripts = ['deploy', 'deploy.cmd', 'smoke', 'smoke.cmd', 'rollback', 'rollback.cmd'].map((name) => `scripts/${name}`);
   assert.deepEqual(tree.filter(({ path }) => projectScripts.includes(path)), []);
   assert.deepEqual(tree.filter(({ path }) => path.startsWith('scripts/groundwork/')), []);
@@ -168,7 +175,8 @@ test('AC5: config.json and hotspots.json keep their sha; settingsFiles returns t
 });
 
 test('AC6: a missing stub throws a one-line SettingsError naming the path', () => {
-  for (const stub of ['verify', 'verify.cmd', 'README.md']) {
+  const deployStubs = DEPLOY_STUB_NAMES.flatMap((name) => [`deploy/${name}`, `deploy/${name}.cmd`]);
+  for (const stub of ['verify', 'verify.cmd', 'README.md', ...deployStubs]) {
     const path = `scripts/groundwork/stubs/${stub}`;
     assert.throws(
       () => build(fixture({ omit: [path] })),
