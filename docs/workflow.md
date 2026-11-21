@@ -42,9 +42,9 @@ A worker session runs these as `node scripts/agent/<name>.mjs` on Node 24+. Ever
 | Pick | `next` | Next ready task or takeover candidate, with the reason for every skipped one |
 | Take | `claim N --session <id> --agent <model>/<harness>` | Claim commit, `issue/N`, pointer comment, draft PR; or a takeover of an expired or released draft |
 | Brief | `resume N --session <id>` | Bounded briefing for a takeover or a revived worker; no writes |
-| Save | `checkpoint --session <id>` | Push, rewrite the PR `## State`, post the journal comment. The `Stop` and `PreCompact` hooks run `checkpoint --auto`, which only pushes |
-| Hand back | `release N --decision` | Draft again, released marker; for a `needs-decision` |
-| Close out | `release N --merged` | Handover comment on the issue after the merge |
+| Save | `checkpoint --session <id>` | Push, rewrite the PR `## State`, post the journal comment. The `Stop` and `PreCompact` hooks run `checkpoint --auto`, which pushes, and also rewrites State and posts the journal when `.artifacts/checkpoint.json` exists |
+| Hand back | `release N --decision --session <id>` | Draft again, released marker; for a `needs-decision` |
+| Close out | `release N --merged --session <id>` | Handover comment on the issue after the merge |
 
 Marking ready and enqueueing (`gh pr ready`, `gh pr merge N --auto --squash`) also run through the wrapper. The session id is the harness session id, so the hooks match the PR footer. Subagents share their parent's id and fire no hooks; parallel workers are separate top-level sessions. Exit 3 from `resume`, `checkpoint` or `release --decision` means the PR footer names another session: stop. Exit 3 from `claim` means held or not ready: run `next` again. Details in [6.3, 6.4](spec.md) and [13](spec.md).
 

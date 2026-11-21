@@ -87,12 +87,12 @@ Run every script as `node scripts/agent/<name>.mjs`. Scripts that write run unde
    - Exit 3: held, not claimable, or Definition of Ready unmet; run `next` again. Exit 1: stop and report. A rerun by the same session completes missing steps. On a takeover candidate `claim` takes over (6.4).
 3. After a takeover, or when revived: `resume N --session <id>`, then continue from its briefing. Exit 3 or 1: stop.
 4. Build on `issue/N`; push early through the wrapper; merge main in, never rebase.
-5. `checkpoint --session <id>` at the required moments (6.5), from `.artifacts/checkpoint.json`.
-6. Mark ready when Definition of Done is met: `token.mjs exec -- gh pr ready N`.
-7. Fix review findings. After 3 rounds raise `needs-decision` (`release.mjs N --decision`).
-8. Enqueue: `token.mjs exec -- gh pr merge N --auto --squash`.
+5. `node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --session <id>` at the required moments (6.5), from `.artifacts/checkpoint.json`.
+6. Mark ready when Definition of Done is met: `node scripts/agent/token.mjs exec -- gh pr ready N`.
+7. Fix review findings. After 3 rounds raise `needs-decision` (`node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --decision --session <id>`).
+8. Enqueue: `node scripts/agent/token.mjs exec -- gh pr merge N --auto --squash`.
 9. If ejected from the queue or new findings arrive, return to that PR before new work.
-10. After merge: `release.mjs N --merged --session <id>` posts the handover comment on the issue.
+10. After merge: `node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --merged --session <id>` posts the handover comment on the issue.
 
 ## Leases and takeover (6.4)
 
@@ -102,10 +102,10 @@ Run every script as `node scripts/agent/<name>.mjs`. Scripts that write run unde
 - Takeover candidates: draft PRs with an expired lease or the `<!-- groundwork:released -->` body marker, and no `needs-decision` label. Release adds the marker; takeover removes it.
 - Takeover is compare-and-swap: read head SHA, create `chore(claim): #N takeover [session <id>]` with that parent, then `PATCH /git/refs/heads/issue/N` with `force: false`. If the head moved, the update fails; move on. Winner posts a takeover comment.
 - A head that is another session's takeover commit, younger than `claimWithoutPrMinutes` (15), holds the PR: `claim` exits 3.
-- `next` offers a takeover only while the task still meets the Definition of Ready apart from the claim. A direct `claim N` on a takeover candidate does not re-check it (accepted gap).
+- `next` offers a takeover only while the task passes every status check except `claimed` (format and size are not re-checked). A direct `claim N` on a takeover candidate does not re-check it (accepted gap).
 - A revived worker runs `resume` first and stops if the PR footer names another session.
 - Takeover continues from `resume` output; never restart the task.
-- `needs-decision` releases the claim (`release.mjs N --decision`): a ready PR turns back to draft, the PR stays open with its `## State`, and the released marker makes it a takeover candidate.
+- `needs-decision` releases the claim (`node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --decision --session <id>`): a ready PR turns back to draft, the PR stays open with its `## State`, and the released marker makes it a takeover candidate.
 
 ## Context preservation (6.5)
 
@@ -119,7 +119,7 @@ Run every script as `node scripts/agent/<name>.mjs`. Scripts that write run unde
 
 - `## State` fields: Done, In progress, Next, Proven, Unproven, Rejected, Gotchas, Open. Header carries checkpoint number, time, model/harness, session. Exact format in 6.5; no `<...>` placeholders left (`PR metadata` fails on them).
 - Checkpoint before: ending a session, raising `needs-decision`, marking ready, completing a takeover. `checkpoint` pushes, rewrites `## State` and posts the journal comment in one command.
-- A non-auto `checkpoint` is allowed on a ready PR. A rerun after a failed journal post bumps the checkpoint number again and keeps the input file. The `Stop` and `PreCompact` hooks run `checkpoint --auto`, which only pushes a draft `issue/N`; it takes the session from `GROUNDWORK_SESSION`, else the hook's stdin `session_id`.
+- A non-auto `checkpoint` is allowed on a ready PR. A rerun after a failed journal post bumps the checkpoint number again and keeps the input file. The `Stop` and `PreCompact` hooks run `checkpoint --auto`, which push a draft `issue/N` and, when `.artifacts/checkpoint.json` exists, also rewrite State and post the journal; they take the session from `GROUNDWORK_SESSION`, else the hook's stdin `session_id`.
 - `resume N --session <id>` gives the bounded briefing (~300 lines); no writes.
 
 ## Escalation (6.6)
