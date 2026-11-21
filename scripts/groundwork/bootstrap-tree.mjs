@@ -28,6 +28,8 @@ const FIXED_STUBS = [
 const STUB_DOCS_DIR = `${STUBS_DIR}docs/`;
 const PROJECT_DOCS_DIR = 'docs/';
 
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
 const REUSABLE_REFERENCE = /\.\/\.github\/workflows\/(reusable-[\w-]+\.yml)([ \t]*# zizmor: ignore\[self-repository\][^\r\n]*)?/g;
 
 const isUnder = (path, prefix) => path.startsWith(prefix);
@@ -57,10 +59,11 @@ function fillPlaceholders(text, path, { org, repo, description }) {
   return replaceLiteral(withNames, '__DESCRIPTION__', description);
 }
 
-function rewriteReusableReferences(text, { org, controlRepo, tag }) {
+// zizmor's unpinned-uses fails a tag ref in a project's CI, so the ref is the tag's commit SHA and the tag stays a comment.
+function rewriteReusableReferences(text, { org, controlRepo, tag, tagSha }) {
   return text.replace(
     REUSABLE_REFERENCE,
-    (_match, name) => `${org}/${controlRepo}/.github/workflows/${name}@${tag}`,
+    (_match, name) => `${org}/${controlRepo}/.github/workflows/${name}@${tagSha} # ${tag}`,
   );
 }
 
@@ -114,11 +117,12 @@ function keptEntry(entry, contents, names) {
 
 /**
  * @param {{ entries: ReleaseEntry[], contents: Record<string, string>, org: string,
- *   controlRepo: string, repo: string, description: string, tag: string }} options
+ *   controlRepo: string, repo: string, description: string, tag: string, tagSha: string }} options
  * @returns {TreeEntry[]} blob entries sorted by path, ready for POST git/trees without base_tree
  */
-export function buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag }) {
-  const names = { org, controlRepo, repo, description, tag };
+export function buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag, tagSha }) {
+  if (!COMMIT_SHA_PATTERN.test(String(tagSha))) throw new SettingsError(`tagSha for ${tag} is not a 40-character commit SHA`);
+  const names = { org, controlRepo, repo, description, tag, tagSha };
   const stubs = stubSources(entries);
   const generated = generatedFiles(tag);
   const generatedPaths = new Set(generated.map((entry) => entry.path));

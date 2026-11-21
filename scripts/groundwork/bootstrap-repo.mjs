@@ -8,7 +8,6 @@ const KIT_VERSION_PATH = '.github/groundwork/kit-version.txt';
 const DEFAULT_BRANCH = 'main';
 const TAG_PATTERN = /^v(\d+)\.(\d+)\.(\d+)$/;
 const TAG_REF_PREFIX = 'refs/tags/';
-const RETRY_STATUSES = new Set([403, 404]);
 const FRESH_ROOT_FILE = 'README.md';
 // GitHub's secondary limit on content creation: 60 blob POSTs per minute.
 const BLOB_POST_SPACING_MS = 1000;
@@ -49,14 +48,33 @@ export async function latestReleaseTag({ client, org, controlRepo }) {
   return versions.at(-1)[0];
 }
 
+const MAX_TAG_DEREFERENCES = 5;
+
 /**
+ * Annotated tags are dereferenced, so the result is always a commit SHA.
  * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string, tag: string }} options
+ * @returns {Promise<string>} the commit the tag points at
+ */
+export async function resolveTagCommit({ client, org, controlRepo, tag }) {
+  const { data } = await client.request('GET', repoPath(org, controlRepo, `/git/ref/tags/${encodeURIComponent(tag)}`));
+  let target = data?.object;
+  for (let depth = 0; depth < MAX_TAG_DEREFERENCES && target?.type === 'tag'; depth += 1) {
+    const { data: annotated } = await client.request('GET', repoPath(org, controlRepo, `/git/tags/${encodeURIComponent(target.sha)}`));
+    target = annotated?.object;
+  }
+  if (target?.type !== 'commit') throw new GitHubError(`tag ${tag} of ${org}/${controlRepo} does not resolve to a commit`);
+  return target.sha;
+}
+
+/**
+ * Reads the tree by the tag's commit SHA, the same SHA the workflow refs are pinned to.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string, commitSha: string }} options
  * @returns {Promise<Array<{ path: string, mode: string, sha: string }>>} blobs only
  */
-export async function readReleaseTree({ client, org, controlRepo, tag }) {
-  const path = repoPath(org, controlRepo, `/git/trees/${encodeURIComponent(tag)}`);
+export async function readReleaseTree({ client, org, controlRepo, commitSha }) {
+  const path = repoPath(org, controlRepo, `/git/trees/${encodeURIComponent(commitSha)}`);
   const { data } = await client.request('GET', path, { query: { recursive: 1 } });
-  if (data?.truncated) throw new GitHubError(`release tree of ${org}/${controlRepo} at ${tag} is truncated`);
+  if (data?.truncated) throw new GitHubError(`release tree of ${org}/${controlRepo} at ${commitSha} is truncated`);
   return (data?.tree ?? [])
     .filter((entry) => entry.type === 'blob')
     .map(({ path: entryPath, mode, sha }) => ({ path: entryPath, mode, sha }));
@@ -121,35 +139,19 @@ export async function readKitVersion({ client, org, repo }) {
   return tag;
 }
 
-// Records a refused create instead of throwing, so the token is revoked before any retry.
-async function attemptCreate({ withToken, scope, org, body }) {
-  let failure = null;
-  await withToken(scope, async ({ client }) => {
-    try {
-      await client.request('POST', apiPath('/orgs/{org}/repos', { org }), { body });
-    } catch (error) {
-      failure = error;
-    }
-  });
-  return failure;
-}
-
 /**
- * Creates the repository with a token restricted to the control repository; only a 403 or 404 retries
- * once with an installation-wide token (V7 decides which variant ships).
+ * Creates the repository with a token restricted to the control repository (V7: GitHub accepts it, so no
+ * installation-wide variant exists).
  * @param {{ withToken: Function, org: string, controlRepo: string, repo: string, description: string,
  *   permissions: Record<string, string> }} options
  * @returns {Promise<void>}
  */
 export async function createRepo({ withToken, org, controlRepo, repo, description, permissions }) {
   const body = { name: repo, description, private: false, auto_init: true };
-  const restricted = await attemptCreate({ withToken, scope: { repositories: [controlRepo], permissions }, org, body });
-  if (restricted === null) return;
-  if (!(restricted instanceof GitHubError) || !RETRY_STATUSES.has(restricted.status)) throw restricted;
-  const installationWide = await attemptCreate({ withToken, scope: { repositories: 'all', permissions }, org, body });
-  if (installationWide !== null) throw installationWide;
+  await withToken({ repositories: [controlRepo], permissions }, ({ client }) => (
+    client.request('POST', apiPath('/orgs/{org}/repos', { org }), { body })
+  ));
 }
-
 
 /**
  * Raw blobs for the tree entries that keep a control-repository `sha`; the target holds no such objects.

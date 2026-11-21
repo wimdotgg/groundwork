@@ -11,6 +11,7 @@ import {
   readBlobTexts,
   readKitVersion,
   readReleaseTree,
+  resolveTagCommit,
 } from './bootstrap-repo.mjs';
 
 const ORG = 'acme';
@@ -62,19 +63,43 @@ test('AC1 latestReleaseTag compares tags numerically and ignores other refs', as
   assert.equal(await latestReleaseTag({ client, org: ORG, controlRepo: CONTROL }), 'v0.10.0');
 });
 
-test('readReleaseTree keeps blobs and throws on a truncated tree', async () => {
-  const treeKey = `GET /repos/${ORG}/${CONTROL}/git/trees/v0.4.0?recursive=1`;
+const TAG_REF_KEY = `GET /repos/${ORG}/${CONTROL}/git/ref/tags/v0.4.0`;
+const COMMIT_SHA = 'c'.repeat(40);
+const ANNOTATED_SHA = 'a'.repeat(40);
+const resolve = (client) => resolveTagCommit({ client, org: ORG, controlRepo: CONTROL, tag: 'v0.4.0' });
+
+test('AC10 resolveTagCommit returns the commit of a lightweight tag', async () => {
+  const { client } = recordingClient({ [TAG_REF_KEY]: reply(200, { object: { type: 'commit', sha: COMMIT_SHA } }) });
+  assert.equal(await resolve(client), COMMIT_SHA);
+});
+
+test('AC10 resolveTagCommit dereferences an annotated tag to its commit', async () => {
+  const { client, calls } = recordingClient({
+    [TAG_REF_KEY]: reply(200, { object: { type: 'tag', sha: ANNOTATED_SHA } }),
+    [`GET /repos/${ORG}/${CONTROL}/git/tags/${ANNOTATED_SHA}`]: reply(200, { object: { type: 'commit', sha: COMMIT_SHA } }),
+  });
+  assert.equal(await resolve(client), COMMIT_SHA);
+  assert.deepEqual(calls.filter(({ method }) => method !== 'GET'), []);
+});
+
+test('AC10 resolveTagCommit throws when the tag points at something other than a commit', async () => {
+  const { client } = recordingClient({ [TAG_REF_KEY]: reply(200, { object: { type: 'tree', sha: COMMIT_SHA } }) });
+  await assert.rejects(resolve(client), /does not resolve to a commit/);
+});
+
+test('AC10 readReleaseTree reads the tree by commit SHA, keeps blobs and throws on a truncated tree', async () => {
+  const treeKey = `GET /repos/${ORG}/${CONTROL}/git/trees/${COMMIT_SHA}?recursive=1`;
   const tree = [
     { path: 'a.txt', mode: '100644', type: 'blob', sha: 's1', size: 3 },
     { path: 'dir', mode: '040000', type: 'tree', sha: 's2' },
   ];
   const ok = recordingClient({ [treeKey]: reply(200, { tree, truncated: false }) });
   assert.deepEqual(
-    await readReleaseTree({ client: ok.client, org: ORG, controlRepo: CONTROL, tag: 'v0.4.0' }),
+    await readReleaseTree({ client: ok.client, org: ORG, controlRepo: CONTROL, commitSha: COMMIT_SHA }),
     [{ path: 'a.txt', mode: '100644', sha: 's1' }],
   );
   const cut = recordingClient({ [treeKey]: reply(200, { tree, truncated: true }) });
-  await assert.rejects(readReleaseTree({ client: cut.client, org: ORG, controlRepo: CONTROL, tag: 'v0.4.0' }), /truncated/);
+  await assert.rejects(readReleaseTree({ client: cut.client, org: ORG, controlRepo: CONTROL, commitSha: COMMIT_SHA }), /truncated/);
 });
 
 test('readBlobTexts decodes UTF-8 blobs and rejects a path outside the tree', async () => {
@@ -177,21 +202,6 @@ function createRepoArgs(withToken) {
 
 const CREATE_BODY = '{"name":"shop","description":"A shop","private":false,"auto_init":true}';
 
-for (const status of [403, 404]) {
-  test(`AC3 createRepo retries once with repositories "all" after ${status}, revoking first`, async () => {
-    const { withToken, log } = stubWithToken([status, 'ok']);
-    await createRepo(createRepoArgs(withToken));
-    assert.deepEqual(log, [
-      'mint {"repositories":["groundwork"],"permissions":{"administration":"write"}}',
-      `POST /orgs/acme/repos ${CREATE_BODY}`,
-      'revoke',
-      'mint {"repositories":"all","permissions":{"administration":"write"}}',
-      `POST /orgs/acme/repos ${CREATE_BODY}`,
-      'revoke',
-    ]);
-  });
-}
-
 test('AC3 createRepo makes one call with the restricted token when it succeeds', async () => {
   const { withToken, log } = stubWithToken(['ok']);
   await createRepo(createRepoArgs(withToken));
@@ -202,30 +212,27 @@ test('AC3 createRepo makes one call with the restricted token when it succeeds',
   ]);
 });
 
-test('AC3 createRepo throws the second refusal after one retry', async () => {
-  const { withToken, log } = stubWithToken([403, 403]);
-  await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error.status === 403);
-  assert.equal(log.filter((line) => line.startsWith('mint')).length, 2);
-});
-
-const UNRETRIED_FAILURES = {
-  'a 0 status': new GitHubError('fetch failed', { status: 0 }),
-  'a plain Error': new Error('boom'),
-};
-
-for (const [name, failure] of Object.entries(UNRETRIED_FAILURES)) {
-  test(`AC3 createRepo throws ${name} after one mint`, async () => {
-    const { withToken, log } = stubWithToken([failure]);
-    await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error === failure);
-    assert.equal(log.filter((line) => line.startsWith('mint')).length, 1);
-  });
-}
-
-test('AC3 createRepo throws a 422 without a retry', async () => {
-  const { withToken, log } = stubWithToken([422]);
-  await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error.status === 422);
+async function assertSingleMintFailure(failure) {
+  const { withToken, log } = stubWithToken([failure]);
+  await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error === failure);
   assert.equal(log.filter((line) => line.startsWith('mint')).length, 1);
   assert.equal(log.at(-1), 'revoke');
+}
+
+test('AC5 createRepo throws a 403 after one mint, with no installation-wide retry', async () => {
+  await assertSingleMintFailure(new GitHubError('forbidden', { status: 403 }));
+});
+
+test('AC5 createRepo throws a 404 after one mint, with no installation-wide retry', async () => {
+  await assertSingleMintFailure(new GitHubError('not found', { status: 404 }));
+});
+
+test('AC5 createRepo throws a 422 after one mint', async () => {
+  await assertSingleMintFailure(new GitHubError('unprocessable', { status: 422 }));
+});
+
+test('AC5 createRepo throws a non-GitHub error after one mint', async () => {
+  await assertSingleMintFailure(new Error('boom'));
 });
 
 const TREE_ENTRIES = [

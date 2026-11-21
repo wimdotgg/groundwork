@@ -45,6 +45,7 @@ const ORG = 'wimdotgg';
 const CONTROL = 'groundwork';
 const REPO = 'widget';
 const TAG = 'v0.2.0';
+const TAG_SHA = 'd'.repeat(40);
 const DESCRIPTION = 'A widget shop';
 const TOKEN = 'installation-token';
 const ADMIN_BOT = 'wimdotgg-admin[bot]';
@@ -101,12 +102,12 @@ function releaseEntries(files) {
 function expectedTree(files) {
   const entries = releaseEntries(files);
   const contents = Object.fromEntries(contentPaths(entries).map((path) => [path, files[path]]));
-  const treeEntries = buildBootstrapTree({ entries, contents, org: ORG, controlRepo: CONTROL, repo: REPO, description: DESCRIPTION, tag: TAG });
+  const treeEntries = buildBootstrapTree({ entries, contents, org: ORG, controlRepo: CONTROL, repo: REPO, description: DESCRIPTION, tag: TAG, tagSha: TAG_SHA });
   return { entries, contents, treeEntries };
 }
 
 /** Status of each kit-version read without a ref, in call order: one per `inspectRepo` (not when absent) and per `applySections` call. */
-const KIT_READS = { absent: [404, 200, 200, 200], fresh: [404, 404, 200, 200, 200], ours: [200, 200, 200, 200, 200] };
+const KIT_READS = { absent: [404, 200, 200, 200, 200], fresh: [404, 404, 200, 200, 200, 200], ours: [200, 200, 200, 200, 200, 200] };
 
 function targetRoutes(state, files) {
   const { treeEntries } = expectedTree(files);
@@ -123,7 +124,7 @@ function targetRoutes(state, files) {
     [`POST ${TARGET_PATH}/git/commits`]: reply(201, { sha: 'commit-1' }),
     [`PATCH ${TARGET_PATH}/git/refs/heads/main`]: reply(200),
     [`GET ${TARGET_PATH}/code-scanning/default-setup`]: reply(200, { state: 'not-configured' }),
-    [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, []),
+    [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, []), reply(200, LABELS)],
     [`POST ${TARGET_PATH}/labels`]: reply(201),
     [`PUT ${TARGET_PATH}/vulnerability-alerts`]: reply(204),
     [`GET ${TARGET_PATH}/rulesets?includes_parents=false&per_page=100`]: reply(200, []),
@@ -140,8 +141,9 @@ function targetRoutes(state, files) {
 
 function controlRoutes(files) {
   const routes = {
+    [`GET ${CONTROL_PATH}/git/ref/tags/${TAG}`]: reply(200, { object: { type: 'commit', sha: TAG_SHA } }),
     [`GET ${CONTROL_PATH}/git/matching-refs/tags/v?per_page=100`]: reply(200, [{ ref: 'refs/tags/v0.1.0' }, { ref: `refs/tags/${TAG}` }]),
-    [`GET ${CONTROL_PATH}/git/trees/${TAG}?recursive=1`]: reply(200, {
+    [`GET ${CONTROL_PATH}/git/trees/${TAG_SHA}?recursive=1`]: reply(200, {
       truncated: false, tree: releaseEntries(files).map((entry) => ({ ...entry, type: 'blob' })),
     }),
   };
@@ -328,6 +330,25 @@ test('AC5 the summary lists every pass 1 step with its result and the tag', asyn
   const lines = summary.split('\n');
   for (const step of steps) assert.ok(lines.includes(`- ${step}`), step);
   assert.deepEqual(lines.slice(0, 2), [`### bootstrap ${ORG}/${REPO}`, '']);
+});
+
+test('AC8 the last step lists labels again and deletes the defaults GitHub seeded meanwhile', async () => {
+  const defaults = ['bug', 'documentation', 'duplicate', 'enhancement', 'good first issue', 'help wanted', 'invalid', 'question', 'wontfix', 'accessibility']
+    .map((name) => ({ name, color: 'ededed', description: '' }));
+  const world = createWorld({
+    state: 'absent',
+    overrides: {
+      [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, []), reply(200, [...LABELS, ...defaults])],
+      ...Object.fromEntries(defaults.map(({ name }) => [`DELETE ${TARGET_PATH}/labels/${encodeURIComponent(name)}`, reply(204)])),
+    },
+  });
+  const { summary } = await run(world.ctx, world.seams);
+  const deletes = world.calls.filter((call) => call.method === 'DELETE' && call.path.startsWith(`${TARGET_PATH}/labels/`));
+  assert.equal(deletes.length, defaults.length);
+  const lastLabelsStep = world.calls.findLastIndex((call) => call.path === `${TARGET_PATH}/labels` && call.method === 'GET');
+  const lastEpicWrite = world.calls.findLastIndex((call) => call.method === 'POST' && /\/(sub_issues|dependencies\/blocked_by)$/.test(call.path));
+  assert.ok(lastEpicWrite > -1 && lastLabelsStep > lastEpicWrite, 'the cleanup runs after the last setup epic write');
+  assert.ok(summary.split('\n').includes('- labels (final pass): 10 deleted'));
 });
 
 test('issue and blob creations are paced through the injected sleep', async () => {
