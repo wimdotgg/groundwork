@@ -101,3 +101,10 @@ test('stubs and templates carry no org or owner value, only the three placeholde
     assert.deepEqual(placeholders.filter((token) => !ALLOWED_PLACEHOLDERS.includes(token)), [], path);
   }
 });
+
+test('task 04 names the deploy stub location and the three script arguments (AC3)', () => {
+  const body = templates['04-deploy.md'].body;
+  for (const expected of ['scripts/stubs/deploy/', 'scripts/deploy <tag>', 'scripts/smoke', 'scripts/rollback <previous tag>', '.github/workflows/deploy.yml', 'git mv', '100755']) {
+    assert.ok(body.includes(expected), expected);
+  }
+});

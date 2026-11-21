@@ -13,15 +13,15 @@ E4
 
 ## Scope
 
-In: for a project that deploys, set `"deploy": "scripts"` and write `scripts/deploy`, `scripts/smoke` and `scripts/rollback` with their `.cmd` shims; otherwise leave `"deploy": "none"`. Out: entering deploy secrets (owner only, listed by `bootstrap-pass2`).
+In: for a project that deploys, `git mv` the stubs from `scripts/stubs/deploy/` to `scripts/` (the scripts must keep mode 100755), replace their bodies, and set `"deploy": "scripts"`; otherwise leave `"deploy": "none"` and the stubs where they are. Each stub prints a `GROUNDWORK_STUB` line to stderr and exits 1 until replaced. Contract (spec 8.5): `scripts/deploy <tag>` deploys the release tag `vX.Y.Z` and reads its secrets from `process.env`; `scripts/smoke` takes no arguments, is read-only and idempotent, and runs after deploy and after rollback; `scripts/rollback <previous tag>` redeploys that tag. Exit 0 is success. Map each `environments.production.secrets` name from `.github/groundwork/settings.json` into the `deploy` job `env` in `.github/workflows/deploy.yml`, so the script sees it. Out: entering deploy secrets (owner only, listed by `bootstrap-pass2`).
 
 ## Touches
 
-`scripts/deploy`, `scripts/deploy.cmd`, `scripts/smoke`, `scripts/smoke.cmd`, `scripts/rollback`, `scripts/rollback.cmd`, `.github/groundwork/config.json`
+`scripts/stubs/deploy/`, `scripts/deploy`, `scripts/deploy.cmd`, `scripts/smoke`, `scripts/smoke.cmd`, `scripts/rollback`, `scripts/rollback.cmd`, `.github/groundwork/config.json`, `.github/workflows/deploy.yml`
 
 ## Acceptance criteria
 
-- [ ] AC1 `config.json` has `"deploy": "scripts"` and all three scripts and their `.cmd` shims exist, or it has `"deploy": "none"` and none of them exists.
+- [ ] AC1 `config.json` has `"deploy": "scripts"` and all three scripts and their `.cmd` shims exist and the three scripts are mode 100755 (`git ls-files -s scripts/deploy scripts/smoke scripts/rollback`), or it has `"deploy": "none"` and none of them exists.
 - [ ] AC2 Each script exits non-zero on failure.
 
 ## Verification plan
