@@ -1252,9 +1252,9 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 
 ### 2026-11-21: Phase 4b owner delegation (#170)
 
-The delegation of the "2026-11-21: Phase 4 owner delegation (#141)" entry is extended to Phase 4b epic #167 under the same review rules (agent comment review on the head SHA from another session; a Fable reviewer for protected paths). It ends when #167 closes. A reopen does not revive it: any close ends it. The actions are the ones listed there: approving agent PRs, protected paths included; merging release PRs; `size-exception` on reviewed over-limit PRs; `accepted` on #167; and approving `admin` environment deployments.
+The delegation of the "2026-11-21: Phase 4 owner delegation (#141)" entry is extended to Phase 4b epic #167 under the same review rules (agent comment review on the head SHA from another session; a Fable reviewer for protected paths). It ends when #167 closes. A reopen does not revive it: any close ends it. The actions are the ones listed there, with `accepted` on #167 after you close #140.
 
-Admin approvals now also cover `groundwork`, beside the `gw-p4-*` allowlist, and only for `admin-run.yml` runs on `main` with these ops (op, target, ref and args read from the run name):
+Admin approvals now also cover `groundwork`, beside the `gw-p4-*` allowlist, and only for `admin-run.yml` runs on `main` with empty `args` and these ops (op, target, ref and args read from the run name):
 
 - `bootstrap-pass2`.
 - `check` with an empty `ref`.
