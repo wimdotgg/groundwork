@@ -2,8 +2,7 @@
 
 Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/spec.md); section numbers below point into it. The spec wins over this file.
 
-`scripts/agent/*` commands (`next`, `claim`, `checkpoint`, `resume`, `release`, `plan-lint`, `review-queue`) arrive in Phase 3. Until then follow the worker loop (6.3) by hand with `gh api`. Until `.github/groundwork/templates/` and the PR template land, use the heading lists in this file and spec 4.3 and 7.
-
+`scripts/agent/*` commands (`next`, `claim`, `checkpoint`, `resume`, `release`, `plan-lint`, `review-queue`) arrive in Phase 3. Until then follow the worker loop (6.3) by hand with `gh api`.
 ## Identity and pacing (2.2)
 
 - Act only as `wimdotgg-agent[bot]`. Never write to GitHub under another login, whatever `gh` or Git are logged in as.
@@ -26,7 +25,7 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 
 ## Commands
 
-- Test: `node --test "scripts/**/*.test.mjs"` on Node 24+. `node --test scripts/` fails on Node 24 (overrides spec 3 and 8.2, which still say `node --test scripts/`; a docs PR corrects them).
+- Test: `node --test "scripts/**/*.test.mjs"` on Node 24+. A bare directory argument fails on Node 24.
 - Enqueue: `gh pr merge <n> --auto --squash`. The merge queue refuses `--auto` without `--squash`.
 - Commits and PR titles: Conventional Commits (7).
 
