@@ -275,3 +275,11 @@ test('addCodeScanningRule reports added, then present', async () => {
   const present = recordingClient(routesFor({ liveRules: [CODE_SCANNING] }));
   assert.equal(await addCodeScanningRule({ client: present.client, org: 'wimdotgg', repo: 'widget', desired }), 'present');
 });
+
+test('waitForFirstCodeqlRun matches the default-setup run by path, whatever its name', async () => {
+  const setupRun = codeqlRun({ id: 12, name: 'CodeQL Setup' });
+  const other = codeqlRun({ id: 3, name: 'CodeQL Setup', path: '.github/workflows/codeql.yml' });
+  const { client } = recordingClient(routesFor({ runs: [other, setupRun] }));
+  const found = await waitForFirstCodeqlRun({ client, org: 'wimdotgg', repo: 'widget', sleep: instantSleep });
+  assert.deepEqual(found, { runId: 12, conclusion: 'success' });
+});

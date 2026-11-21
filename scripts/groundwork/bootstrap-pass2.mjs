@@ -102,9 +102,8 @@ export async function waitForFirstCodeqlRun({
     const response = await get(client, `${REPO_PATH}/actions/runs`, { owner: org, repo }, {
       query: { branch: MAIN_BRANCH, status: 'completed' },
     });
-    const found = (response.data?.workflow_runs ?? []).find((candidate) => (
-      candidate.name === CODEQL_WORKFLOW_NAME && candidate.path === CODEQL_DEFAULT_SETUP_PATH
-    ));
+    // Default setup names its run "CodeQL Setup", so the path is the only stable key.
+    const found = (response.data?.workflow_runs ?? []).find((candidate) => candidate.path === CODEQL_DEFAULT_SETUP_PATH);
     if (found) return { runId: found.id, conclusion: found.conclusion };
     if (waited + pollMs > timeoutMs) {
       throw new GitHubError(`no completed ${CODEQL_WORKFLOW_NAME} run on main in ${org}/${repo} within ${timeoutMs} ms`);
