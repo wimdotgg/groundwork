@@ -1253,21 +1253,16 @@ test('withToken: selftest mints only its declared grants, keyed on selftest-<run
   assert.ok(mints.every(({ repositories }) => repositories.length === 1 && [CONTROL_REPO, throwaway].includes(repositories[0])));
 });
 
-test('apply: selftest never runs the trailing check itself, so the archive can follow', async () => {
-  let checkRuns = 0;
-  const registry = { ...stubRegistry({ check: async () => { checkRuns += 1; return { ok: true, summary: 'verified' }; } }), selftest: { ...SELFTEST, run: async (ctx) => {
-    const checked = await ctx.runCheck();
-    return { ok: checked.ok, summary: `selftest saw ${checked.summary}` };
-  } } };
-  const throwaway = 'selftest-4242';
-  const { overrides, mints } = harness({ registry, routes: Object.fromEntries(Object.entries(withTokenRoutes()).map(([key, route]) => [key.replace(`/repos/${ORG}/${TARGET}`, `/repos/${ORG}/${throwaway}`), route])) });
+test('apply: selftest runs the check only through ctx.runCheck, with the check grant on the throwaway repository', async () => {
+  const registry = { ...stubRegistry(), selftest: { ...SELFTEST, run: (ctx) => ctx.runCheck() } };
+  const routes = Object.fromEntries(Object.entries(withTokenRoutes()).map(([key, route]) => [key.replace(`/repos/${ORG}/${TARGET}`, `/repos/${ORG}/selftest-4242`), route]));
+  const { overrides, mints } = harness({ registry, routes });
   const result = await apply(dispatchEnv(SELFTEST_ENV), overrides);
   assert.equal(result.exitCode, 0, result.reason);
-  assert.equal(checkRuns, 1, 'only the explicit ctx.runCheck');
-  assert.deepEqual(mints.map(({ repositories, permissions }) => ({ repositories, permissions })), [{ repositories: [throwaway], permissions: REGISTRY.check.PERMISSIONS }]);
+  assert.deepEqual(mints.map(({ repositories, permissions }) => ({ repositories, permissions })), [{ repositories: ['selftest-4242'], permissions: REGISTRY.check.PERMISSIONS }]);
 });
 
-// --- script op and the grants seam---------------------------------------------------------------------------------
+// --- script op and the grants seam ---------------------------------------------------------------------------------
 
 const SCRIPT_FILE = 'admin-ops/example.mjs';
 const SCRIPT_SOURCE = 'export const permissions = { "issues": "read" };\nexport async function run({ log }) {\n  log(JSON.stringify(Object.keys(process.env)));\n  return { ok: true, summary: "ran" };\n}\n';

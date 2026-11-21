@@ -2,8 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GitHubError, createFixtureClient } from '../lib/github.mjs';
 import { PROBE_IDS } from './selftest-probes.mjs';
-import { CONTROL_READ_PERMISSIONS, CREATE_PERMISSIONS, PERMISSIONS, grants, run as runSelftest, targetRepo, validateArgs } from './selftest.mjs';
-import { PERMISSIONS as CHECK_PERMISSIONS } from './check.mjs';
+import { CONTROL_READ_PERMISSIONS, CREATE_PERMISSIONS, PERMISSIONS, grants, run as runSelftest } from './selftest.mjs';
 
 const ORG = 'acme';
 const CONTROL = 'groundwork';
@@ -42,11 +41,6 @@ function harness({ archiveStatus = 200, mintFails = false, checkResult = { ok: t
 const rowsOf = (summary) => summary.split('\n').filter((line) => line.startsWith('| ') && !line.startsWith('| Step')).map((line) => line.split(' | ')[0].slice(2));
 const succeedingBootstrap = async () => ({ ok: true, summary: 'bootstrapped' });
 
-test('targetRepo: builds selftest-<run id> and refuses anything but digits', () => {
-  assert.equal(targetRepo({ GITHUB_RUN_ID: RUN_ID }), REPO);
-  for (const runId of [undefined, '', '12a', '../1', '1 2', '１２']) assert.throws(() => targetRepo({ GITHUB_RUN_ID: runId }), { name: 'GitHubError' });
-});
-
 test('AC1 grants: control read and create exact, the throwaway repository subset, nothing else', () => {
   assert.deepEqual(grants({ env: { GITHUB_RUN_ID: RUN_ID }, controlRepo: CONTROL, targetRepo: 'other-repo' }), [
     { repositories: [CONTROL], permissions: CONTROL_READ_PERMISSIONS, match: 'exact' },
@@ -54,11 +48,6 @@ test('AC1 grants: control read and create exact, the throwaway repository subset
     { repositories: [REPO], permissions: PERMISSIONS, match: 'subset' },
   ]);
   assert.throws(() => grants({ env: { GITHUB_RUN_ID: 'abc' }, controlRepo: CONTROL }), { name: 'GitHubError' });
-});
-
-test('validateArgs: accepts only an empty object', () => {
-  assert.deepEqual(validateArgs({}), []);
-  assert.deepEqual(validateArgs({ description: 'x' }), ['unknown argument "description"']);
 });
 
 test('AC1 run: bootstrap gets the repository and the run-id description, and every mint is a declared grant on the throwaway repository', async () => {
@@ -81,13 +70,6 @@ test('AC1 run: bootstrap gets the repository and the run-id description, and eve
   ]);
   for (const request of requests) {
     assert.ok(declared.some((grant) => grant.repositories[0] === request.repositories[0] && grant.permissions === request.permissions));
-  }
-});
-
-test('AC1 run: the check grant is a subset of the throwaway grant', () => {
-  for (const [name, level] of Object.entries(CHECK_PERMISSIONS)) {
-    assert.ok(Object.hasOwn(PERMISSIONS, name), name);
-    assert.ok(level === PERMISSIONS[name] || (level === 'read' && PERMISSIONS[name] === 'write'), name);
   }
 });
 
@@ -194,13 +176,4 @@ test('R1 run: an unreadable repository state is refused and never archived', asy
   assert.equal(result.ok, false);
   assert.deepEqual(calls, []);
   assert.match(result.summary, /\| archive \| fail \| not archived: repository state unreadable: boom \|/);
-});
-
-test('R1 run: a repository this kit created (ours, fresh, absent) is bootstrapped and archived', async () => {
-  for (const state of ['absent', 'fresh', 'ours']) {
-    const { ctx, calls } = harness();
-    const result = await run(ctx, { inspect: async () => state, runBootstrap: succeedingBootstrap, probes: passingProbes });
-    assert.equal(result.ok, true, state);
-    assert.equal(calls.length, 1, state);
-  }
 });

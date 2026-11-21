@@ -111,20 +111,13 @@ export async function run(ctx, { runBootstrap = bootstrap.run, probes = runProbe
     throw new GitHubError(`selftest refuses ${ctx.repo}: expected ${repo}`);
   }
   const refusal = await refusalReason(ctx, inspect);
-  if (refusal !== undefined) {
-    const rows = [
-      { id: 'bootstrap', ok: false, detail: refusal },
-      { id: 'check', ok: false, detail: SKIPPED },
-      { id: 'probes', ok: false, detail: SKIPPED },
-      { id: 'archive', ok: false, detail: `not archived: ${refusal}` },
-    ];
-    return { ok: false, summary: renderSummary({ org: ctx.org, repo }, rows) };
-  }
   const bootstrapArgs = JSON.stringify({ description: `groundwork selftest ${ctx.env.GITHUB_RUN_ID}` });
-  const bootstrapRows = await attempt('bootstrap', async () => {
-    await runBootstrap({ ...ctx, env: { ...ctx.env, INPUT_ARGS: bootstrapArgs } });
-    return [{ id: 'bootstrap', ok: true, detail: 'pass 1 applied' }];
-  });
+  const bootstrapRows = refusal === undefined
+    ? await attempt('bootstrap', async () => {
+      await runBootstrap({ ...ctx, env: { ...ctx.env, INPUT_ARGS: bootstrapArgs } });
+      return [{ id: 'bootstrap', ok: true, detail: 'pass 1 applied' }];
+    })
+    : [{ id: 'bootstrap', ok: false, detail: refusal }];
   const rows = [...bootstrapRows];
   let checkSummary;
   if (bootstrapRows[0].ok) {
@@ -140,6 +133,6 @@ export async function run(ctx, { runBootstrap = bootstrap.run, probes = runProbe
   } else {
     rows.push({ id: 'check', ok: false, detail: SKIPPED }, { id: 'probes', ok: false, detail: SKIPPED });
   }
-  rows.push(...await attempt('archive', () => archive(ctx)));
+  rows.push(...(refusal === undefined ? await attempt('archive', () => archive(ctx)) : [{ id: 'archive', ok: false, detail: `not archived: ${refusal}` }]));
   return { ok: rows.every((row) => row.ok), summary: renderSummary({ org: ctx.org, repo }, rows, checkSummary) };
 }
