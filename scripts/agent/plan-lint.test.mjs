@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createFixtureClient } from '../lib/github.mjs';
-import { hasMarker } from '../lib/markdown.mjs';
+import { fillTemplate, hasMarker } from '../lib/markdown.mjs';
 import {
-  PlanLintError, analyzePlan, lintPlan, loadPlan, main, parseArguments, planLint, renderReport, upsertReport,
+  PlanLintError, analyzePlan, closeLint, lintClose, lintPlan, loadPlan, main, parseArguments, planLint, renderReport, upsertReport,
 } from './plan-lint.mjs';
 
 const REPO = { owner: 'o', repo: 'r' };
@@ -26,9 +26,9 @@ function body({ ac = '- [ ] AC1 works', serves = 'E1', touches = '`src/a.mjs`' }
 }
 
 /** A leaf task under the epic, with its own distinct touched path unless `bodyOptions` says otherwise. */
-function task(number, { blockedBy = [], state = 'open', type = 'Feature', parent = EPIC, level = 2, ...bodyOptions } = {}) {
+function task(number, { blockedBy = [], state = 'open', stateReason = null, type = 'Feature', parent = EPIC, level = 2, ...bodyOptions } = {}) {
   const touches = bodyOptions.touches ?? `\`src/file-${number}.mjs\``;
-  return { number, title: `task ${number}`, type, state, body: body({ ...bodyOptions, touches }), parent, level, blockedBy };
+  return { number, title: `task ${number}`, type, state, stateReason, body: body({ ...bodyOptions, touches }), parent, level, blockedBy };
 }
 
 const codes = (failures) => failures.map((failure) => failure.code);
@@ -323,10 +323,11 @@ test('planLint: lints the loaded plan and posts only with post set', async () =>
 });
 
 test('arguments: epic number, --post and --json; anything else is refused with the usage line only', () => {
-  assert.deepEqual(parseArguments(['75', '--post', '--json']), { epic: 75, post: true, json: true });
-  assert.deepEqual(parseArguments(['75']), { epic: 75, post: false, json: false });
-  for (const argv of [[], ['x'], ['0'], ['1', '2'], ['75', '--close'], ['75', '--bogus']]) {
-    const refused = (error) => error instanceof PlanLintError && error.message === 'usage: plan-lint.mjs <epic> [--post] [--json]';
+  assert.deepEqual(parseArguments(['75']), { epic: 75, post: false, close: false, json: false });
+  assert.deepEqual(parseArguments(['75', '--close', '--json']), { epic: 75, post: false, close: true, json: true });
+  assert.deepEqual(parseArguments(['75', '--post', '--json']), { epic: 75, post: true, close: false, json: true });
+  for (const argv of [[], ['x'], ['0'], ['1', '2'], ['75', '--post', '--close'], ['75', '--bogus']]) {
+    const refused = (error) => error instanceof PlanLintError && error.message === 'usage: plan-lint.mjs <epic> [--post | --close] [--json]';
     assert.throws(() => parseArguments(argv), refused, argv.join(' '));
   }
 });
@@ -378,9 +379,91 @@ test('main: a plain Error prints its first line, and a usage error prints the us
   console.error = (line) => stderr.push(line);
   try {
     assert.equal(await main([String(EPIC)], {}, boom), 1);
-    assert.equal(await main([String(EPIC), '--close'], {}, boom), 1);
+    assert.equal(await main([String(EPIC), '--bogus'], {}, boom), 1);
   } finally {
     console.error = error;
   }
-  assert.deepEqual(stderr, ['config broke', 'usage: plan-lint.mjs <epic> [--post] [--json]']);
+  assert.deepEqual(stderr, ['config broke', 'usage: plan-lint.mjs <epic> [--post | --close] [--json]']);
+});
+
+const acceptanceTemplate = await readFile(new URL('../../.github/groundwork/templates/acceptance-comment.md', import.meta.url), 'utf8');
+const DECISIONS = '- 2026-11-20: Spike #3 answered in docs/decisions/3-queue.md\n- 2026-11-20: #4 dropped, the epic no longer needs it';
+
+function acceptanceBody(criteria = ['E1', 'E2']) {
+  const rows = criteria.map((id) => `| ${id} done | PR #9 |`).join('\n');
+  return fillTemplate(acceptanceTemplate, { criteria: rows, gaps: '- none' }).text;
+}
+
+const closeNodes = () => [
+  task(1, { state: 'closed', stateReason: 'completed' }),
+  task(3, { state: 'closed', stateReason: 'completed', type: 'Spike' }),
+  task(4, { state: 'closed', stateReason: 'not_planned' }),
+];
+const acceptance = (criteria) => ({ body: acceptanceBody(criteria) });
+const closeFailures = (nodes, accepted = acceptance(), decisions = DECISIONS) => lintClose({ nodes, epicCriteria: EPIC_CRITERIA, decisions }, accepted)
+  .map((failure) => [failure.code, failure.task]);
+
+test('close: a fully closed epic with decisions and an acceptance comment passes', () => {
+  assert.deepEqual(closeFailures(closeNodes()), []);
+});
+
+test('close: an open sub-issue fails, a closed one passes', () => {
+  assert.deepEqual(closeFailures([...closeNodes(), task(5)]), [['open-sub-issue', 5]]);
+  assert.deepEqual(closeFailures([...closeNodes(), task(5, { state: 'closed', stateReason: 'completed' })]), []);
+});
+
+test('close: not planned without a decision line fails, with one passes, and #4 does not match #40', () => {
+  const unexplained = [task(40, { state: 'closed', stateReason: 'not_planned' })];
+  assert.deepEqual(closeFailures(unexplained), [['not-planned-without-reason', 40]]);
+  assert.deepEqual(closeFailures(unexplained, acceptance(), '- #40 dropped'), []);
+});
+
+test('close: a closed spike without a decision line fails, naming the issue or its decision file passes', () => {
+  const spike = [task(7, { state: 'closed', stateReason: 'completed', type: 'Spike' })];
+  assert.deepEqual(closeFailures(spike), [['spike-without-decision', 7]]);
+  assert.deepEqual(closeFailures(spike, acceptance(), '- 2026-11-21: spike #7 chose A'), []);
+  assert.deepEqual(closeFailures(spike, acceptance(), '- 2026-11-21: see docs/decisions/7-choice.md'), []);
+  assert.deepEqual(closeFailures(spike, acceptance(), '- 2026-11-21: see docs/decisions/17-choice.md'), [['spike-without-decision', 7]]);
+});
+
+test('close: an epic criterion missing from the acceptance table fails, and so does a row without evidence', () => {
+  assert.deepEqual(closeFailures(closeNodes(), acceptance(['E1'])), [['unmapped-criterion', null]]);
+  const blank = { body: '| Criterion | Evidence |\n|---|---|\n| E1 a | PR #9 |\n| E2 b |  |\n' };
+  assert.deepEqual(closeFailures(closeNodes(), blank), [['unmapped-criterion', null]]);
+});
+
+test('close: no acceptance comment fails once, whatever the criteria', () => {
+  assert.deepEqual(closeFailures(closeNodes(), null), [['no-acceptance-comment', null]]);
+});
+
+const closeIssue = (node) => issueFor(node, { state_reason: node.stateReason });
+const acceptanceComment = (login = AGENT, text = acceptanceBody()) => ({ id: 7, user: { login }, body: text });
+
+/** Routes for an epic that reads sub-issues and comments for `--close`. */
+function closeRoutes(nodes, comments) {
+  const routes = planRoutes(nodes);
+  routes[subIssuesRoute(EPIC)] = ok(nodes.map(closeIssue));
+  return { ...routes, [COMMENTS]: ok(comments) };
+}
+
+test('closeLint: the acceptance comment must come from the agent account', async () => {
+  const nodes = closeNodes();
+  const context = { client: createFixtureClient(closeRoutes(nodes, [acceptanceComment('stranger')])), repo: REPO, config };
+  const forged = await closeLint(context, { epic: EPIC });
+  assert.deepEqual(codes(forged.failures), ['spike-without-decision', 'not-planned-without-reason', 'no-acceptance-comment']);
+});
+
+test('main --close: exit 0 when the epic is ready to close, 1 with the failures in --json otherwise', async () => {
+  const ready = await runMain([String(EPIC), '--close', '--json'], closeRoutes([task(1, { state: 'closed', stateReason: 'completed' })], [acceptanceComment()]));
+  assert.equal(ready.exitCode, 0);
+  assert.deepEqual([JSON.parse(ready.out[0]).ok, JSON.parse(ready.out[0]).failures], [true, []]);
+  const open = await runMain([String(EPIC), '--close', '--json'], closeRoutes([task(1)], [acceptanceComment()]));
+  assert.equal(open.exitCode, 1);
+  assert.deepEqual(codes(JSON.parse(open.out[0]).failures), ['open-sub-issue']);
+  assert.deepEqual(open.err, ['1 planning failure']);
+});
+
+test('main --close: the plain report names the failing sub-issue', async () => {
+  const { out } = await runMain([String(EPIC), '--close'], closeRoutes([task(1)], []));
+  assert.match(out[0], /^Epic close #500: fail \(2\)\n- open-sub-issue: #1 is still open\n- no-acceptance-comment: /);
 });
