@@ -60,7 +60,24 @@ async function createProject(files, { branch = 'issue/5', kitVersion = OLD_TAG }
   await git(['init', '-q', '-b', branch]);
   await git(['add', '-A']);
   await git(['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'project']);
-  return { root, git, published: [], publish(args) { this.published.push(args); return Promise.resolve(''); } };
+  const remote = `${root}-remote`;
+  await execFileAsync('git', ['init', '-q', '--bare', remote]);
+  await git(['remote', 'add', 'origin', remote]);
+  await git(['push', '-q', 'origin', branch]);
+  const project = {
+    root,
+    remote,
+    git,
+    published: [],
+    failPublishWhen: () => false,
+    async publish(args) {
+      if (this.failPublishWhen(args)) throw new Error(`${args[1]} failed`);
+      this.published.push(args);
+      if (args[1] === 'commit') await git(['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args.slice(1)]);
+      return '';
+    },
+  };
+  return project;
 }
 
 async function withProject(files, options, body) {
@@ -69,11 +86,18 @@ async function withProject(files, options, body) {
     await body(project);
   } finally {
     await rm(project.root, { recursive: true, force: true });
+    await rm(project.remote, { recursive: true, force: true });
   }
 }
 
 const readProject = (project, filePath) => readFile(path.join(project.root, filePath), 'utf8');
-const execute = (project, client, tag = NEW_TAG) => run({ root: project.root, tag, client, git: project.git, publish: (args) => project.publish(args) });
+const execute = (project, client, tag = NEW_TAG) => run({
+  root: project.root,
+  tag,
+  client,
+  git: project.git,
+  publish: (args) => project.publish(args),
+});
 
 const OLD_TREE = {
   'scripts/lib/a.mjs': 'a-old\n',
@@ -177,7 +201,10 @@ test('AC2 run refuses a malformed tag before any write', async () => {
 
 test('AC2 run refuses a tag that does not exist in the control repository before any write', async () => {
   await withProject(PROJECT_FILES, {}, async (project) => {
-    const client = createFixtureClient({ [`GET ${CONTROL_API}/git/ref/tags/${NEW_TAG}`]: reply(404, { message: 'Not Found' }) });
+    const client = createFixtureClient({
+      ...tagRoutes(OLD_TAG, OLD_TREE),
+      [`GET ${CONTROL_API}/git/ref/tags/${NEW_TAG}`]: reply(404, { message: 'Not Found' }),
+    });
     await assertRefusedWithoutWrites({ project, client, tag: NEW_TAG, reason: /v1\.1\.0 does not exist/ });
   });
 });
@@ -230,11 +257,65 @@ test('mergeConfig keeps a project change to an array and a project deletion', ()
 });
 
 test('KIT_PATHS match the kit and never the project, stub or deploy paths', () => {
-  for (const kitPath of ['scripts/agent/next.mjs', '.claude/skills/groundwork-worker/SKILL.md', '.github/workflows/plan-lint.yml', 'scripts/kit-update.mjs']) {
+  const kitFiles = [
+    'scripts/agent/next.mjs',
+    '.claude/skills/groundwork-worker/SKILL.md',
+    '.github/workflows/plan-lint.yml',
+    'scripts/kit-update.mjs',
+  ];
+  for (const kitPath of kitFiles) {
     assert.ok(isKitPath(kitPath), kitPath);
   }
-  for (const other of ['scripts/verify', 'scripts/stubs/deploy/deploy', '.github/workflows/deploy.yml', '.github/workflows/ci.yml', '.claude/skills/mine/SKILL.md', 'scripts/groundwork/check.mjs']) {
+  const otherFiles = [
+    'scripts/verify',
+    'scripts/stubs/deploy/deploy',
+    '.github/workflows/deploy.yml',
+    '.github/workflows/ci.yml',
+    '.claude/skills/mine/SKILL.md',
+    'scripts/groundwork/check.mjs',
+  ];
+  for (const other of otherFiles) {
     assert.ok(!isKitPath(other), other);
   }
   assert.ok(KIT_PATHS.length > 0 && UNMODIFIED_ONLY_PATHS.every((file) => !isKitPath(file)));
+});
+
+test('mergeConfig recurses into an object key that both sides added', () => {
+  assert.deepEqual(mergeConfig({ base: {}, ours: { x: { a: 1 } }, theirs: { x: { b: 2 } } }), { x: { a: 1, b: 2 } });
+});
+
+test('R1 a failed commit restores the tree so the run can be repeated', async () => {
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    const client = releasesClient(OLD_TREE, NEW_TREE);
+    project.failPublishWhen = ([, subcommand]) => subcommand === 'commit';
+    await assert.rejects(execute(project, client), /commit failed/);
+    assert.equal(await project.git(['status', '--porcelain']), '');
+    assert.equal((await readProject(project, '.github/groundwork/kit-version.txt')).trim(), OLD_TAG);
+    project.failPublishWhen = () => false;
+    assert.equal((await execute(project, client)).tag, NEW_TAG);
+  });
+});
+
+test('R1 a rerun after a failed push pushes the local commit', async () => {
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    const client = releasesClient(OLD_TREE, { ...NEW_TREE, '.github/groundwork/config.json': realConfigText });
+    project.failPublishWhen = ([, subcommand]) => subcommand === 'push';
+    await assert.rejects(execute(project, client), /push failed/);
+    project.failPublishWhen = () => false;
+    project.published.splice(0);
+    assert.deepEqual(await execute(project, NO_NETWORK_CLIENT), { ok: true, tag: NEW_TAG, changed: [], skipped: [] });
+    assert.deepEqual(project.published, [['git', 'push', 'origin', 'issue/5']]);
+  });
+});
+
+test('R4 symlink entries are dropped and a path that leaves the project is refused', async () => {
+  const newFiles = { ...NEW_TREE, 'scripts/lib/link.mjs': { text: 'a-new\n', mode: '120000' } };
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    const result = await execute(project, releasesClient(OLD_TREE, newFiles));
+    assert.ok(!result.changed.includes('scripts/lib/link.mjs'));
+  });
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    const escaping = { ...NEW_TREE, 'scripts/lib/../../../outside.mjs': 'x\n' };
+    await assertRefusedWithoutWrites({ project, client: releasesClient(OLD_TREE, escaping), tag: NEW_TAG, reason: /leaves the project/ });
+  });
 });

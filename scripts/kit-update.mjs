@@ -39,6 +39,7 @@ const TAG_PATTERN = /^v(\d+)\.(\d+)\.(\d+)$/;
 const BRANCH_PATTERN = /^issue\/\d+$/;
 const KIT_VERSION_PATH = `${CONFIG_DIR}/kit-version.txt`;
 const CONFIG_PATH = `${CONFIG_DIR}/config.json`;
+const REGULAR_MODE = '100644';
 const EXECUTABLE_MODE = '100755';
 const USAGE = 'usage: kit-update.mjs <vX.Y.Z> [--json]';
 const MAX_TAG_DEREFERENCES = 5;
@@ -80,7 +81,8 @@ export function mergeConfig({ base, ours, theirs }) {
 }
 
 function mergeValue({ base, ours, theirs }) {
-  if (isPlainObject(base) && isPlainObject(ours) && isPlainObject(theirs)) return mergeConfig({ base, ours, theirs });
+  const bothObjects = isPlainObject(ours) && isPlainObject(theirs);
+  if (bothObjects && (base === undefined || isPlainObject(base))) return mergeConfig({ base: base ?? {}, ours, theirs });
   return sameValue(ours, base) ? theirs : ours;
 }
 
@@ -124,12 +126,18 @@ async function resolveTagCommit(client, control, tag) {
   return target.sha;
 }
 
-/** @returns {Promise<Map<string, TreeBlob>>} the blobs of the tag's tree by path */
-async function readTree(client, control, commitSha) {
+function requireInsideRoot(root, entryPath) {
+  const relative = path.relative(root, path.resolve(root, entryPath));
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new KitUpdateRefusal(`tree path ${entryPath} leaves the project`);
+}
+
+/** @returns {Promise<Map<string, TreeBlob>>} the regular files of the tag's tree by path; symlinks are dropped */
+async function readTree({ client, control, root, commitSha }) {
   const { data } = await client.request('GET', controlPath(control, `git/trees/${commitSha}`), { query: { recursive: 1 } });
   if (data?.truncated) throw new GitHubError(`tree at ${commitSha} is truncated`);
-  const blobs = data.tree.filter((entry) => entry.type === 'blob');
-  return new Map(blobs.map(({ path: entryPath, mode, sha }) => [entryPath, { path: entryPath, mode, sha }]));
+  const files = data.tree.filter((entry) => entry.type === 'blob' && [REGULAR_MODE, EXECUTABLE_MODE].includes(entry.mode));
+  for (const { path: entryPath } of files) requireInsideRoot(root, entryPath);
+  return new Map(files.map(({ path: entryPath, mode, sha }) => [entryPath, { path: entryPath, mode, sha }]));
 }
 
 async function readBlob(client, control, entry) {
@@ -171,9 +179,13 @@ async function planFileWrites({ client, control, root, oldTree, newTree }) {
 async function planConfigMerge({ client, control, root, oldTree, newTree }) {
   const oursText = (await readLocal(root, CONFIG_PATH)).toString('utf8');
   const ours = JSON.parse(oursText);
-  const readTagVersion = async (tree) => (tree.has(CONFIG_PATH) ? JSON.parse((await readBlob(client, control, tree.get(CONFIG_PATH))).toString('utf8')) : {});
+  const readTagVersion = async (tree) => {
+    if (!tree.has(CONFIG_PATH)) return {};
+    return JSON.parse((await readBlob(client, control, tree.get(CONFIG_PATH))).toString('utf8'));
+  };
   const merged = mergeConfig({ base: await readTagVersion(oldTree), ours, theirs: await readTagVersion(newTree) });
-  return sameValue(merged, ours) ? null : { content: Buffer.from(`${JSON.stringify(merged, null, 2)}\n`), executable: false };
+  if (sameValue(merged, ours)) return null;
+  return { content: Buffer.from(`${JSON.stringify(merged, null, 2)}\n`), executable: false };
 }
 
 async function applyPlan({ root, writes, removals }) {
@@ -191,6 +203,23 @@ async function requireCleanIssueBranch(git) {
   if (!BRANCH_PATTERN.test(branch)) throw new KitUpdateRefusal(`run on an issue/N branch, not ${branch}`);
   if ((await git(['status', '--porcelain'])).trim() !== '') throw new KitUpdateRefusal('working tree has uncommitted changes');
   return branch;
+}
+
+async function isAheadOfRemote(git, branch) {
+  return Number((await git(['rev-list', '--count', `origin/${branch}..HEAD`])).trim()) > 0;
+}
+
+/** The tree was clean before the plan, so a failed write or commit is undone completely and the run can be repeated. */
+async function commitPlan({ root, git, publish, plan, tag }) {
+  try {
+    await applyPlan({ root, ...plan });
+    await git(['add', '-A']);
+    await publish(['git', 'commit', '-m', `chore(kit): update to ${tag}`]);
+  } catch (error) {
+    await git(['reset', '--hard', 'HEAD']);
+    await git(['clean', '-fd']);
+    throw error;
+  }
 }
 
 async function readCurrentTag(root) {
@@ -213,17 +242,19 @@ export async function run({ root, tag, client, git, publish }) {
   const branch = await requireCleanIssueBranch(git);
   const currentTag = await readCurrentTag(root);
   if (compareTags(tag, currentTag) < 0) throw new KitUpdateRefusal(`${tag} is lower than ${currentTag} in kit-version.txt`);
-  if (tag === currentTag) return { ok: true, tag, changed: [], skipped: [] };
+  if (tag === currentTag) {
+    if (await isAheadOfRemote(git, branch)) await publish(['git', 'push', 'origin', branch]);
+    return { ok: true, tag, changed: [], skipped: [] };
+  }
 
-  const [newTree, oldTree] = await Promise.all([tag, currentTag].map(async (name) => readTree(client, control, await resolveTagCommit(client, control, name))));
+  const readTagTree = async (name) => readTree({ client, control, root, commitSha: await resolveTagCommit(client, control, name) });
+  const [newTree, oldTree] = await Promise.all([readTagTree(tag), readTagTree(currentTag)]);
   const { writes, removals, skipped } = await planFileWrites({ client, control, root, oldTree, newTree });
   const mergedConfig = await planConfigMerge({ client, control, root, oldTree, newTree });
   if (mergedConfig) writes.set(CONFIG_PATH, mergedConfig);
   writes.set(KIT_VERSION_PATH, { content: Buffer.from(`${tag}\n`), executable: false });
 
-  await applyPlan({ root, writes, removals });
-  await git(['add', '-A']);
-  await publish(['git', 'commit', '-m', `chore(kit): update to ${tag}`]);
+  await commitPlan({ root, git, publish, plan: { writes, removals }, tag });
   await publish(['git', 'push', 'origin', branch]);
   return { ok: true, tag, changed: [...writes.keys(), ...removals].sort(), skipped: skipped.sort() };
 }
@@ -232,7 +263,10 @@ function report({ json, result }) {
   if (json) console.log(JSON.stringify(result));
   else if (!result.ok) console.error(result.reason);
   else if (result.changed.length === 0) console.log(`already on ${result.tag}`);
-  else console.log(`updated to ${result.tag}: ${result.changed.length} changed, ${result.skipped.length} skipped${result.skipped.map((file) => `\n  skipped ${file}`).join('')}`);
+  else {
+    const skippedLines = result.skipped.map((file) => `\n  skipped ${file}`).join('');
+    console.log(`updated to ${result.tag}: ${result.changed.length} changed, ${result.skipped.length} skipped${skippedLines}`);
+  }
 }
 
 export async function main({ argv, env, scriptUrl = import.meta.url }) {
