@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/wimdotgg/groundwork/compare/v0.3.0...v0.4.0) (2026-11-21)
+
+
+### Features
+
+* **agent:** add plan-lint --close to check an epic before the owner closes it ([#136](https://github.com/wimdotgg/groundwork/issues/136)) ([9ee63f9](https://github.com/wimdotgg/groundwork/commit/9ee63f9ce80db2e91698df87e7c26de26b0c9725))
+* **agent:** add plan-lint.mjs to enforce the planning rules ([#132](https://github.com/wimdotgg/groundwork/issues/132)) ([228ebaf](https://github.com/wimdotgg/groundwork/commit/228ebaffbe8707cd5c4ad113dd3211a642916602))
+* **agent:** add review-queue.mjs to list PRs awaiting review ([#133](https://github.com/wimdotgg/groundwork/issues/133)) ([db2583f](https://github.com/wimdotgg/groundwork/commit/db2583f0a92ff8e79a71aca1d54f69f31f7bf9d4))
+* **ci:** lint epics on issue events with plan-lint.yml ([#137](https://github.com/wimdotgg/groundwork/issues/137)) ([a55e422](https://github.com/wimdotgg/groundwork/commit/a55e4220933d817ee04c6239941a4f45dbe92076))
+* **human:** add inbox.mjs to list what waits on the owner ([#134](https://github.com/wimdotgg/groundwork/issues/134)) ([61d9af3](https://github.com/wimdotgg/groundwork/commit/61d9af3de5f854bfc21f8976f9a756e42ac10518))
+* **skills:** add the planner and reviewer skills ([#138](https://github.com/wimdotgg/groundwork/issues/138)) ([3fd5853](https://github.com/wimdotgg/groundwork/commit/3fd585343031c53ccd204944a5b2f62d78304f52))
+
 ## [0.3.0](https://github.com/wimdotgg/groundwork/compare/v0.2.0...v0.3.0) (2026-11-20)
 
 
