@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { GitHubError, createFixtureClient } from '../lib/github.mjs';
 import { SettingsError } from '../lib/settings.mjs';
 import {
-  OP, STUB_MARKER, TOKEN_SCOPE, addCodeScanningRule, deployChecklist, readVerifyState, run, validateArgs,
+  OP, STUB_MARKER, TOKEN_SCOPE, addCodeScanningRule, deployChecklist, enableDefaultSetup, readVerifyState, run, validateArgs,
   waitForFirstCodeqlRun, withCodeScanningRule,
 } from './bootstrap-pass2.mjs';
 
@@ -15,9 +15,12 @@ const REAL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const BASE = '/repos/wimdotgg/widget';
 const CODE_SCANNING = { type: 'code_scanning', parameters: { code_scanning_tools: [{ tool: 'CodeQL' }] } };
 const LIVE_RULES = [{ type: 'deletion' }, { type: 'non_fast_forward' }];
+const BYPASS_ACTORS = [{ actor_type: 'OrganizationAdmin', actor_id: null, bypass_mode: 'pull_request' }];
+const CODEQL_PATH = 'dynamic/github-code-scanning/codeql';
+const codeqlRun = (overrides) => ({ name: 'CodeQL', id: 55, conclusion: 'success', path: CODEQL_PATH, ...overrides });
 const LIVE_MAIN = {
   id: 7, name: 'main', target: 'branch', enforcement: 'active', source_type: 'Repository',
-  conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }, bypass_actors: [], rules: LIVE_RULES,
+  conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }, bypass_actors: BYPASS_ACTORS, rules: LIVE_RULES,
 };
 const encode = (text) => Buffer.from(text).toString('base64');
 const instantSleep = async () => {};
@@ -66,10 +69,10 @@ function recordingClient(routes) {
 }
 
 function routesFor({
-  verify = 'echo real', setupStates = ['none', 'configured'], runs = [{ name: 'CodeQL', id: 55, conclusion: 'success' }],
-  liveRules = LIVE_RULES, variable = { status: 404, data: {} },
+  verify = 'echo real', setupStates = ['none', 'configured'], runs = [codeqlRun()],
+  liveRules = LIVE_RULES, variable = { status: 404, data: {} }, verifyResponse,
 } = {}) {
-  const verifyRoute = verify === null ? { status: 404, data: {} } : { status: 200, data: { content: encode(verify) } };
+  const verifyRoute = verifyResponse ?? (verify === null ? { status: 404, data: {} } : { status: 200, data: { content: encode(verify) } });
   return {
     [`GET ${BASE}/contents/scripts/verify?ref=main`]: verifyRoute,
     [`GET ${BASE}/code-scanning/default-setup`]: setupStates.map((state) => ({ status: 200, data: { state } })),
@@ -80,6 +83,7 @@ function routesFor({
     [`PUT ${BASE}/rulesets/7`]: { status: 200, data: {} },
     [`GET ${BASE}/actions/variables/DEPLOY_ENABLED`]: variable,
     [`POST ${BASE}/actions/variables`]: { status: 201, data: {} },
+    [`PATCH ${BASE}/actions/variables/DEPLOY_ENABLED`]: { status: 200, data: {} },
   };
 }
 
@@ -123,8 +127,65 @@ test('AC2: default setup, then the run wait, then one ruleset PUT that keeps eve
   assert.ok(order.every((call) => calls.includes(call)));
   const puts = writes.filter((write) => write.method === 'PUT');
   assert.equal(puts.length, 1);
-  assert.deepEqual(puts[0].body.rules, [...LIVE_RULES, CODE_SCANNING]);
-  assert.equal(puts[0].body.id, undefined);
+  assert.deepEqual(puts[0].body, {
+    name: LIVE_MAIN.name,
+    target: LIVE_MAIN.target,
+    enforcement: LIVE_MAIN.enforcement,
+    conditions: LIVE_MAIN.conditions,
+    bypass_actors: BYPASS_ACTORS,
+    rules: [...LIVE_RULES, CODE_SCANNING],
+  });
+});
+
+test('R6: a response without content (directory or over 1 MB) is unreadable and refuses', async () => {
+  const root = await makeRoot();
+  for (const data of [[{ name: 'verify' }], { content: '' }]) {
+    const { client, writes } = recordingClient(routesFor({ verifyResponse: { status: 200, data } }));
+    assert.equal(await readVerifyState({ client, org: 'wimdotgg', repo: 'widget' }), 'unreadable');
+    const result = await run(context(client, root), DEPENDENCIES);
+    assert.equal(result.ok, false);
+    assert.match(result.summary, /not a readable file/);
+    assert.deepEqual(writes, []);
+  }
+});
+
+test('R1: a live rule with reordered and extra keys is present and writes nothing', async () => {
+  const desired = { rules: [{ type: 'code_scanning', parameters: { code_scanning_tools: [{ tool: 'CodeQL', alerts_threshold: 'errors' }] } }] };
+  const liveRule = { parameters: { code_scanning_tools: [{ security_alerts_threshold: 'high_or_higher', alerts_threshold: 'errors', tool: 'CodeQL' }] }, type: 'code_scanning' };
+  const { client, writes } = recordingClient(routesFor({ liveRules: [liveRule] }));
+  assert.equal(await addCodeScanningRule({ client, org: 'wimdotgg', repo: 'widget', desired }), 'present');
+  assert.deepEqual(writes, []);
+});
+
+test('R2: only the default-setup CodeQL run counts', async () => {
+  const advanced = codeqlRun({ id: 1, path: '.github/workflows/codeql.yml' });
+  const noDefaultRun = recordingClient(routesFor({ runs: [advanced] }));
+  await assert.rejects(() => waitForFirstCodeqlRun({ client: noDefaultRun.client, org: 'wimdotgg', repo: 'widget', timeoutMs: 20, pollMs: 10, sleep: instantSleep }), GitHubError);
+  const both = recordingClient(routesFor({ runs: [advanced, codeqlRun({ id: 2 })] }));
+  const found = await waitForFirstCodeqlRun({ client: both.client, org: 'wimdotgg', repo: 'widget', sleep: instantSleep });
+  assert.equal(found.runId, 2);
+});
+
+test('R5: enableDefaultSetup writes once, reads back, and throws when it never configures', async () => {
+  const args = (routes) => ({ client: recordingClient(routes).client, org: 'wimdotgg', repo: 'widget', sleep: instantSleep });
+  const configuring = recordingClient(routesFor({ setupStates: ['none', 'none', 'configured'] }));
+  await enableDefaultSetup({ client: configuring.client, org: 'wimdotgg', repo: 'widget', sleep: instantSleep });
+  assert.equal(configuring.writes.length, 1);
+  assert.deepEqual(configuring.writes[0].body, { state: 'configured' });
+  const never = routesFor({ setupStates: Array(10).fill('none') });
+  await assert.rejects(() => enableDefaultSetup(args(never)), (error) => error instanceof GitHubError && /not configured/.test(error.message));
+});
+
+test('R5: DEPLOY_ENABLED with another value is patched', async () => {
+  const root = await makeRoot();
+  const { client, writes } = recordingClient(routesFor({ variable: { status: 200, data: { value: 'false' } } }));
+  await run(context(client, root), DEPENDENCIES);
+  const patch = writes.find((write) => write.path.endsWith('/actions/variables/DEPLOY_ENABLED'));
+  assert.deepEqual(patch.body, { name: 'DEPLOY_ENABLED', value: 'true' });
+});
+
+test('R7: no secrets means no checklist lines', () => {
+  assert.deepEqual(deployChecklist({ org: 'wimdotgg', repo: 'widget', secrets: [] }), []);
 });
 
 test('AC2: withCodeScanningRule replaces an existing rule and throws without a desired one', () => {
@@ -174,7 +235,7 @@ test('AC4: no completed CodeQL run within the bound fails with no ruleset write'
 
 test('AC4: a CodeQL conclusion other than success fails with no ruleset write', async () => {
   const root = await makeRoot();
-  const { client, writes } = recordingClient(routesFor({ runs: [{ name: 'CodeQL', id: 55, conclusion: 'failure' }] }));
+  const { client, writes } = recordingClient(routesFor({ runs: [codeqlRun({ conclusion: 'failure' })] }));
   const result = await run(context(client, root), DEPENDENCIES);
   assert.equal(result.ok, false);
   assert.match(result.summary, /run 55 on main concluded failure/);
@@ -185,7 +246,7 @@ test('waitForFirstCodeqlRun sleeps between polls until the run appears', async (
   const routes = routesFor();
   routes[`GET ${BASE}/actions/runs?branch=main&status=completed`] = [
     { status: 200, data: { workflow_runs: [] } },
-    { status: 200, data: { workflow_runs: [{ name: 'CodeQL', id: 9, conclusion: 'success' }] } },
+    { status: 200, data: { workflow_runs: [codeqlRun({ id: 9 })] } },
   ];
   const sleeps = [];
   const found = await waitForFirstCodeqlRun({

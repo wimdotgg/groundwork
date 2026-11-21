@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { GitHubError, apiPath } from '../lib/github.mjs';
-import { SettingsError, loadDesiredState } from '../lib/settings.mjs';
+import { SettingsError, covers, loadDesiredState } from '../lib/settings.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 
@@ -23,12 +23,19 @@ export const PERMISSIONS = {
 
 export const STUB_MARKER = 'GROUNDWORK_STUB';
 
-const REPO_PATH = '/repos/{owner}/{repo}';
+const VERIFY_REFUSAL_REASONS = {
+  stub: `still the ${STUB_MARKER} stub`,
+  missing: 'missing',
+  unreadable: 'not a readable file (a directory, or over 1 MB)',
+};
+const REPO_PATH ='/repos/{owner}/{repo}';
 const MAIN_RULESET = 'main';
 const MAIN_BRANCH = 'main';
 const NOT_FOUND = 404;
 const CODE_SCANNING_RULE = 'code_scanning';
 const CODEQL_WORKFLOW_NAME = 'CodeQL';
+// Advanced-setup workflows named CodeQL have other paths; only default setup runs from this one.
+const CODEQL_DEFAULT_SETUP_PATH = 'dynamic/github-code-scanning/codeql';
 const DEFAULT_CODEQL_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_POLL_MS = 15 * 1000;
 const SETUP_READBACK_ATTEMPTS = 10;
@@ -53,15 +60,16 @@ export function validateArgs(args) {
 
 /**
  * @param {{ client: GitHubClient, org: string, repo: string }} options
- * @returns {Promise<'stub'|'real'|'missing'>} state of `scripts/verify` on `main`
+ * @returns {Promise<'stub'|'real'|'missing'|'unreadable'>} state of `scripts/verify` on `main`; `unreadable` fails closed
  */
 export async function readVerifyState({ client, org, repo }) {
   const response = await get(client, `${REPO_PATH}/contents/scripts/verify`, { owner: org, repo }, {
     query: { ref: MAIN_BRANCH }, okStatuses: [NOT_FOUND],
   });
   if (response.status === NOT_FOUND) return 'missing';
-  const text = Buffer.from(response.data?.content ?? '', 'base64').toString('utf8');
-  return text.includes(STUB_MARKER) ? 'stub' : 'real';
+  const encoded = response.data?.content;
+  if (typeof encoded !== 'string' || encoded === '') return 'unreadable';
+  return Buffer.from(encoded, 'base64').toString('utf8').includes(STUB_MARKER) ? 'stub' : 'real';
 }
 
 /**
@@ -94,7 +102,9 @@ export async function waitForFirstCodeqlRun({
     const response = await get(client, `${REPO_PATH}/actions/runs`, { owner: org, repo }, {
       query: { branch: MAIN_BRANCH, status: 'completed' },
     });
-    const found = (response.data?.workflow_runs ?? []).find((candidate) => candidate.name === CODEQL_WORKFLOW_NAME);
+    const found = (response.data?.workflow_runs ?? []).find((candidate) => (
+      candidate.name === CODEQL_WORKFLOW_NAME && candidate.path === CODEQL_DEFAULT_SETUP_PATH
+    ));
     if (found) return { runId: found.id, conclusion: found.conclusion };
     if (waited + pollMs > timeoutMs) {
       throw new GitHubError(`no completed ${CODEQL_WORKFLOW_NAME} run on main in ${org}/${repo} within ${timeoutMs} ms`);
@@ -133,7 +143,8 @@ export async function addCodeScanningRule({ client, org, repo, desired }) {
   const repoRef = { owner: org, repo };
   const live = await readLiveMainRuleset(client, repoRef);
   const updated = withCodeScanningRule({ live, desired });
-  if (JSON.stringify(findCodeScanningRule(live)) === JSON.stringify(findCodeScanningRule(updated))) return 'present';
+  const liveRule = findCodeScanningRule(live);
+  if (liveRule && covers(liveRule, findCodeScanningRule(desired))) return 'present';
   const body = Object.fromEntries(RULESET_BODY_KEYS.map((key) => [key, updated[key]]));
   await client.request('PUT', apiPath(`${REPO_PATH}/rulesets/{id}`, { ...repoRef, id: live.id }), { body });
   return 'added';
@@ -144,6 +155,7 @@ export async function addCodeScanningRule({ client, org, repo, desired }) {
  * @returns {string[]} summary lines for the deploy secrets the owner enters by hand
  */
 export function deployChecklist({ org, repo, secrets }) {
+  if (secrets.length === 0) return [];
   const page = `https://github.com/${org}/${repo}/settings/environments`;
   return [
     `Enter these secrets in the production environment (${page}):`,
@@ -184,8 +196,7 @@ export async function run(ctx, dependencies = DEFAULT_DEPENDENCIES) {
   const { client, org, repo } = ctx;
   const verify = await readVerifyState({ client, org, repo });
   if (verify !== 'real') {
-    const reason = verify === 'stub' ? `still the ${STUB_MARKER} stub` : 'missing';
-    return { ok: false, summary: `scripts/verify is ${reason} on main; replace it before pass 2` };
+    return { ok: false, summary: `scripts/verify is ${VERIFY_REFUSAL_REASONS[verify]} on main; replace it before pass 2` };
   }
   const { main, settings } = await readDesiredMain(ctx.settingsRoot);
   await enableDefaultSetup({ client, org, repo, sleep: dependencies.sleep });
