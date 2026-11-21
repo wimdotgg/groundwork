@@ -143,7 +143,7 @@ function controlRoutes(files) {
   const routes = {
     [`GET ${CONTROL_PATH}/git/ref/tags/${TAG}`]: reply(200, { object: { type: 'commit', sha: TAG_SHA } }),
     [`GET ${CONTROL_PATH}/git/matching-refs/tags/v?per_page=100`]: reply(200, [{ ref: 'refs/tags/v0.1.0' }, { ref: `refs/tags/${TAG}` }]),
-    [`GET ${CONTROL_PATH}/git/trees/${TAG}?recursive=1`]: reply(200, {
+    [`GET ${CONTROL_PATH}/git/trees/${TAG_SHA}?recursive=1`]: reply(200, {
       truncated: false, tree: releaseEntries(files).map((entry) => ({ ...entry, type: 'blob' })),
     }),
   };

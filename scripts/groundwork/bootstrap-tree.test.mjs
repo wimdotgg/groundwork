@@ -85,6 +85,12 @@ test('AC10: ci.yml pins the control repo reusable workflows to the tag commit SH
   assert.ok(!ci.includes('zizmor: ignore[self-repository]'));
 });
 
+test('AC10: buildBootstrapTree refuses a tagSha that is not a 40-character commit SHA', () => {
+  for (const tagSha of [undefined, TAG, 'AB12'.repeat(10), 'ab12'.repeat(9)]) {
+    assert.throws(() => build({ tagSha }), (error) => error instanceof SettingsError && /not a 40-character commit SHA/.test(error.message));
+  }
+});
+
 test('AC3: generated files, stub verify with its mode, README and docs from stubs', () => {
   const tree = build();
   assert.equal(find(tree, KIT_VERSION_PATH).content, 'v9.9.9\n');

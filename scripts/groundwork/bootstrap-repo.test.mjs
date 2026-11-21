@@ -87,19 +87,19 @@ test('AC10 resolveTagCommit throws when the tag points at something other than a
   await assert.rejects(resolve(client), /does not resolve to a commit/);
 });
 
-test('readReleaseTree keeps blobs and throws on a truncated tree', async () => {
-  const treeKey = `GET /repos/${ORG}/${CONTROL}/git/trees/v0.4.0?recursive=1`;
+test('AC10 readReleaseTree reads the tree by commit SHA, keeps blobs and throws on a truncated tree', async () => {
+  const treeKey = `GET /repos/${ORG}/${CONTROL}/git/trees/${COMMIT_SHA}?recursive=1`;
   const tree = [
     { path: 'a.txt', mode: '100644', type: 'blob', sha: 's1', size: 3 },
     { path: 'dir', mode: '040000', type: 'tree', sha: 's2' },
   ];
   const ok = recordingClient({ [treeKey]: reply(200, { tree, truncated: false }) });
   assert.deepEqual(
-    await readReleaseTree({ client: ok.client, org: ORG, controlRepo: CONTROL, tag: 'v0.4.0' }),
+    await readReleaseTree({ client: ok.client, org: ORG, controlRepo: CONTROL, commitSha: COMMIT_SHA }),
     [{ path: 'a.txt', mode: '100644', sha: 's1' }],
   );
   const cut = recordingClient({ [treeKey]: reply(200, { tree, truncated: true }) });
-  await assert.rejects(readReleaseTree({ client: cut.client, org: ORG, controlRepo: CONTROL, tag: 'v0.4.0' }), /truncated/);
+  await assert.rejects(readReleaseTree({ client: cut.client, org: ORG, controlRepo: CONTROL, commitSha: COMMIT_SHA }), /truncated/);
 });
 
 test('readBlobTexts decodes UTF-8 blobs and rejects a path outside the tree', async () => {
