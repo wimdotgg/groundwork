@@ -162,7 +162,8 @@ export async function readBlobContents({ client, org, controlRepo, entries }) {
   for (const { path, sha, content } of entries) {
     if (sha === undefined || content !== undefined) continue;
     const { data } = await client.request('GET', repoPath(org, controlRepo, `/git/blobs/${encodeURIComponent(sha)}`));
-    if (typeof data?.content === 'string') blobs.set(path, data.content.replace(/\s+/g, ''));
+    if (typeof data?.content !== 'string') throw new SettingsError(`control blob ${sha} for ${path} has no content`);
+    blobs.set(path, data.content.replace(/\s+/g, ''));
   }
   return blobs;
 }
@@ -175,12 +176,13 @@ async function createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep 
       resolved.push({ ...entry, type: 'blob' });
       continue;
     }
-    const content = blobs.get(entry.path);
+    const content = blobs?.get(entry.path);
     if (content === undefined) throw new SettingsError(`no base64 content for ${entry.path}`);
     if (posted > 0) await sleep(BLOB_POST_SPACING_MS);
     const body = { content, encoding: 'base64' };
     const { data } = await client.request('POST', repoPath(org, repo, '/git/blobs'), { body });
     posted += 1;
+    if (data.sha !== entry.sha) throw new SettingsError(`blob ${entry.path} came back as ${data.sha}, expected ${entry.sha}`);
     resolved.push({ path: entry.path, mode: entry.mode, sha: data.sha, type: 'blob' });
   }
   return resolved;

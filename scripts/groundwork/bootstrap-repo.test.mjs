@@ -239,7 +239,7 @@ function commitRoutes({ kit = reply(404) } = {}) {
   return {
     [`GET ${REPO_PATH}/git/ref/heads/main`]: reply(200, { object: { sha: 'head1' } }),
     [KIT_ON_MAIN]: kit,
-    [`POST ${REPO_PATH}/git/blobs`]: [reply(201, { sha: 'new1' }), reply(201, { sha: 'new2' })],
+    [`POST ${REPO_PATH}/git/blobs`]: [reply(201, { sha: 'ctl1' }), reply(201, { sha: 'ctl2' })],
     [`POST ${REPO_PATH}/git/trees`]: reply(201, { sha: 'tree1' }),
     [`POST ${REPO_PATH}/git/commits`]: reply(201, { sha: 'commit1' }),
     [`PATCH ${REPO_PATH}/git/refs/heads/main`]: reply(200, {}),
@@ -260,7 +260,7 @@ test('readBlobContents reads control blobs for sha entries only, as base64 witho
   assert.equal(calls.length, 2);
 });
 
-test('AC4 commitBootstrapTree creates each kept blob in the target, paced by sleep, and uses the new sha', async () => {
+test('AC4 commitBootstrapTree creates each kept blob in the target, paced by sleep', async () => {
   const { client, bodies } = recordingClient(commitRoutes());
   const sleeps = [];
   const result = await commitBootstrapTree(commitArgs(client, async (ms) => { sleeps.push(ms); }));
@@ -274,8 +274,8 @@ test('AC4 commitBootstrapTree creates each kept blob in the target, paced by sle
   assert.deepEqual(bodyOf('POST', '/git/trees'), {
     tree: [
       { path: 'README.md', mode: '100644', content: '# shop\n', type: 'blob' },
-      { path: 'a.txt', mode: '100644', sha: 'new1', type: 'blob' },
-      { path: 'b.txt', mode: '100755', sha: 'new2', type: 'blob' },
+      { path: 'a.txt', mode: '100644', sha: 'ctl1', type: 'blob' },
+      { path: 'b.txt', mode: '100755', sha: 'ctl2', type: 'blob' },
     ],
   });
   assert.deepEqual(bodyOf('POST', '/git/commits'), {
@@ -292,6 +292,24 @@ test('AC4 commitBootstrapTree writes nothing when kit-version.txt is already on 
   const result = await commitBootstrapTree(commitArgs(client));
   assert.deepEqual(result, { sha: 'head1', created: false });
   assert.deepEqual(calls.filter(({ method }) => method !== 'GET'), []);
+});
+
+test('commitBootstrapTree throws SettingsError when a created blob sha differs from the control sha, before any tree write', async () => {
+  const routes = { ...commitRoutes(), [`POST ${REPO_PATH}/git/blobs`]: reply(201, { sha: 'other' }) };
+  const { client, calls } = recordingClient(routes);
+  await assert.rejects(commitBootstrapTree(commitArgs(client)), SettingsError);
+  assert.equal(calls.some(({ path }) => path.endsWith('/git/trees')), false);
+});
+
+test('commitBootstrapTree throws SettingsError, not TypeError, when blobs is missing', async () => {
+  const { client } = recordingClient(commitRoutes());
+  await assert.rejects(commitBootstrapTree({ ...commitArgs(client), blobs: undefined }), SettingsError);
+});
+
+test('readBlobContents throws SettingsError for a control blob response without content', async () => {
+  const { client } = recordingClient({ [`GET /repos/${ORG}/${CONTROL}/git/blobs/ctl1`]: reply(200, { encoding: 'base64' }) });
+  const entries = [{ path: 'a.txt', mode: '100644', sha: 'ctl1' }];
+  await assert.rejects(readBlobContents({ client, org: ORG, controlRepo: CONTROL, entries }), SettingsError);
 });
 
 test('commitBootstrapTree throws SettingsError for a sha entry without base64 and creates no tree', async () => {
