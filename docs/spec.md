@@ -1189,7 +1189,7 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 
 ### 2026-11-21: Phase 4 owner delegation (#141)
 
-The delegation of the #81 entry is extended through Phase 4 epic #140 and ends when #140 closes. A reopen does not revive it: any close ends it. The local owner script (outside the repository, your `gh` login) performs only these actions, each with a "Delegated owner" marker on GitHub:
+The delegation of the #81 entry is extended through Phase 4 epic #140 and ends when #140 closes. A reopen does not revive it: any close ends it. Your `gh` login stays on the orchestrator machine and a local script (outside the repository) performs only these actions, each with a "Delegated owner" marker on GitHub:
 
 - Approve agent PRs, including ones touching `.github/`, `scripts/groundwork/`, `scripts/ci/` or `.claude/settings.json`. Every approval needs an agent comment review on the head SHA from a session other than the PR's author session; for the protected paths its Reviewer line must name a Fable reviewer.
 - Merge release PRs.
@@ -1198,7 +1198,7 @@ The delegation of the #81 entry is extended through Phase 4 epic #140 and ends w
 - Approve pending `admin` environment deployments, only for `admin-run.yml` runs on `main` whose op is `bootstrap`, `bootstrap-pass2` or `check` and whose target repo matches `gw-p4-*` (op, target, ref and args read from the run name).
 - Inside `gw-p4-*` repositories: `approve-pr` under the same review rules, and accepting the "Project setup" epic opened by the admin App.
 
-A check run with a set conclusion counts as finished. Phase 5 owner actions (G1, G4, G6) stay in person. 2.1 and 14.1 point here.
+When the script waits for checks, a check run with a set conclusion counts as finished. Phase 5 owner actions (G1, G4, G6) stay in person. 2.1 and 14.1 point here.
 
 ### 2026-11-21: Phase 3b integration (#98)
 
