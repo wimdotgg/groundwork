@@ -114,7 +114,7 @@ export async function readKitVersion({ client, org, repo }) {
   return tag;
 }
 
-// The callback records a refused create instead of throwing, so the token is revoked before the caller decides to retry.
+// Records a refused create instead of throwing, so the token is revoked before any retry.
 async function attemptCreate({ withToken, scope, org, body }) {
   let failure = null;
   await withToken(scope, async ({ client }) => {

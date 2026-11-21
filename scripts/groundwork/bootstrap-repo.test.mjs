@@ -27,7 +27,7 @@ function base64(text) {
   return Buffer.from(text, 'utf8').toString('base64');
 }
 
-// The fixture client never exposes request bodies, so this wrapper records them next to the call order.
+// Fixture client hides request bodies; this wrapper records them.
 function recordingClient(routes) {
   const calls = [];
   const bodies = [];
@@ -110,6 +110,11 @@ test('AC2 inspectRepo returns fresh for the one-commit auto_init state by the ad
   assert.equal(await inspect(inspectRoutes()), 'fresh');
 });
 
+test('AC2 inspectRepo compares the commit author through sameLogin', async () => {
+  const commits = reply(200, [{ sha: 'c1', author: { login: 'ACME-Admin[bot]' } }]);
+  assert.equal(await inspect(inspectRoutes({ commits })), 'fresh');
+});
+
 test('AC2 inspectRepo returns ours when kit-version.txt exists, even off main', async () => {
   const kit = reply(200, { content: base64('v0.4.0\n') });
   assert.equal(await inspect(inspectRoutes({ kit, repository: reply(200, { default_branch: 'trunk' }) })), 'ours');
@@ -139,7 +144,7 @@ test('AC2 readKitVersion returns the pinned tag and rejects other content', asyn
 
 const CREATE_PERMISSIONS = { administration: 'write' };
 
-// Stubbed 12.1 hook: logs mint and end around the callback and answers the create call from `answers`.
+// Stubbed 12.1 hook: logs mint and revoke, answers the create call from `answers`.
 function stubWithToken(answers) {
   const log = [];
   const withToken = async (scope, callback) => {
@@ -181,6 +186,22 @@ for (const status of [403, 404]) {
     ]);
   });
 }
+
+test('AC3 createRepo makes one call with the restricted token when it succeeds', async () => {
+  const { withToken, log } = stubWithToken(['ok']);
+  await createRepo(createRepoArgs(withToken));
+  assert.deepEqual(log, [
+    'mint {"repositories":["groundwork"],"permissions":{"administration":"write"}}',
+    `POST /orgs/acme/repos ${CREATE_BODY}`,
+    'revoke',
+  ]);
+});
+
+test('AC3 createRepo throws the second refusal after one retry', async () => {
+  const { withToken, log } = stubWithToken([403, 403]);
+  await assert.rejects(createRepo(createRepoArgs(withToken)), (error) => error.status === 403);
+  assert.equal(log.filter((line) => line.startsWith('mint')).length, 2);
+});
 
 test('AC3 createRepo throws a 422 without a retry', async () => {
   const { withToken, log } = stubWithToken([422]);
