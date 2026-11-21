@@ -10,7 +10,8 @@ import {
 } from './bootstrap-tree.mjs';
 
 const TAG = 'v9.9.9';
-const OPTIONS = { org: 'acme', controlRepo: 'groundwork', repo: 'shop', description: 'Shop for $& "quotes" and \\ slashes', tag: TAG };
+const TAG_SHA = 'ab12'.repeat(10);
+const OPTIONS = { org: 'acme', controlRepo: 'groundwork', repo: 'shop', description: 'Shop for $& "quotes" and \\ slashes', tag: TAG, tagSha: TAG_SHA };
 const CI = [
   'jobs:',
   '  verify:',
@@ -74,10 +75,12 @@ test('AC1: output holds no CONTROL_PATHS path; contentPaths lists .github and st
   assert.ok(contentPaths(entries).includes('scripts/groundwork/stubs/docs/sub/more.md'));
 });
 
-test('AC2: ci.yml points at the control repo at the tag and loses the zizmor comment', () => {
+test('AC10: ci.yml pins the control repo reusable workflows to the tag commit SHA with the tag as comment', () => {
   const ci = find(build(), '.github/workflows/ci.yml').content;
-  assert.match(ci, /uses: acme\/groundwork\/\.github\/workflows\/reusable-verify\.yml@v9\.9\.9\n/);
-  assert.match(ci, /uses: acme\/groundwork\/\.github\/workflows\/reusable-security\.yml@v9\.9\.9\n/);
+  assert.match(ci, new RegExp(`uses: acme/groundwork/\\.github/workflows/reusable-verify\\.yml@${TAG_SHA} # v9\\.9\\.9\\n`));
+  assert.match(ci, new RegExp(`uses: acme/groundwork/\\.github/workflows/reusable-security\\.yml@${TAG_SHA} # v9\\.9\\.9\\n`));
+  assert.match(TAG_SHA, /^[0-9a-f]{40}$/);
+  assert.ok(!/@v\d/.test(ci), 'no tag ref is left');
   assert.ok(!ci.includes('./.github/workflows/reusable-'));
   assert.ok(!ci.includes('zizmor: ignore[self-repository]'));
 });
