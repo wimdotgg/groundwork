@@ -406,12 +406,14 @@ async function refusedWorld(fields) {
 test('AC1 an ours run refuses on an accepted setup epic before any write and names apply-settings', async () => {
   const world = await refusedWorld({ labels: [{ name: 'accepted' }] });
   assert.deepEqual(writesOf(world), []);
+  assert.equal(world.grants.length, 1);
   assert.equal(world.calls.some((call) => call.method === 'gh'), false);
 });
 
 test('AC2 an ours run refuses on a closed setup epic before any write and names apply-settings', async () => {
   const world = await refusedWorld({ state: 'closed' });
   assert.deepEqual(writesOf(world), []);
+  assert.equal(world.grants.length, 1);
   assert.equal(world.calls.some((call) => call.method === 'gh'), false);
 });
 

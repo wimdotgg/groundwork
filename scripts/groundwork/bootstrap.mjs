@@ -79,6 +79,7 @@ async function readSource({ client, org, controlRepo, repo, description, adminBo
   if (state === 'foreign') {
     throw new SettingsError(`${org}/${repo} exists and is neither a groundwork project nor a fresh auto_init repository`);
   }
+  if (state === 'ours') await refuseAfterSetupAcceptance({ client, org, repo, adminBot });
   const tag = state === 'ours'
     ? await readKitVersion({ client, org, repo })
     : await latestReleaseTag({ client, org, controlRepo });
@@ -108,7 +109,6 @@ async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
   const { client, token } = minted;
   const { sleep, settingsDependencies } = seams;
   const { org, repo } = ctx;
-  if (source.state === 'ours') await refuseAfterSetupAcceptance({ client, org, repo, adminBot });
   const { settingsRoot, config } = await ctx.writeSettings(settingsFiles(source.treeEntries, source.contents));
   const targetContext = { ...ctx, client, token, settingsRoot, config };
   const sections = (groups) => applySections(targetContext, groups, settingsDependencies);
