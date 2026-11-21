@@ -23,7 +23,8 @@ const WORKFLOW_FILE = path.join(repoRoot(import.meta.url), '.github', 'workflows
 
 const ok = (data = {}) => ({ status: 200, data });
 const asBlob = (text) => ({ encoding: 'base64', content: Buffer.from(text).toString('base64') });
-const stubConfig = ({ root }) => ({ org: ORG, root });
+const CONTROL_REPO = 'groundwork';
+const stubConfig = ({ root }) => ({ org: ORG, controlRepo: CONTROL_REPO, root });
 
 const dispatchEnv = (overrides = {}) => ({
   GITHUB_REF: MAIN_REF,
@@ -44,6 +45,8 @@ function stubRegistry(runs = {}) {
     OP: module.OP,
     TOKEN_SCOPE: module.TOKEN_SCOPE,
     PERMISSIONS: module.PERMISSIONS,
+    CREATE_PERMISSIONS: module.CREATE_PERMISSIONS,
+    CONTROL_READ_PERMISSIONS: module.CONTROL_READ_PERMISSIONS,
     validateArgs: module.validateArgs,
     run: runs[name] ?? (async () => ({ ok: true, summary: `${name} done` })),
   }]));
@@ -112,7 +115,7 @@ test('validateRequest: valid dispatches pass for every op', () => {
 
 test('validateRequest: each rule rejects', () => {
   const cases = [
-    ['unknown op', inputs({ op: 'bootstrap' })],
+    ['unknown op', inputs({ op: 'nonexistent' })],
     ['empty op', inputs({ op: '' })],
     ['inherited op name', inputs({ op: 'constructor' })],
     ['target missing for check', inputs({ targetRepo: '' })],
@@ -164,6 +167,7 @@ test('REGISTRY: keys equal each module OP and the workflow op choices', async ()
     options.push(match[1]);
   }
   assert.deepEqual(options.sort(), Object.keys(REGISTRY).sort());
+  assert.ok(options.includes('bootstrap') && options.includes('bootstrap-pass2'));
 });
 
 // --- workflow shape -----------------------------------------------------------------------------------------------
@@ -814,4 +818,261 @@ test('apply: a non-GitHub error from the ancestry check fails the run and still 
   assert.equal(result.exitCode, 1);
   assert.equal(result.reason, 'unexpected');
   assert.ok(events.includes('revoke'));
+});
+
+// --- deferred scope: withToken, writeSettings, trailing check -------------------------------------------------------
+
+const BOOTSTRAP_ENV = { INPUT_OP: 'bootstrap', INPUT_ARGS: '{"description":"demo"}' };
+const BOOTSTRAP = REGISTRY.bootstrap;
+const withTokenRoutes = () => ({ ...settingsRoutes(HEAD), [`GET ${mainRefPath}`]: ok({ object: { sha: HEAD } }), ...revokeRoute });
+const nonStdout = (events) => events.filter((event) => !event.startsWith('stdout'));
+
+function deferredHarness(run, { routes = withTokenRoutes(), checkRun, ...rest } = {}) {
+  const registry = stubRegistry({ bootstrap: run, ...(checkRun ? { check: checkRun } : {}) });
+  const built = harness({ registry, routes, ...rest });
+  const jwts = [];
+  built.overrides.createAppJwt = () => {
+    jwts.push(`${JWT}-${jwts.length + 1}`);
+    return jwts.at(-1);
+  };
+  return { ...built, jwts };
+}
+
+const targetGrant = { repositories: [TARGET], permissions: { contents: 'write', members: 'read' } };
+const controlRead = { repositories: [CONTROL_REPO], permissions: BOOTSTRAP.CONTROL_READ_PERMISSIONS };
+const createGrant = { repositories: [CONTROL_REPO], permissions: BOOTSTRAP.CREATE_PERMISSIONS };
+const createAllGrant = { repositories: 'all', permissions: BOOTSTRAP.CREATE_PERMISSIONS };
+const stopHere = { ok: false, summary: 'stop' };
+
+test('admin-run.yml: run-name carries every input for the owner delegation', async () => {
+  const lines = (await readFile(WORKFLOW_FILE, 'utf8')).split(/\r?\n/);
+  assert.ok(lines.includes('run-name: admin-run ${{ inputs.op }} ${{ inputs.target_repo }} ref=${{ inputs.ref }} args=${{ inputs.args }}'));
+});
+
+test('apply: a deferred op mints nothing before run and gets no client, token or target settings', async () => {
+  let seen;
+  const { overrides, mints, configRoots, jwts } = deferredHarness(async (ctx) => {
+    seen = { client: ctx.client, token: ctx.token, settingsRoot: ctx.settingsRoot, mintsAtRun: mints.length, jwtsAtRun: jwts.length };
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.deepEqual(seen, { client: null, token: null, settingsRoot: CONTROL_ROOT, mintsAtRun: 0, jwtsAtRun: 0 });
+  assert.equal(configRoots[0], CONTROL_ROOT);
+});
+
+test('withToken: every accepted grant signs a fresh JWT, mints exactly the request, masks and revokes', async () => {
+  const grants = [targetGrant, controlRead, createGrant, createAllGrant];
+  const values = [];
+  const { overrides, mints, jwts, events, stdout } = deferredHarness(async (ctx) => {
+    for (const grant of grants) values.push(await ctx.withToken(grant, async ({ client, token }) => (client ? token : null)));
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.deepEqual(values, grants.map(() => TOKEN), 'resolves to the callback value');
+  assert.equal(new Set(jwts).size, grants.length);
+  assert.deepEqual(mints.map(({ repositories, permissions }) => ({ repositories, permissions })), grants);
+  assert.deepEqual(nonStdout(events), grants.flatMap(() => ['mint', 'revoke']));
+  assert.ok(stdout.includes(`::add-mask::${TOKEN}\n`));
+  assert.ok(stdout.includes(`::add-mask::${jwts[0]}\n`));
+  assert.ok(events.indexOf(`stdout:::add-mask::${TOKEN}`) < events.indexOf('revoke'));
+});
+
+test('withToken: a callback error is rethrown after the revoke', async () => {
+  let thrown;
+  const { overrides, events } = deferredHarness(async (ctx) => {
+    await ctx.withToken(controlRead, async () => { throw new Error('callback failed'); }).catch((error) => { thrown = error.message; });
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.equal(thrown, 'callback failed');
+  assert.deepEqual(nonStdout(events), ['mint', 'revoke']);
+});
+
+test('withToken: a failed mint runs no callback and revokes nothing', async () => {
+  const outcomes = [];
+  const { overrides, events } = deferredHarness(async (ctx) => {
+    await ctx.withToken(controlRead, async () => outcomes.push('callback')).catch((error) => outcomes.push(error.message));
+    return stopHere;
+  }, { mintFails: 'mint refused' });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.deepEqual(outcomes, ['mint refused']);
+  assert.ok(!events.includes('revoke'));
+});
+
+test('plan and apply: bootstrap ops refuse the control repository as target before any mint', async () => {
+  for (const op of ['bootstrap', 'bootstrap-pass2']) {
+    const overrides = { ...BOOTSTRAP_ENV, INPUT_OP: op, INPUT_ARGS: op === 'bootstrap' ? BOOTSTRAP_ENV.INPUT_ARGS : '{}', INPUT_TARGET_REPO: 'Groundwork' };
+    const planned = await plan(dispatchEnv(overrides), { ...planOverrides({}), registry: REGISTRY });
+    assert.equal(planned.exitCode, 1, op);
+    const { overrides: deps, mints, jwts } = deferredHarness(async () => assert.fail('op must not run'));
+    const applied = await apply(dispatchEnv(overrides), { ...deps, registry: REGISTRY });
+    assert.equal(applied.exitCode, 1, op);
+    assert.match(applied.reason, /control repository/);
+    assert.deepEqual([mints.length, jwts.length], [0, 0]);
+  }
+});
+
+test('withToken: a failed revoke fails the run even when the op swallows the outcome', async () => {
+  const routes = { ...settingsRoutes(HEAD), 'DELETE /installation/token': { status: 500, data: { message: 'down' } } };
+  const { overrides } = deferredHarness(async (ctx) => {
+    await ctx.withToken(controlRead, async () => 1);
+    return { ok: true, summary: 'op passed' };
+  }, { routes });
+  const result = await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.summary, /token revocation failed/);
+});
+
+test('withToken: the op never sees ADMIN_APP_KEY or a JWT', async () => {
+  let readable;
+  const { overrides, jwts } = deferredHarness(async (ctx) => {
+    readable = JSON.stringify({ env: ctx.env, ctx, callbackArgument: await ctx.withToken(targetGrant, async (argument) => argument) });
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.ok(!readable.includes('PRIVATE-KEY-MATERIAL'));
+  assert.ok(!readable.includes(jwts[0]));
+  assert.ok(readable.includes(TOKEN), 'the callback gets its own installation token');
+});
+
+const refusals = [
+  ['permission above the op on the target', { repositories: [TARGET], permissions: { members: 'write' } }],
+  ['permission the op lacks on the target', { repositories: [TARGET], permissions: { pages: 'read' } }],
+  ['no permissions on the target', { repositories: [TARGET], permissions: {} }],
+  ['control read plus an extra key', { repositories: [CONTROL_REPO], permissions: { contents: 'read', issues: 'read' } }],
+  ['control read at write level', { repositories: [CONTROL_REPO], permissions: { contents: 'write' } }],
+  ['create permissions on another repository', { repositories: ['other'], permissions: BOOTSTRAP.CREATE_PERMISSIONS }],
+  ['create permissions plus an extra key', { repositories: [CONTROL_REPO], permissions: { administration: 'write', contents: 'read' } }],
+  ['all with control read', { repositories: 'all', permissions: BOOTSTRAP.CONTROL_READ_PERMISSIONS }],
+  ['all with the op permissions', { repositories: 'all', permissions: BOOTSTRAP.PERMISSIONS }],
+  ['an undeclared key with an undefined value', { repositories: [CONTROL_REPO], permissions: { foo: undefined } }],
+  ['no request', undefined],
+];
+
+test('withToken: every undeclared grant is refused before any mint', async () => {
+  const messages = [];
+  const { overrides, mints, jwts } = deferredHarness(async (ctx) => {
+    for (const [label, request] of refusals) {
+      await ctx.withToken(request, async () => assert.fail(label)).catch((error) => messages.push([label, error.message]));
+    }
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.equal(messages.length, refusals.length);
+  for (const [label, message] of messages) assert.match(message, /^withToken refused/, label);
+  assert.equal(mints.length, 0);
+  assert.equal(jwts.length, 0);
+});
+
+test('withToken: the request is copied at call time, later mutation never reaches the mint', async () => {
+  const { overrides, mints } = deferredHarness(async (ctx) => {
+    const request = { repositories: [TARGET], permissions: { contents: 'read' } };
+    const pending = ctx.withToken(request, async () => 1);
+    request.permissions.secrets = 'write';
+    request.repositories[0] = CONTROL_REPO;
+    await pending;
+    const swapped = { repositories: [TARGET], permissions: { ...BOOTSTRAP.PERMISSIONS } };
+    const second = ctx.withToken(swapped, async () => 1);
+    swapped.repositories[0] = CONTROL_REPO;
+    await second;
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.deepEqual(mints.map(({ repositories, permissions }) => ({ repositories, permissions })), [
+    { repositories: [TARGET], permissions: { contents: 'read' } },
+    { repositories: [TARGET], permissions: BOOTSTRAP.PERMISSIONS },
+  ]);
+});
+
+test('withToken: a nested call is refused and the outer token is still revoked', async () => {
+  let nested;
+  const { overrides, mints, events } = deferredHarness(async (ctx) => {
+    await ctx.withToken(controlRead, () => ctx.withToken(controlRead, async () => 1)).catch((error) => { nested = error.message; });
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.equal(nested, 'withToken calls do not nest');
+  assert.equal(mints.length, 1);
+  assert.deepEqual(nonStdout(events), ['mint', 'revoke']);
+});
+
+test('withToken: ops with a token up front cannot mint another', async () => {
+  let message;
+  const check = async (ctx) => {
+    await ctx.withToken(targetGrant, async () => 1).catch((error) => { message = error.message; });
+    return { ok: true, summary: 'ok' };
+  };
+  const { overrides, mints } = harness({ registry: stubRegistry({ check }), routes: withTokenRoutes() });
+  await apply(dispatchEnv(), overrides);
+  assert.match(message, /^withToken refused/);
+  assert.equal(mints.length, 1, 'only the up-front mint');
+});
+
+test('apply: after a passing deferred op, check runs with its own token against the target main head', async () => {
+  let checkCtx;
+  const { overrides, mints, events, tempDirs } = deferredHarness(async () => ({ ok: true, summary: 'bootstrapped' }), {
+    checkRun: async (ctx) => { checkCtx = ctx; return { ok: true, summary: 'verified' }; },
+  });
+  const result = await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.equal(result.exitCode, 0, result.reason);
+  assert.deepEqual(mints.map(({ repositories, permissions }) => ({ repositories, permissions })), [{ repositories: [TARGET], permissions: REGISTRY.check.PERMISSIONS }]);
+  assert.deepEqual(nonStdout(events), ['mint', 'revoke']);
+  assert.equal(checkCtx.repo, TARGET);
+  assert.equal(checkCtx.token, TOKEN);
+  assert.ok(checkCtx.settingsRoot.startsWith(tempDirs[0]));
+  assert.match(result.summary, new RegExp(`git/trees/${HEAD}\` \\| 200`));
+  assert.ok(result.summary.includes(`git/ref/heads/main`) && !result.summary.includes('/branches/'), 'settings come from the main ref, not the default branch');
+  assert.ok(result.summary.indexOf('bootstrapped') < result.summary.indexOf('verified'));
+});
+
+test('apply: a failing trailing check fails the run, a failing op skips it, both revoke', async () => {
+  const passed = async () => ({ ok: true, summary: 'bootstrapped' });
+  const failing = deferredHarness(passed, { checkRun: async () => ({ ok: false, summary: 'one row differs' }) });
+  const failed = await apply(dispatchEnv(BOOTSTRAP_ENV), failing.overrides);
+  assert.equal(failed.exitCode, 1);
+  assert.match(failed.summary, /one row differs/);
+  assert.ok(failing.events.includes('revoke'));
+  const skipping = deferredHarness(async () => stopHere, { checkRun: async () => assert.fail('check must not run') });
+  assert.equal((await apply(dispatchEnv(BOOTSTRAP_ENV), skipping.overrides)).exitCode, 1);
+  assert.equal(skipping.mints.length, 0);
+});
+
+test('apply: bootstrap-pass2 mints for the target and ends with check on the target main head', async () => {
+  const seen = [];
+  const run = (name) => async () => { seen.push(name); return { ok: true, summary: `${name} done` }; };
+  const { overrides, mints } = harness({ registry: stubRegistry({ 'bootstrap-pass2': run('pass2'), check: run('check') }), routes: withTokenRoutes() });
+  const result = await apply(dispatchEnv({ INPUT_OP: 'bootstrap-pass2' }), overrides);
+  assert.equal(result.exitCode, 0, result.reason);
+  assert.deepEqual(seen, ['pass2', 'check']);
+  assert.deepEqual(mints.map(({ repositories }) => repositories), [[TARGET]]);
+  assert.match(result.summary, new RegExp(`git/trees/${HEAD}\` \\| 200`));
+  assert.ok(!result.summary.includes('/branches/'));
+});
+
+test('apply: ctx.writeSettings writes under the temp directory, loads config from it, and the directory is removed', async () => {
+  let written;
+  let rejected = 0;
+  const { overrides, tempDirs } = deferredHarness(async (ctx) => {
+    written = await ctx.writeSettings({ '.github/groundwork/config.json': '{"a":1}', '.github/groundwork/rulesets/main.json': '{}' });
+    written.files = await listFiles(written.settingsRoot);
+    for (const key of ['config.json', '.github/groundwork/../x.json', '.github/groundwork/a\\b.json']) {
+      await ctx.writeSettings({ [key]: '{}' }).catch(() => { rejected += 1; });
+    }
+    return stopHere;
+  });
+  await apply(dispatchEnv(BOOTSTRAP_ENV), overrides);
+  assert.deepEqual(written.files, ['.github/groundwork/config.json', '.github/groundwork/rulesets/main.json']);
+  assert.deepEqual([written.settingsRoot, written.config.root, rejected], [tempDirs[0], tempDirs[0], 3]);
+  assert.ok(!existsSync(tempDirs[0]));
+});
+
+test('plan: a deferred op lists every mintable grant with both create variants', async () => {
+  const result = await plan(dispatchEnv(BOOTSTRAP_ENV), { ...planOverrides({}), registry: REGISTRY });
+  assert.equal(result.exitCode, 0, result.reason);
+  assert.match(result.summary, /create call on `groundwork`, or installation-wide/);
+  assert.match(result.summary, /control repository `groundwork` read/);
+  const { PERMISSIONS, CREATE_PERMISSIONS, CONTROL_READ_PERMISSIONS } = BOOTSTRAP;
+  for (const [name, level] of [PERMISSIONS, CREATE_PERMISSIONS, CONTROL_READ_PERMISSIONS].flatMap(Object.entries)) {
+    assert.ok(result.summary.includes(`| ${name} | ${level} |`), name);
+  }
 });

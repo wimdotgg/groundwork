@@ -6,11 +6,14 @@ import { GitHubError, apiPath, createClient } from '../lib/github.mjs';
 import { createAppJwt, mintInstallationToken, revokeInstallationToken } from './app-token.mjs';
 import * as applySettings from './apply-settings.mjs';
 import * as check from './check.mjs';
+import * as bootstrap from './bootstrap.mjs';
+import * as bootstrapPass2 from './bootstrap-pass2.mjs';
 import * as createIssueTypes from './create-issue-types.mjs';
 
 /** @typedef {import('../lib/github.mjs').GitHubClient} GitHubClient */
 /** @typedef {import('../lib/github.mjs').CallRecord} CallRecord */
-/** @typedef {{ OP: string, TOKEN_SCOPE: 'target'|'org', PERMISSIONS: Record<string, string>,
+/** @typedef {{ OP: string, TOKEN_SCOPE: 'target'|'org'|'deferred', PERMISSIONS: Record<string, string>,
+ *   CREATE_PERMISSIONS?: Record<string, string>, CONTROL_READ_PERMISSIONS?: Record<string, string>,
  *   validateArgs: (args: any) => string[],
  *   run: (ctx: object) => Promise<{ ok: boolean, summary: string }> }} OpModule */
 /** @typedef {{ exitCode: number, summary: string, reason?: string }} Result */
@@ -18,6 +21,8 @@ import * as createIssueTypes from './create-issue-types.mjs';
 /** Op name to module. The workflow's `op` choice list must equal these keys. */
 export const REGISTRY = {
   'apply-settings': applySettings,
+  bootstrap,
+  'bootstrap-pass2': bootstrapPass2,
   check,
   'create-issue-types': createIssueTypes,
 };
@@ -27,9 +32,15 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9._-]+$/;
 const DOT_SEGMENTS = new Set(['.', '..']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const OP_WITH_REF = 'apply-settings';
-const OP_THEN_CHECK = 'apply-settings';
+const OPS_THEN_CHECK = new Set(['apply-settings', 'bootstrap', 'bootstrap-pass2']);
 const OP_CHECK = 'check';
+const SCOPE_DEFERRED = 'deferred';
+const ALL_REPOSITORIES = 'all';
+const LEVEL_RANK = { read: 1, write: 2 };
 const SETTINGS_SEGMENTS = ['.github', 'groundwork'];
+const CHECK_SETTINGS_DIR = 'check';
+const BOOTSTRAP_OPS = new Set(['bootstrap', 'bootstrap-pass2']);
+const CONTROL_TARGET_REASON = 'target_repo must not be the control repository for this op';
 const SECRET_ENV_NAMES = ['ADMIN_APP_KEY', 'RELEASE_APP_KEY'];
 const MIN_SCRUBBED_LINE_LENGTH = 17;
 const BLOB_MODE_PREFIX = '100';
@@ -51,6 +62,10 @@ function safeText(text) {
 }
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Bootstrap ops hold a write grant on the target: aimed at `groundwork` it would be write access to the control repo. */
+const targetsControlRepo = (request, controlRepo) => BOOTSTRAP_OPS.has(request.op)
+  && request.targetRepo.toLowerCase() === String(controlRepo).toLowerCase();
 
 /**
  * @param {Record<string, string|undefined>} env
@@ -159,9 +174,21 @@ function fencedBlock(text, language = '') {
 }
 
 function describeScope(module, targetRepo) {
+  if (module.TOKEN_SCOPE === SCOPE_DEFERRED) return 'none up front; minted per declared grant while the op runs';
   return module.TOKEN_SCOPE === 'org'
     ? 'installation-wide (organisation operation, no repository)'
     : `restricted to \`${targetRepo}\``;
+}
+
+/** A deferred op lists every grant `withToken` can mint, the create fallback included, so the owner approves all of them. */
+function renderRequestedPermissions(module, { controlRepo, targetRepo }) {
+  if (module.TOKEN_SCOPE !== SCOPE_DEFERRED) return ['Requested token permissions:', '', ...renderPermissions(module.PERMISSIONS)];
+  const grants = [
+    [`target repository \`${targetRepo}\`, any subset of`, module.PERMISSIONS],
+    [`create call on \`${controlRepo}\`, or installation-wide when GitHub refuses that`, module.CREATE_PERMISSIONS],
+    [`control repository \`${controlRepo}\` read`, module.CONTROL_READ_PERMISSIONS],
+  ];
+  return grants.flatMap(([label, permissions]) => [`Token grant, ${label}:`, '', ...renderPermissions(permissions), '']);
 }
 
 function renderPermissions(permissions) {
@@ -212,7 +239,8 @@ export async function plan(env, overrides = {}) {
   if (env.GITHUB_REF !== MAIN_REF) return failure(heading, `runs only from ${MAIN_REF}`);
   const { problems, request } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
-  const { org } = await deps.loadConfig({ root: deps.controlRoot });
+  const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
+  if (targetsControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   let ancestry;
   if (request.op === OP_WITH_REF) {
     const checked = await checkAncestry(deps.createClient({ env }), { org, repo: request.targetRepo, ref: request.ref });
@@ -226,9 +254,7 @@ export async function plan(env, overrides = {}) {
     '',
     ...renderRequest({ org, request, ancestry }),
     '',
-    'Requested token permissions:',
-    '',
-    ...renderPermissions(request.module.PERMISSIONS),
+    ...renderRequestedPermissions(request.module, { controlRepo, targetRepo: request.targetRepo }),
   ].join('\n');
   return { exitCode: 0, summary };
 }
@@ -300,13 +326,120 @@ export async function materialiseSettings(client, { org, repo, sha, directory })
   }
 }
 
+/** Bootstrap ops read the target's `main` head (12.1); standalone `check` keeps the default branch head. */
+const readSettingsHead = (client, target, op) => (BOOTSTRAP_OPS.has(op) ? readMainSha(client, target) : readDefaultBranchHead(client, target));
+
 /** Resolves where the op reads settings from and the commit they were read at. */
 async function prepareSettings({ deps, request, client, org, directory }) {
-  if (request.module.TOKEN_SCOPE === 'org') return { settingsRoot: deps.controlRoot };
+  if (request.module.TOKEN_SCOPE !== 'target') return { settingsRoot: deps.controlRoot };
   const target = { org, repo: request.targetRepo };
-  const sha = request.op === OP_CHECK ? await readDefaultBranchHead(client, target) : request.ref;
+  const sha = request.op === OP_WITH_REF ? request.ref : await readSettingsHead(client, target, request.op);
   await materialiseSettings(client, { ...target, sha, directory });
   return { settingsRoot: directory };
+}
+
+/** A settings file key is a repo path under `.github/groundwork/` with no traversal, backslash or colon. */
+function isSettingsKey(key) {
+  const prefix = `${SETTINGS_SEGMENTS.join('/')}/`;
+  return key.startsWith(prefix) && key.slice(prefix.length).split('/').every((segment) => segment !== '' && !DOT_SEGMENTS.has(segment) && !/[\\:]/.test(segment));
+}
+
+/** `ctx.writeSettings`: the settings source of `bootstrap`, written under the run's temp directory. */
+async function writeSettingsFiles({ deps, directory }, files) {
+  for (const [key, text] of Object.entries(files ?? {})) {
+    if (!isSettingsKey(key) || typeof text !== 'string') throw new GitHubError('writeSettings: files must map .github/groundwork/ paths to text');
+    const destination = path.join(directory, ...key.split('/'));
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, text);
+  }
+  return { settingsRoot: directory, config: await deps.loadConfig({ root: directory }) };
+}
+
+const samePermissionSets = (first, second) => Object.keys(first).length === Object.keys(second).length
+  && Object.keys(first).every((key) => Object.hasOwn(second, key) && first[key] === second[key]);
+
+const isRepositoryList = (repositories, expected) => Array.isArray(repositories) && repositories.length === 1 && repositories[0] === expected;
+
+/** Same or lower level than the op's own permissions, and at least one. */
+function isPermissionSubset(requested, allowed) {
+  const entries = Object.entries(requested);
+  return entries.length > 0 && entries.every(([name, level]) => Object.hasOwn(allowed, name) && Object.hasOwn(LEVEL_RANK, level) && LEVEL_RANK[level] <= LEVEL_RANK[allowed[name]]);
+}
+
+/** Why a request is not one of the op's three declared grants (12.1), or undefined. Runs before any mint. */
+function grantProblem(requested, { module, targetRepo, controlRepo }) {
+  const { repositories, permissions } = requested ?? {};
+  if (module.TOKEN_SCOPE !== SCOPE_DEFERRED) return 'this op already has its token';
+  if (!isPlainObject(permissions)) return 'permissions must be an object';
+  if (isRepositoryList(repositories, targetRepo)) {
+    return isPermissionSubset(permissions, module.PERMISSIONS) ? undefined : 'permissions exceed the op permissions for the target';
+  }
+  if (isRepositoryList(repositories, controlRepo) && samePermissionSets(permissions, module.CONTROL_READ_PERMISSIONS)) return undefined;
+  const createRepositories = isRepositoryList(repositories, controlRepo) || repositories === ALL_REPOSITORIES;
+  if (createRepositories && samePermissionSets(permissions, module.CREATE_PERMISSIONS)) return undefined;
+  return 'request is not one of the declared grants';
+}
+
+/** Signs a fresh JWT (one lasts minutes) and mints; the JWT never leaves this function. */
+async function mintScopedToken({ deps, env, org, repositories, permissions, record, mask }) {
+  const jwt = deps.createAppJwt({ clientId: env.ADMIN_APP_CLIENT_ID, privateKey: env.ADMIN_APP_KEY });
+  mask(jwt);
+  const minted = await deps.mintInstallationToken({
+    client: deps.createClient({ env, token: jwt, onCall: record }),
+    org,
+    repositories,
+    permissions,
+    env,
+    makeClient: (installationToken) => deps.createClient({ env, token: installationToken, onCall: record }),
+  });
+  mask(minted.token);
+  return minted.token;
+}
+
+function snapshotRequest(requested) {
+  const { repositories, permissions } = requested ?? {};
+  return {
+    repositories: Array.isArray(repositories) ? Object.freeze([...repositories]) : repositories,
+    permissions: isPlainObject(permissions) ? Object.freeze({ ...permissions }) : permissions,
+  };
+}
+
+/** `ctx.withToken`: one grant at a time, revoked in a `finally`. A failed revoke is collected, so it fails the run even if the op swallows the error. */
+function createWithToken({ deps, env, opEnv, org, record, mask, clean, grants }) {
+  const revokeProblems = [];
+  let active = false;
+  const withToken = async (requested, callback) => {
+    if (active) throw new GitHubError('withToken calls do not nest');
+    // Validate and mint the same frozen copy: the caller's objects can change while the mint awaits.
+    const { repositories, permissions } = snapshotRequest(requested);
+    const problem = grantProblem({ repositories, permissions }, grants);
+    if (problem !== undefined) throw new GitHubError(`withToken refused: ${problem}`);
+    active = true;
+    try {
+      const token = await mintScopedToken({ deps, env, org, repositories, permissions, record, mask });
+      try {
+        return await callback({ client: deps.createClient({ env: opEnv, token, onCall: record }), token });
+      } finally {
+        const revokeProblem = await revokeQuietly(deps, { env: opEnv, token, onCall: record, clean });
+        if (revokeProblem !== undefined) revokeProblems.push(revokeProblem);
+      }
+    } finally {
+      active = false;
+    }
+  };
+  return { withToken, revokeProblems };
+}
+
+/** `check` for a `deferred` op: its own token and the target's `main` head as the settings source. */
+async function checkAfterDeferred({ deps, request, org, directory, withToken }, ctx) {
+  const checkModule = deps.registry[OP_CHECK];
+  const target = { org, repo: request.targetRepo };
+  return withToken({ repositories: [request.targetRepo], permissions: checkModule.PERMISSIONS }, async ({ client, token }) => {
+    const settingsRoot = path.join(directory, CHECK_SETTINGS_DIR);
+    await materialiseSettings(client, { ...target, sha: await readMainSha(client, target), directory: settingsRoot });
+    const config = await deps.loadConfig({ root: settingsRoot });
+    return checkModule.run({ ...ctx, client, token, settingsRoot, config });
+  });
 }
 
 /** @returns {Promise<{ ancestry?: string, error?: string }>} an error means the ref must not be applied */
@@ -324,13 +457,18 @@ async function runOp(context) {
   const { settingsRoot } = await prepareSettings({ deps, request, client, org, directory });
   const config = await deps.loadConfig({ root: settingsRoot });
   const repo = request.module.TOKEN_SCOPE === 'org' ? null : request.targetRepo;
-  const ctx = { client, token, org, repo, settingsRoot, config, env, log: (line) => logs.push(clean(line)), recordCall };
+  const ctx = {
+    client, token, org, repo, settingsRoot, config, env, log: (line) => logs.push(clean(line)), recordCall,
+    withToken: context.withToken, writeSettings: (files) => writeSettingsFiles({ deps, directory }, files),
+  };
   const parts = [await request.module.run(ctx)];
-  if (request.op === OP_THEN_CHECK && parts[0].ok) parts.push(await deps.registry[OP_CHECK].run(ctx));
+  if (OPS_THEN_CHECK.has(request.op) && parts[0].ok) {
+    parts.push(await (request.module.TOKEN_SCOPE === SCOPE_DEFERRED ? checkAfterDeferred(context, ctx) : deps.registry[OP_CHECK].run(ctx)));
+  }
   return { ok: parts.every((part) => part.ok), parts, ancestry };
 }
 
-/** Runs the op (and `check` after apply-settings) with the minted client, then removes the temp directory. */
+/** Runs the op (and its trailing `check`) with the minted client, then removes the temp directory. */
 async function executeOp(context) {
   const directory = await context.deps.makeTempDir();
   try {
@@ -401,7 +539,8 @@ export async function apply(env, overrides = {}) {
   if (problems.length > 0) return failure(heading, problems.join('; '));
   if (!env.ADMIN_APP_CLIENT_ID || !env.ADMIN_APP_KEY) return failure(heading, 'ADMIN_APP_CLIENT_ID and ADMIN_APP_KEY must be set');
 
-  const { org } = await deps.loadConfig({ root: deps.controlRoot });
+  const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
+  if (targetsControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
   const calls = [];
   const logs = [];
   const secrets = SECRET_ENV_NAMES.map((name) => env[name]);
@@ -415,29 +554,31 @@ export async function apply(env, overrides = {}) {
   const opEnv = { ...env };
   delete opEnv.ADMIN_APP_KEY;
 
+  const deferred = request.module.TOKEN_SCOPE === SCOPE_DEFERRED;
+  const grants = { module: request.module, targetRepo: request.targetRepo, controlRepo };
+  const tokens = createWithToken({ deps, env, opEnv, org, record, mask, clean, grants });
+  const context = { deps, request, client: null, token: null, org, env: opEnv, logs, clean, recordCall: record, withToken: tokens.withToken };
+
   let outcome;
   let token;
   try {
-    const jwt = deps.createAppJwt({ clientId: env.ADMIN_APP_CLIENT_ID, privateKey: env.ADMIN_APP_KEY });
-    mask(jwt);
-    const repositories = request.module.TOKEN_SCOPE === 'org' ? 'all' : [request.targetRepo];
-    const minted = await deps.mintInstallationToken({
-      client: deps.createClient({ env, token: jwt, onCall: record }),
-      org,
-      repositories,
-      permissions: request.module.PERMISSIONS,
-      env,
-      makeClient: (installationToken) => deps.createClient({ env, token: installationToken, onCall: record }),
-    });
-    token = minted.token;
-    mask(token);
-    const client = deps.createClient({ env: opEnv, token, onCall: record });
-    outcome = await executeOp({ deps, request, client, token, org, env: opEnv, logs, clean, recordCall: record });
+    if (deferred) {
+      outcome = await executeOp(context);
+    } else {
+      token = await mintScopedToken({
+        deps, env, org, record, mask,
+        repositories: request.module.TOKEN_SCOPE === 'org' ? ALL_REPOSITORIES : [request.targetRepo],
+        permissions: request.module.PERMISSIONS,
+      });
+      const client = deps.createClient({ env: opEnv, token, onCall: record });
+      outcome = await executeOp({ ...context, client, token });
+    }
   } catch (error) {
     outcome = { ok: false, parts: [], error: clean(error?.message) };
   } finally {
     const revokeProblem = token === undefined ? undefined : await revokeQuietly(deps, { env: opEnv, token, onCall: record, clean });
-    if (revokeProblem !== undefined) outcome = { ...outcome, ok: false, error: [outcome?.error, revokeProblem].filter(Boolean).join('; ') };
+    const problems = [revokeProblem, ...tokens.revokeProblems].filter((problem) => problem !== undefined);
+    if (problems.length > 0) outcome = { ...outcome, ok: false, error: [outcome?.error, ...problems].filter(Boolean).join('; ') };
   }
   const summary = scrub(renderApplySummary({ org, request, outcome, calls, logs }), secrets);
   const reason = outcome.ok ? undefined : scrub(outcome.error ?? 'an op reported failure', secrets);
