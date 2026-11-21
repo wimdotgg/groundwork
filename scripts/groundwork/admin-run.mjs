@@ -525,7 +525,7 @@ function scrub(text, secrets) {
 
 /**
  * Validates again, mints a scoped token, runs the op and revokes the token even when the op throws.
- * @param {Record<string, string|undefined>} env
+ * @param {Record<string, string|undefined>} env a copy of process.env, not process.env itself: apply deletes the key from process.env
  * @param {object} [overrides] test seams: registry, createClient, createAppJwt, mintInstallationToken,
  *   revokeInstallationToken, loadConfig, controlRoot, makeTempDir, removeDir, stdout
  * @returns {Promise<Result>}
@@ -533,10 +533,14 @@ function scrub(text, secrets) {
 export async function apply(env, overrides = {}) {
   const deps = { ...DEFAULTS, ...overrides };
   const heading = 'admin-run apply';
+  if (env === process.env) return failure(heading, 'apply needs a copy of process.env');
   if (env.GITHUB_REF !== MAIN_REF) return failure(heading, `runs only from ${MAIN_REF}`);
   const { problems, request } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
   if (!env.ADMIN_APP_CLIENT_ID || !env.ADMIN_APP_KEY) return failure(heading, 'ADMIN_APP_CLIENT_ID and ADMIN_APP_KEY must be set');
+
+  // Op code can read process.env directly; only the caller's copy keeps the key, for minting.
+  delete process.env.ADMIN_APP_KEY;
 
   const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
   if (targetsControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
@@ -613,7 +617,7 @@ async function runCli() {
   const command = process.argv[2];
   try {
     if (!Object.hasOwn(COMMANDS, command)) throw new GitHubError('usage: admin-run.mjs <plan|apply>');
-    const { exitCode, summary, reason } = await COMMANDS[command](process.env);
+    const { exitCode, summary, reason } = await COMMANDS[command]({ ...process.env });
     await writeSummary(process.env, summary);
     if (reason !== undefined) process.stderr.write(`admin-run: ${reason}\n`);
     process.exitCode = exitCode;
