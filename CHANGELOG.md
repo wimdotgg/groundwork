@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/wimdotgg/groundwork/compare/v0.5.0...v0.6.0) (2026-11-21)
+
+
+### Features
+
+* **groundwork:** let bootstrap-pass2 target the control repository ([#188](https://github.com/wimdotgg/groundwork/issues/188)) ([192c481](https://github.com/wimdotgg/groundwork/commit/192c481a2a97104727d1b7d8ae76b32f567c974f))
+* **groundwork:** refuse a bootstrap rerun once the setup epic is accepted or closed ([#181](https://github.com/wimdotgg/groundwork/issues/181)) ([fc9f279](https://github.com/wimdotgg/groundwork/commit/fc9f279000ba37f811edb98107b46683694f8e5f))
+* **groundwork:** run pass 2 and check on groundwork, align the spec ([#189](https://github.com/wimdotgg/groundwork/issues/189)) ([b6105a5](https://github.com/wimdotgg/groundwork/commit/b6105a540327e1b469ea7bfc834b1305edc24300))
+
+
+### Bug Fixes
+
+* **groundwork:** follow run pages when looking up the CodeQL default-setup run ([#180](https://github.com/wimdotgg/groundwork/issues/180)) ([9b2fc5c](https://github.com/wimdotgg/groundwork/commit/9b2fc5c32c7fd19c71dd3446787586f0851cdc0a))
+
 ## [0.5.0](https://github.com/wimdotgg/groundwork/compare/v0.4.0...v0.5.0) (2026-11-21)
 
 
