@@ -3,6 +3,7 @@
 Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/spec.md); section numbers below point into it. The spec wins over this file.
 
 `scripts/agent/*` commands (`next`, `claim`, `checkpoint`, `resume`, `release`, `plan-lint`, `review-queue`) arrive in Phase 3. Until then follow the worker loop (6.3) by hand with `gh api`.
+
 ## Identity and pacing (2.2)
 
 - Act only as `wimdotgg-agent[bot]`. Never write to GitHub under another login, whatever `gh` or Git are logged in as.
