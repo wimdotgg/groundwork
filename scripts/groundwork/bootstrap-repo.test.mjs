@@ -11,6 +11,7 @@ import {
   readBlobTexts,
   readKitVersion,
   readReleaseTree,
+  resolveTagCommit,
 } from './bootstrap-repo.mjs';
 
 const ORG = 'acme';
@@ -60,6 +61,30 @@ test('AC1 latestReleaseTag compares tags numerically and ignores other refs', as
     [TAGS_KEY]: tagRefs('v0.4.0', 'v0.10.0', 'v0.9.1', 'v1.0.0-rc1', 'vnext'),
   });
   assert.equal(await latestReleaseTag({ client, org: ORG, controlRepo: CONTROL }), 'v0.10.0');
+});
+
+const TAG_REF_KEY = `GET /repos/${ORG}/${CONTROL}/git/ref/tags/v0.4.0`;
+const COMMIT_SHA = 'c'.repeat(40);
+const ANNOTATED_SHA = 'a'.repeat(40);
+const resolve = (client) => resolveTagCommit({ client, org: ORG, controlRepo: CONTROL, tag: 'v0.4.0' });
+
+test('AC10 resolveTagCommit returns the commit of a lightweight tag', async () => {
+  const { client } = recordingClient({ [TAG_REF_KEY]: reply(200, { object: { type: 'commit', sha: COMMIT_SHA } }) });
+  assert.equal(await resolve(client), COMMIT_SHA);
+});
+
+test('AC10 resolveTagCommit dereferences an annotated tag to its commit', async () => {
+  const { client, calls } = recordingClient({
+    [TAG_REF_KEY]: reply(200, { object: { type: 'tag', sha: ANNOTATED_SHA } }),
+    [`GET /repos/${ORG}/${CONTROL}/git/tags/${ANNOTATED_SHA}`]: reply(200, { object: { type: 'commit', sha: COMMIT_SHA } }),
+  });
+  assert.equal(await resolve(client), COMMIT_SHA);
+  assert.deepEqual(calls.filter(({ method }) => method !== 'GET'), []);
+});
+
+test('AC10 resolveTagCommit throws when the tag points at something other than a commit', async () => {
+  const { client } = recordingClient({ [TAG_REF_KEY]: reply(200, { object: { type: 'tree', sha: COMMIT_SHA } }) });
+  await assert.rejects(resolve(client), /does not resolve to a commit/);
 });
 
 test('readReleaseTree keeps blobs and throws on a truncated tree', async () => {

@@ -48,6 +48,24 @@ export async function latestReleaseTag({ client, org, controlRepo }) {
   return versions.at(-1)[0];
 }
 
+const MAX_TAG_DEREFERENCES = 5;
+
+/**
+ * Annotated tags are dereferenced, so the result is always a commit SHA.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string, tag: string }} options
+ * @returns {Promise<string>} the commit the tag points at
+ */
+export async function resolveTagCommit({ client, org, controlRepo, tag }) {
+  const { data } = await client.request('GET', repoPath(org, controlRepo, `/git/ref/tags/${encodeURIComponent(tag)}`));
+  let target = data?.object;
+  for (let depth = 0; depth < MAX_TAG_DEREFERENCES && target?.type === 'tag'; depth += 1) {
+    const { data: annotated } = await client.request('GET', repoPath(org, controlRepo, `/git/tags/${encodeURIComponent(target.sha)}`));
+    target = annotated?.object;
+  }
+  if (target?.type !== 'commit') throw new GitHubError(`tag ${tag} of ${org}/${controlRepo} does not resolve to a commit`);
+  return target.sha;
+}
+
 /**
  * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string, tag: string }} options
  * @returns {Promise<Array<{ path: string, mode: string, sha: string }>>} blobs only

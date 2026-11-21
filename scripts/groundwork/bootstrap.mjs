@@ -3,7 +3,7 @@ import { SettingsError, repoKind } from '../lib/settings.mjs';
 import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
   commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readBlobContents, readBlobTexts, readKitVersion,
-  readReleaseTree,
+  readReleaseTree, resolveTagCommit,
 } from './bootstrap-repo.mjs';
 import { buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 import { openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
@@ -80,9 +80,10 @@ async function readSource({ client, org, controlRepo, repo, description, adminBo
   const tag = state === 'ours'
     ? await readKitVersion({ client, org, repo })
     : await latestReleaseTag({ client, org, controlRepo });
+  const tagSha = await resolveTagCommit({ client, org, controlRepo, tag });
   const entries = await readReleaseTree({ client, org, controlRepo, tag });
   const contents = await readBlobTexts({ client, org, controlRepo, entries, paths: contentPaths(entries) });
-  const treeEntries = buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag });
+  const treeEntries = buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag, tagSha });
   const templates = parseSetupTemplates(setupTemplateFiles(contents), { org, repo, description });
   // An `ours` repository already holds the commit, which reads no blob.
   const blobs = state === 'ours' ? new Map() : await readBlobContents({ client, org, controlRepo, entries: treeEntries });

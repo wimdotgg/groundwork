@@ -45,6 +45,7 @@ const ORG = 'wimdotgg';
 const CONTROL = 'groundwork';
 const REPO = 'widget';
 const TAG = 'v0.2.0';
+const TAG_SHA = 'd'.repeat(40);
 const DESCRIPTION = 'A widget shop';
 const TOKEN = 'installation-token';
 const ADMIN_BOT = 'wimdotgg-admin[bot]';
@@ -101,7 +102,7 @@ function releaseEntries(files) {
 function expectedTree(files) {
   const entries = releaseEntries(files);
   const contents = Object.fromEntries(contentPaths(entries).map((path) => [path, files[path]]));
-  const treeEntries = buildBootstrapTree({ entries, contents, org: ORG, controlRepo: CONTROL, repo: REPO, description: DESCRIPTION, tag: TAG });
+  const treeEntries = buildBootstrapTree({ entries, contents, org: ORG, controlRepo: CONTROL, repo: REPO, description: DESCRIPTION, tag: TAG, tagSha: TAG_SHA });
   return { entries, contents, treeEntries };
 }
 
@@ -140,6 +141,7 @@ function targetRoutes(state, files) {
 
 function controlRoutes(files) {
   const routes = {
+    [`GET ${CONTROL_PATH}/git/ref/tags/${TAG}`]: reply(200, { object: { type: 'commit', sha: TAG_SHA } }),
     [`GET ${CONTROL_PATH}/git/matching-refs/tags/v?per_page=100`]: reply(200, [{ ref: 'refs/tags/v0.1.0' }, { ref: `refs/tags/${TAG}` }]),
     [`GET ${CONTROL_PATH}/git/trees/${TAG}?recursive=1`]: reply(200, {
       truncated: false, tree: releaseEntries(files).map((entry) => ({ ...entry, type: 'blob' })),
