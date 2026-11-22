@@ -244,15 +244,11 @@ test('an issue title with a closing reference becomes a fixed PR summary', async
 });
 
 test('AC8: a Conventional type already in the issue title is not doubled in the PR title', async () => {
-  const titles = [
-    ['feat: add slugify module', 'feat: add slugify module'],
-    ['feat(x): add slugify module', 'feat: add slugify module'],
-  ];
-  for (const [issueTitle, prTitle] of titles) {
+  for (const issueTitle of ['feat: add slugify module', 'feat(x): add slugify module']) {
     const issue = { number: 7, title: issueTitle, type: { name: 'Feature' } };
     const { client, calls } = recordingClient({ ...creationRoutes, 'GET /repos/o/r/issues/7': ok(issue) });
     await run(client);
-    assert.equal(bodyOf(calls, POST_PULL).title, prTitle, issueTitle);
+    assert.equal(bodyOf(calls, POST_PULL).title, 'feat: add slugify module', issueTitle);
   }
 });
 

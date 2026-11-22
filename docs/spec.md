@@ -1301,6 +1301,16 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 
 ## 21. Review notes
 
+### 2026-11-22: Phase 5 integration, v1 done (#224)
+
+Epic #169 ran every section 20 criterion on `gw-acceptance`; `docs/runs/2026-11-22-phase5-acceptance.md` maps E1 to E8 to evidence and lists the carry-over. Spec 19 now reads verified or redesigned in every row: V17 and V18 redesigned, V19 verified for the open path (the `failure-alert` comment and close paths rest on fixtures). The header reads "v1 done". `gw-p4-a`, `gw-p4-b` and the `selftest-*` repositories were deleted; the spec cites their runs by number and the run notes are the record.
+
+Corrections applied: 14.2 step 4 and `docs/setup.md` (a release PR opened before pass 2 has no CodeQL run and needs a new head), 6.4 (lease prose names the configured lease). `AGENTS.md` and the three skills no longer call bare `gh` writes forbidden and contain no `gh api` write: the reviewer posts with `gh pr review --comment --body-file`, and the planner sets type, parent and blockers with `gh issue edit --type`, `--parent` or `--add-sub-issue`, and `--add-blocked-by`. `claim.mjs` drops a Conventional type the issue title already carries.
+
+Errata for "bare gh denied outright (#229)", which stays as written: "a wrapped `gh.exe` or path-qualified `gh` is denied, as before" should read: a wrapped `gh.exe` with arguments was denied before; the path-qualified `gh` deny is new in #230.
+
+Known limit: release-please can run on the merge-queue push before GitHub marks the release PR merged, so no release is built (#238).
+
 ### 2026-11-22: bare gh denied outright (#229)
 
 Review round 3 of #228 found `gh at` (an alias of `gh attestation`) and the hidden stubs `gh aw`, `gh stack` and `gh webhook` past the per-name denies, and every name added later would miss too. The owner decided to deny every bare `gh` and `gh.exe` instead. `.claude/settings.json` now denies `gh`, `gh *`, `gh.exe`, `*gh.exe *`, `*/gh *` and `Bash(*\\gh *)`, and drops the bare per-subcommand `gh` rules they cover. The wrapped form `token.mjs exec -- gh ...` stays allowed; a wrapped `gh.exe` or path-qualified `gh` is denied, as before. Review round 1 caught a first version that let a wrapped `gh.exe` past every wrapped deny.
