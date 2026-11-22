@@ -11,7 +11,7 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 ## Identity and pacing (2.2)
 
 - Act only as `wimdotgg-agent[bot]`. Never write to GitHub under another login, whatever `gh` or Git are logged in as.
-- Every GitHub write goes through `node scripts/agent/token.mjs exec -- <gh or git command>`, enqueue and `gh pr ready` included. It mints an installation token and sets the bot name and noreply email on commits. A bare `git push` and every bare `gh` or `gh.exe` call, reads included, are denied outright. `gh api` with a method, field or input flag is forbidden even through the wrapper: use the `gh` subcommand (`gh issue edit --type`, `--parent`, `--add-blocked-by`; `gh pr review --comment --body-file`) or stop and ask. Read-only GraphQL goes through the wrapper too.
+- Every GitHub write goes through `node scripts/agent/token.mjs exec -- <gh or git command>`, enqueue and `gh pr ready` included. It mints an installation token and sets the bot name and noreply email on commits. A bare `git push` and every bare `gh` or `gh.exe` call, reads included, are denied outright. `gh api` writes are forbidden even through the wrapper. That means no `-X`, `--method`, `-f`, `-F`, `--field`, `--raw-field` or `--input`: use the `gh` subcommand (`gh issue edit --type`, `--parent`, `--add-blocked-by`; `gh pr review --comment --body-file`) or stop and ask. GraphQL reads go through the scripts' client, not `gh api`.
 - Pace writes: at most 5 issue creations and 10 comments per minute, a pause between bulk writes, no polling loops against the API.
 
 ## Never

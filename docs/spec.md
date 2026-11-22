@@ -1307,7 +1307,7 @@ Epic #169 ran every section 20 criterion on `gw-acceptance`; `docs/runs/2026-11-
 
 Corrections applied: 14.2 step 4 and `docs/setup.md` (a release PR opened before pass 2 has no CodeQL run and needs a new head), 6.4 (lease prose names the configured lease). `AGENTS.md` and the three skills no longer call bare `gh` writes forbidden and contain no `gh api` write: the reviewer posts with `gh pr review --comment --body-file`, and the planner sets type, parent and blockers with `gh issue edit --type`, `--parent` or `--add-sub-issue`, and `--add-blocked-by`. `claim.mjs` drops a Conventional type the issue title already carries.
 
-Errata for "bare gh denied outright (#229)", which stays as written: "a wrapped `gh.exe` or path-qualified `gh` is denied, as before" should read: a wrapped `gh.exe` with arguments was denied before; the path-qualified `gh` deny is new in #230.
+Errata for "bare gh denied outright (#229)", which stays as written: "a wrapped `gh.exe` or path-qualified `gh` is denied, as before" should read: a wrapped `gh.exe` with arguments was denied before; the path-qualified `gh` deny is new in #230. Its sixth pattern is `*\\gh *` (the rule is `Bash(*\\gh *)`; `"Bash(*\\\\gh *)"` in the JSON file).
 
 Known limit: release-please can run on the merge-queue push before GitHub marks the release PR merged, so no release is built (#238).
 

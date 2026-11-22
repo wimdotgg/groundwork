@@ -31,12 +31,12 @@ Pace: at most 10 comments per minute. No polling loops.
 
 1. `node scripts/agent/token.mjs exec -- node scripts/agent/review-queue.mjs` (`--json` for scripts). `review #N` lines are ready PRs with no review from another session at the current head; `enqueue #N` lines are Dependabot PRs. Nothing listed: stop. A `[session <id>]` equal to yours is not yours to review: skip it.
 2. Read the PR, each under the wrapper: `gh pr view N`, `gh pr diff N`, `gh pr checks N`, the linked issue and its epic. Check the diff against the issue's acceptance criteria, the Definition of Done, the PR contract and scope.
-3. Write the review body to a file. First line: `Reviewer: <model>/<harness> · session <id>` (`review-queue` reads it from the first or last line; without it the PR stays queued). Then numbered findings, each with a severity (`blocker`, `major`, `minor`, `nit`), the file and line, and the fix. No findings: say so.
-4. Post one review on the current head:
+3. Read the head SHA (`gh pr view N --json headRefOid`) and review that commit. Write the review body to a file. First line: `Reviewer: <model>/<harness> · session <id>` (`review-queue` reads it from the first or last line; without it the PR stays queued). Second line: `Head: <sha reviewed>`. Then numbered findings, each with a severity (`blocker`, `major`, `minor`, `nit`), the file and line, and the fix. No findings: say so.
+4. Read `headRefOid` again right before posting. If it differs from the SHA you reviewed, stop and review the new head. Otherwise post one review:
    ```
    node scripts/agent/token.mjs exec -- gh pr review N --comment --body-file <file>
    ```
-   `gh pr review` reviews the current head, with no commit id to pass. A new push moves the head, so the PR returns to the queue.
+   `gh pr review` attaches the review to the head at post time and takes no commit id, so the second read is the guard. A new push moves the head, so the PR returns to the queue.
 5. Rounds are capped at 3 per PR. If they do not converge, say so in the review. The worker raises `needs-decision` and runs `release.mjs N --decision` (6.3 step 6); the reviewer applies no label.
 
 The worker resolves each thread after fixing or answering it. Do not hold the PR for it.

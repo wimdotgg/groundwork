@@ -24,7 +24,7 @@ check wimdotgg/groundwork: 88 rows, all match or deferred
 match: 87, differ: 0, missing: 0, extra: 0, unreadable: 0, deferred: 1
 ```
 
-Zero mismatching rows. The summary lists counts only, so it does not name the one deferred row.
+Zero mismatching rows. The summary lists counts only. The deferred row is `DEPLOY_ENABLED`: `groundwork` declares `"deploy": "none"`, so spec 10 (the `variables` bullet) makes it `deferred`. The Phase 4b section 21 entry records the same 87 match, 0 mismatching, 1 deferred (run 44943368540).
 
 ## Carry-over (AC6, AC7)
 
@@ -43,13 +43,16 @@ One row per item of the [carry-over comment](https://github.com/wimdotgg/groundw
 | #221 worker used a `gh api` REST PATCH to set an issue type | Fixed: planner skill step 5 uses `gh issue edit <n> --type <Type>`; gh 2.102.0 has the flag |
 | Release PR opened before pass 2 has no CodeQL run | Fixed: spec 14.2 step 4 and `docs/setup.md` (the pass 2 step) say to close and reopen the PR, then approve again |
 | Planner skill REST fallback (`PATCH` type, `POST` sub_issues, `POST` blocked_by) | Fixed: `.claude/skills/groundwork-planner/SKILL.md:40` uses `gh issue edit --type`, `--parent` or `--add-sub-issue`, and `--add-blocked-by`. Every relation has a CLI form, so the skill needs no stop-and-ask beyond a relation `gh issue` cannot set |
-| `claim.mjs` doubles the type prefix (`feat: feat: ...`) | Fixed: `scripts/agent/claim.mjs` (`withoutTypePrefix`), test `AC8` in `scripts/agent/claim.test.mjs`. Failing run before the fix: `actual: 'feat: feat: add slugify module'`, `expected: 'feat: add slugify module'`; 36 of 36 pass after |
+| `claim.mjs` doubles the type prefix (`feat: feat: ...`) | Fixed: `scripts/agent/claim.mjs` (`prTitleFor`), tests `AC8` in `scripts/agent/claim.test.mjs`. Failing run before the fix: `actual: 'feat: feat: add slugify module'`, `expected: 'feat: add slugify module'`. Review R1 added the breaking marker (`feat(x)!: ...` gives `feat!: ...`; the scope is dropped), failing first with `actual: 'feat: drop the old API'`, `expected: 'feat!: drop the old API'`. 37 of 37 pass after |
 | Lease prose hardcodes "4 hours" (gw-acceptance PR #32 R1) | Fixed: `AGENTS.md` (Leases), `scripts/agent/claim.mjs` (`takeOver` comment) and spec 6.4 read "the configured lease (default 4 hours)" |
 | #222 AC3 wording ("release App only bypass actor on both tag rules") | Recorded: spec 9.3 fixes `release-tag-immutability` at no bypass actors, so the criterion's "both" does not match the design; the reviewer ruled AC3 met in substance (`docs/runs/2026-11-22-phase5-g6-release.md`). The closed issue body is not edited |
+| #228 round 3 R12: `docs/runs/2026-11-22-agent-gh-config-denies.md:41-48` prints two of the twelve denial lines | Left as is: the file is outside the #224 Touches and records what the harness printed; its text states all twelve forms were denied |
+| #230 R11, the sixth pattern spelled `*\\gh *` | Fixed in the erratum of the Phase 5 section 21 entry: the pattern is `*\\gh *` (rule `Bash(*\\gh *)`). The earlier entry stays as written (AC3) |
 | Release-please race against the merge queue | Out of scope: tracked as [#238](https://github.com/wimdotgg/groundwork/issues/238). Seen at gw-acceptance#9: the run started 15:03:16Z, GitHub marked the PR merged at 15:03:23Z, so no release was built and a second release PR (#29) opened |
 
 ## Left as is
 
+- The Phase 5 run notes link to `gw-acceptance` (104 links across six notes), which is deleted after Phase 5. A follow-up Chore must replace those links with run-note references before the deletion, as this PR did for `gw-p4-a`, `gw-p4-b` and `selftest-*`.
 - `gw-acceptance` `limits.draftLeaseMinutes` stays at 20 (owner decision 2026-11-22). The repository is deleted after Phase 5, so it is not restored.
 - gw-acceptance#29 stays open by owner decision.
 - gw-acceptance branches `issue/19`, `issue/20` and `issue/21` (G4 probe PRs, closed unmerged) remain.
