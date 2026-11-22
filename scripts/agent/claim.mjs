@@ -5,7 +5,8 @@ import { GitHubError, apiPath, createClient, currentRepo, repoFromEnv } from '..
 import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { sameLogin } from '../lib/trust.mjs';
 import {
-  TITLE_TYPES, claimCommitMessage, isValidAgent, isValidSessionId, leaseState, loadIssueFacts, parseClaimCommit, parseFooter,
+  TITLE_TYPES, claimCommitMessage, isValidAgent, isValidSessionId, leaseState, loadIssueFacts, parseClaimCommit,
+  parseConventionalTitle, parseFooter,
 } from '../lib/issue-model.mjs';
 import { unmetReadiness } from './next.mjs';
 import { fillTemplate, findClosingRefs, hasMarker, removeMarker, templateSection } from '../lib/markdown.mjs';
@@ -78,8 +79,17 @@ function renderComment(templates, sectionName, values) {
 const isOurPull = ({ repo, config }, pull) => sameLogin(pull.user?.login, config.accounts.agent)
   && sameLogin(pull.head?.repo?.full_name, `${repo.owner}/${repo.repo}`);
 
-/** A closing reference in the title would close another issue when the PR merges, so such a title is replaced. */
-const summaryFor = (issue) => (findClosingRefs(issue.title).length > 0 ? `work on #${issue.number}` : issue.title);
+/**
+ * The PR title takes its type from the issue type, so a type the issue title already carries is dropped, not doubled;
+ * a breaking marker stays. A closing reference in the title would close another issue when the PR merges, so such a
+ * title is replaced.
+ */
+function prTitleFor(prefix, issue) {
+  if (findClosingRefs(issue.title).length > 0) return `${prefix}: work on #${issue.number}`;
+  const parsed = parseConventionalTitle(issue.title);
+  if (!parsed) return `${prefix}: ${issue.title}`;
+  return `${prefix}${parsed.breaking ? '!' : ''}: ${parsed.summary}`;
+}
 
 /** @returns {Promise<number[]>} the draft PRs on other issues that this session holds; a released draft is not held */
 async function findHeldDrafts(context) {
@@ -216,7 +226,7 @@ async function moveRefToTakeover({ client, repo, number, session }, headSha, tre
 
 /**
  * Takeover per 6.4. The PR body is rewritten before the comment: the comment restarts the lease, so a comment
- * first and then a crash would leave the PR under the old footer for 4 hours, owned by nobody.
+ * first and then a crash would leave the PR under the old footer for the rest of the configured lease (default 4 hours), owned by nobody.
  * @returns {Promise<ClaimOutcome>}
  */
 async function takeOver(context, branchSha, pull, issue) {
@@ -243,7 +253,7 @@ function renderPosts(context, issue, prefix) {
   return {
     pointer: renderComment(templates, 'Issue pointer', values),
     prClaim: renderComment(templates, 'PR claim', values),
-    prTitle: `${prefix}: ${summaryFor(issue)}`,
+    prTitle: prTitleFor(prefix, issue),
     prBody: fillOwned(templates.pullRequest, { issue: number, ...INITIAL_STATE, time: formatTime(now), agent, session }),
   };
 }
