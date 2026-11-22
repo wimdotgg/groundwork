@@ -76,7 +76,7 @@ One `chore(claim): #N [session ...]` commit and one PR per task. Only #17 has a 
 
 Each PR closes its own task (`closingIssuesReferences`: #25 to #17, #26 to #14, #27 to #15, #28 to #16, #32 to #31, #33 to #18). Handover comments on the issues follow each merge, for example [#17](https://github.com/wimdotgg/gw-acceptance/issues/17#issuecomment-7081911313).
 
-The takeover came after #32 (merged 16:04:32Z). #32 was a `gw-acceptance` config change, `limits.draftLeaseMinutes` 240 to 20 in `.github/groundwork/config.json`, made for this run by owner decision. Spec 6.4 keeps the 4-hour default.
+The takeover followed #32 (merged 16:04:32Z), a `gw-acceptance` config change made for this run by owner decision: `limits.draftLeaseMinutes` 240 to 20 in `.github/groundwork/config.json`. Spec 6.4 keeps the 4-hour default.
 
 ## Observations
 
