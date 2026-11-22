@@ -13,11 +13,11 @@ E4
 
 ## Scope
 
-In: for a project that deploys, `git mv` the stubs from `scripts/stubs/deploy/` to `scripts/` (the scripts must keep mode 100755), replace their bodies, and set `"deploy": "scripts"`; otherwise leave `"deploy": "none"` and the stubs where they are. Each stub prints a `GROUNDWORK_STUB` line to stderr and exits 1 until replaced. Contract (spec 8.5): `scripts/deploy <tag>` deploys the release tag `vX.Y.Z` and reads its secrets from `process.env`; `scripts/smoke` takes no arguments, is read-only and idempotent, and runs after deploy and after rollback; `scripts/rollback <previous tag>` redeploys that tag. Exit 0 is success. Map each `environments.production.secrets` name from `.github/groundwork/settings.json` into the `deploy` job `env` in `.github/workflows/deploy.yml`, so the script sees it. Out: entering deploy secrets (owner only, listed by `bootstrap-pass2`).
+In: for a project that deploys, `git mv` the stubs from `scripts/stubs/deploy/` to `scripts/` (the scripts must keep mode 100755), replace their bodies, and set `"deploy": "scripts"`; otherwise leave `"deploy": "none"` and the stubs where they are. Each stub prints a `GROUNDWORK_STUB` line to stderr and exits 1 until replaced. Contract (spec 8.5): `scripts/deploy <tag>` deploys the release tag `vX.Y.Z` and reads its secrets from `process.env`; `scripts/smoke` takes no arguments, is read-only and idempotent, and runs after deploy and after rollback; `scripts/rollback <previous tag>` redeploys that tag. Exit 0 is success. List each production secret name in `environments.production.secrets` of `.github/groundwork/settings.json`, then map each one into the `deploy` job `env` in `.github/workflows/deploy.yml`, so the script sees it. Out: entering deploy secrets (owner only, listed by `bootstrap-pass2`).
 
 ## Touches
 
-`scripts/stubs/deploy/`, `scripts/deploy`, `scripts/deploy.cmd`, `scripts/smoke`, `scripts/smoke.cmd`, `scripts/rollback`, `scripts/rollback.cmd`, `.github/groundwork/config.json`, `.github/workflows/deploy.yml`
+`scripts/stubs/deploy/`, `scripts/deploy`, `scripts/deploy.cmd`, `scripts/smoke`, `scripts/smoke.cmd`, `scripts/rollback`, `scripts/rollback.cmd`, `.github/groundwork/config.json`, `.github/groundwork/settings.json`, `.github/workflows/deploy.yml`
 
 ## Acceptance criteria
 

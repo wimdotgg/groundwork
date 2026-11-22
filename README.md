@@ -19,9 +19,9 @@ For one owner who works with agents on GitHub. Everything assumes a free GitHub 
 
 Agents work one issue per PR through the worker loop in [AGENTS.md](AGENTS.md); the merge queue lands the PRs.
 
-## Planned
+## Staying current
 
-Not built yet, listed in the spec layout: `deploy.yml`, `kit-update.mjs`, the `selftest` and `script` admin ops, and `admin-ops/`.
+A project updates to a newer release with a Chore issue and `node scripts/kit-update.mjs <vX.Y.Z>` on its `issue/N` branch (spec 13.1). The kit also ships the `deploy.yml` workflow, the `script` and `selftest` admin ops and `admin-ops/`.
 
 ## Docs
 

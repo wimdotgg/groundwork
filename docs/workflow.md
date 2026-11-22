@@ -65,7 +65,8 @@ Sections: planning [6.2](spec.md), worker loop [6.3](spec.md), PR contract [7](s
 - Approve PRs that touch protected paths (CODEOWNERS, 9.4).
 - Approve admin runs in the browser or the GitHub mobile app (section 12).
 - Merge release PRs (section 11). They touch the manifest, so they need your approval too.
-- Approve each production deploy (the `production` environment, 10.1).
+- Approve each production deploy (the `production` environment, 10.1). A failed smoke rolls back to the previous release and the run still fails; the release notes carry the deploy record.
+- Approve kit updates: `kit-update` PRs touch `.github/`, so they need your approval.
 
 Everything else merges on green checks through the queue.
 
@@ -79,7 +80,7 @@ Everything else merges on green checks through the queue.
 |---|---|---|
 | 0 | Normal work, agent App | none |
 | 1 | Settings as code (`settings.json`, `labels.json`, `rulesets/*.json`) | Approve the PR, then the `admin` run |
-| 2 | One-off ops: `bootstrap`, `bootstrap-pass2`, issue types, cleanup | Read the run summary, approve the `admin` run. The run name carries op, target and args; `check` runs at the end of each bootstrap |
+| 2 | One-off ops: `bootstrap`, `bootstrap-pass2`, issue types, `selftest`, `script`, cleanup | Read the run summary, approve the `admin` run. The run name carries op, target and args; `check` runs at the end of each bootstrap |
 | 3 | Apps, billing, org ownership, secret values, App private key rotation (agent, admin, release) | You, in the browser |
 
 Detail in [section 12](spec.md).

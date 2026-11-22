@@ -35,6 +35,9 @@ export const KIT_PATHS = [
 /** Copied only while the project's file equals the old tag's; else reported in `skipped`. */
 export const UNMODIFIED_ONLY_PATHS = ['.github/dependabot.yml', '.claude/settings.json', 'AGENTS.md', 'CLAUDE.md'];
 
+/** Copied only into a project that has no such file; an existing one is never touched. */
+export const CREATE_ONLY_PATHS = ['.github/workflows/deploy.yml'];
+
 const TAG_PATTERN = /^v(\d+)\.(\d+)\.(\d+)$/;
 const BRANCH_PATTERN = /^issue\/\d+$/;
 const KIT_VERSION_PATH = `${CONFIG_DIR}/kit-version.txt`;
@@ -176,12 +179,13 @@ async function readBlob(client, control, entry) {
 }
 
 /**
- * Whether the project's copy of a file may be overwritten: kit paths always, the unmodified-only files while they
- * still equal the old tag's.
+ * Whether the project's copy of a file may be overwritten: kit paths always, the create-only files when absent, the
+ * unmodified-only files while they still equal the old tag's.
  * @returns {{ copy: boolean, skipped: boolean }}
  */
 function classify({ filePath, local, oldTree }) {
   if (isKitPath(filePath)) return { copy: true, skipped: false };
+  if (CREATE_ONLY_PATHS.includes(filePath)) return { copy: local === null, skipped: false };
   if (!UNMODIFIED_ONLY_PATHS.includes(filePath)) return { copy: false, skipped: false };
   const oldEntry = oldTree.get(filePath);
   const untouched = local === null ? oldEntry === undefined : oldEntry?.sha === gitBlobSha(local);
