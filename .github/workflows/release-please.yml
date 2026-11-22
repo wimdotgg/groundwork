@@ -17,7 +17,7 @@ jobs:
   # A merged close runs on refs/pull/N/merge, which the `release` environment
   # refuses (#247). This job only dispatches the workflow on main, where the
   # release job below is admitted. Events sent with GITHUB_TOKEN start no run,
-  # except workflow_dispatch.
+  # except workflow_dispatch and repository_dispatch.
   dispatch-on-main:
     if: >-
       github.event_name == 'pull_request' &&
@@ -39,8 +39,8 @@ jobs:
     if: >-
       vars.GROUNDWORK_READY == 'true' &&
       github.event_name == 'workflow_dispatch'
-    # On the job, not the workflow, on the assumption that a skipped job never
-    # joins the group and so cannot replace the pending run that builds a release.
+    # On the job, not the workflow, so a close that skips never joins the group.
+    # Each closed run's own dispatch queues a real run last either way.
     concurrency:
       group: release-please
       cancel-in-progress: false

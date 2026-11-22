@@ -42,7 +42,7 @@ Trace of the same timeline under the new trigger:
 | 15:03:23Z | PR 9 marked merged | `pull_request` closed event, `merged == true`, same repository, `GITHUB_REF` `refs/heads/main`, job runs |
 | after 15:03:23Z | closed run | release-please sees PR 9 merged, tags `v0.1.0`, publishes the release, then opens or updates the next release PR from commits after the tag |
 
-A queue group `[release PR, other PR]` lands in one push; each PR gets its own closed event after the merge mark, and each run sees both merges, so the order inside the group does not matter. Unmerged and fork closes skip the job. The `release-please` group sits on the job with `cancel-in-progress: false`: a running run is never cancelled, a pending run can be replaced by a later pending run, which sees the same merges. A skipped job is assumed not to join the group (assumption, item 3 below). The action reads the default branch from the repository, not the event ref (`src/index.ts`, `loadOrBuildManifest`, at the pinned commit `45996ed`).
+A queue group `[release PR, other PR]` lands in one push; each PR gets its own closed event after the merge mark, and each run sees both merges, so the order inside the group does not matter. Unmerged and fork closes skip the job. The `release-please` group sits on the job with `cancel-in-progress: false`: a running run is never cancelled, a pending run can be replaced by a later pending run, which sees the same merges. A skipped job was assumed not to join the group; obsolete after #247, where each closed run's own dispatch queues a real run last. The action reads the default branch from the repository, not the event ref (`src/index.ts`, `loadOrBuildManifest`, at the pinned commit `45996ed`).
 
 Wrong, corrected below: this paragraph claimed that a merged close has `GITHUB_REF` `refs/heads/main` and only an unmerged close carries `refs/pull/N/merge`.
 
@@ -58,7 +58,7 @@ A merged close runs with `GITHUB_REF` `refs/pull/N/merge` and the PR side's work
 
 A manual `workflow_dispatch` on `main` by the agent App, https://github.com/wimdotgg/groundwork/actions/runs/45062490456, succeeded in 20 seconds and opened release PR #246 (0.10.1). That ref is admitted.
 
-Owner decision (option e, #242): the closed run only notifies. Job `dispatch-on-main` has no environment, `permissions: actions: write` and an `if` on a merged close from this repository. Its one step runs `gh workflow run release-please.yml --ref main` with `GH_TOKEN` set to `github.token`; a `workflow_dispatch` sent with `GITHUB_TOKEN` starts a run. Job `release-please` keeps `environment: release` and the job-level concurrency group, and runs only on `workflow_dispatch` with `GROUNDWORK_READY` true. The repository reaches the step through `GH_REPO`, so no event value is interpolated into the script.
+Owner decision (option e, #242): the closed run only notifies. Job `dispatch-on-main` has no environment, `permissions: actions: write` and an `if` on a merged close from this repository. Its one step runs `gh workflow run release-please.yml --ref main` with `GH_TOKEN` set to `github.token`; a `workflow_dispatch` sent with `GITHUB_TOKEN` starts a run (`repository_dispatch` does too; most other events do not). Job `release-please` keeps `environment: release` and the job-level concurrency group, and runs only on `workflow_dispatch` with `GROUNDWORK_READY` true. The repository reaches the step through `GH_REPO`, so no event value is interpolated into the script.
 
 Trace under the corrected design:
 
@@ -66,7 +66,7 @@ Trace under the corrected design:
 |---|---|
 | Queue pushes the squash commit | no `push` trigger, no run |
 | PR marked merged | closed run, `dispatch-on-main` runs, no environment |
-| Dispatch | `release-please` run on `refs/heads/main`, the `release` environment admits it, release-please sees the merge |
+| Dispatch | `release-please` run on `refs/heads/main`, the `release` environment admits it (a dispatch on any other ref is refused), release-please sees the merge |
 
 Unknowns:
 
@@ -77,7 +77,8 @@ Unknowns:
 
 - A merged fork PR runs nothing; the next same-repository merge or a dispatch picks it up.
 - The bootstrap commit is a push and starts no run; setup step 7 dispatches the workflow once.
-- A Dependabot PR close runs with a read-only `GITHUB_TOKEN` by default, so its dispatch may fail (unverified).
+- The read-only token for Dependabot is keyed on the actor (`github.actor == 'dependabot[bot]'`), and a merged close is sent by the merger (run 45059252257: `wimdotgg-agent[bot]`), so the dispatch is expected to work for a Dependabot PR; unobserved until the first Dependabot merge.
+- `failure-alert.mjs` closes an open alert on any `success` of the workflow, and a closed run now succeeds with only the notifier. A release job that keeps failing has its alert closed by the next merge and reopened as a new issue by the next failed dispatch. Unchanged in #247; a follow-up issue tracks it.
 - A stray release PR stays wrong when no releasable commit follows: PR 29 stayed untouched after the owner's rerun built the release.
 
 ## Not proven here
@@ -86,5 +87,5 @@ No workflow test harness exists, so the trigger conditions rest on the config di
 
 1. The first merged same-repository PR close builds or updates the release PR.
 2. Merging a release PR through the merge queue yields tag and release with no stray release PR: the closed run dispatches, and the dispatched run on `refs/heads/main` is admitted by the `release` environment.
-3. PR closes that skip leave no cancelled or pending `release-please` run behind (skipped jobs never join the job-level group).
-4. A Dependabot PR close: whether the dispatch succeeds with its read-only token, if one is observable.
+3. Obsolete after #247: each closed run's own dispatch queues a real run last, so a displaced pending run loses nothing.
+4. A Dependabot PR close: the dispatch is expected to work (the read-only token is keyed on the actor, the merger); whether it does, if one is observable.
