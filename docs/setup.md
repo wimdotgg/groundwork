@@ -116,7 +116,7 @@ Pass 1, the probe and pass 2 run through `request.mjs`; every `admin` run waits 
 
 Available now for existing repos: `apply-settings --repo <name> [--ref <sha>]` (after a settings PR merges; you also approve the PR as CODEOWNER), `check --repo <name>` (read-only drift check), `script --repo <name> --script <admin-ops file> [--ref <sha>] [--args <json>]` (one reviewed script from `admin-ops/`; the delegated approval needs `ref` equal to the `main` head) and `selftest` (bootstraps a throwaway `selftest-<run id>` repository, runs `check` and four probes, archives it; deleting it stays yours).
 
-To move a project to a newer release, an agent claims a Chore issue and runs `node scripts/kit-update.mjs <vX.Y.Z>` on its `issue/N` branch. A project older than `v0.7.0` has no script yet: copy `scripts/kit-update.mjs` from the tag by hand first. The first update is large and may need your `size-exception`.
+To move a project to a newer release, an agent claims a Chore issue and runs `node scripts/kit-update.mjs <vX.Y.Z>` on its `issue/N` branch. A project older than `v0.7.0` has no script yet: copy `scripts/kit-update.mjs` from the tag by hand first. The first update is large and may need your `size-exception`. `kit-update` adds `.github/workflows/deploy.yml` when the project has none, so a project that deploys from a differently named workflow renames it to `deploy.yml` first, or it deploys twice.
 
 ## Security notes
 
