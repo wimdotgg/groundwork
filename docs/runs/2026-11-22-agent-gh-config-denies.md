@@ -37,9 +37,12 @@ The probes ended in `2>&1 | head -3`; the harness echoes the `2>&1` in the denia
 ## Ignore rule (AC2)
 
 ```
-$ git check-ignore -v .claude/gh-agent/hosts.yml
-.gitignore:9:.claude/gh-agent/	.claude/gh-agent/hosts.yml
+$ git check-ignore -v .claude/gh-agent/hosts.yml scripts/.claude/gh-agent/hosts.yml
+.gitignore:9:**/.claude/gh-agent/	.claude/gh-agent/hosts.yml
+.gitignore:9:**/.claude/gh-agent/	scripts/.claude/gh-agent/hosts.yml
 ```
+
+The `**/` prefix covers a `gh` call from a subdirectory, which writes `<cwd>/.claude/gh-agent/` because `GH_CONFIG_DIR` is relative. Review round 1 found the root-only first form missed it.
 
 The `.gitignore` line and the denies are in one commit.
 
@@ -60,5 +63,6 @@ Every remaining `gh issue`, `gh pr`, `request.mjs` and `kit-update.mjs` mention 
 
 ## Gotchas
 
+- `gh release download`, `gh extension install` and installed extensions skip gh's auth check and send the keyring token with no host listed. Round 1 read this from the gh v2.102.0 source; spec 17 states it and denies wait for an owner decision.
 - `GH_HOST` and an overridden `GH_CONFIG_DIR` are environment, not command text: no deny rule matches them. Spec 17 states the limit.
 - The `gh config set` write itself was not run: it would create `hosts.yml` and expose the owner's keyring token to the next `gh` call.

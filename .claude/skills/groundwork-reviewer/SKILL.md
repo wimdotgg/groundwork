@@ -29,7 +29,7 @@ Pace: at most 10 comments per minute. No polling loops.
 
 ## Loop
 
-1. `node scripts/agent/review-queue.mjs` (`--json` for scripts). `review #N` lines are ready PRs with no review from another session at the current head; `enqueue #N` lines are Dependabot PRs. Nothing listed: stop. A `[session <id>]` equal to yours is not yours to review: skip it.
+1. `node scripts/agent/token.mjs exec -- node scripts/agent/review-queue.mjs` (`--json` for scripts). `review #N` lines are ready PRs with no review from another session at the current head; `enqueue #N` lines are Dependabot PRs. Nothing listed: stop. A `[session <id>]` equal to yours is not yours to review: skip it.
 2. Read the PR, each under the wrapper: `gh pr view N`, `gh pr diff N`, `gh pr checks N`, the linked issue and its epic. Check the diff against the issue's acceptance criteria, the Definition of Done, the PR contract and scope.
 3. Write the review body to a file. First line: `Reviewer: <model>/<harness> · session <id>` (`review-queue` reads it from the first or last line; without it the PR stays queued). Then numbered findings, each with a severity (`blocker`, `major`, `minor`, `nit`), the file and line, and the fix. No findings: say so.
 4. Post one review on the current head:
