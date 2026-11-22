@@ -220,7 +220,7 @@ async function moveRefToTakeover({ client, repo, number, session }, headSha, tre
 
 /**
  * Takeover per 6.4. The PR body is rewritten before the comment: the comment restarts the lease, so a comment
- * first and then a crash would leave the PR under the old footer for 4 hours, owned by nobody.
+ * first and then a crash would leave the PR under the old footer for the rest of the configured lease (default 4 hours), owned by nobody.
  * @returns {Promise<ClaimOutcome>}
  */
 async function takeOver(context, branchSha, pull, issue) {
