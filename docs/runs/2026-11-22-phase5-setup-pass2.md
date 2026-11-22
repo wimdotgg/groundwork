@@ -59,7 +59,7 @@ The agent App posted the [acceptance comment](https://github.com/wimdotgg/gw-acc
 Epic close #1: pass
 ```
 
-Epic close by the owner: pending, filled after confirmation.
+Epic close: the owner (`wianvdm`) closed gw-acceptance#1 as completed at 2026-11-22T13:46:38Z (issue events).
 
 ## Gap
 
