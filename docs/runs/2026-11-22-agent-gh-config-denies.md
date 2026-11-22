@@ -32,7 +32,7 @@ $ node scripts/agent/token.mjs exec -- gh alias import --help
 Permission to use Bash with command node scripts/agent/token.mjs exec -- gh alias import --help 2>&1 has been denied.
 ```
 
-The probes carried a `2>&1 | head -3` suffix, which the harness prints in the denial text.
+The probes ended in `2>&1 | head -3`; the harness echoes the `2>&1` in the denial text.
 
 ## Ignore rule (AC2)
 
