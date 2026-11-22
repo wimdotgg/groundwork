@@ -1,4 +1,8 @@
 {
+  "env": {
+    "GH_CONFIG_DIR": ".claude/gh-agent",
+    "GCM_INTERACTIVE": "never"
+  },
   "permissions": {
     "allow": [
       "Bash(node scripts/agent/*)",
@@ -14,6 +18,10 @@
       "Bash(gh pr diff *)"
     ],
     "deny": [
+      "Bash(gh auth token*)",
+      "Bash(gh auth switch*)",
+      "Bash(gh api graphql*)",
+      "Bash(gh.exe *)",
       "Bash(git push --force*)",
       "Bash(git push -f*)",
       "Bash(git push * --force*)",

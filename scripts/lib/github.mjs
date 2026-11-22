@@ -17,6 +17,8 @@ const DEFAULT_ACCEPT = 'application/vnd.github+json';
 const API_VERSION = '2022-11-28';
 const PAGE_SIZE = 100;
 const REPOSITORY_PATTERN = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
+const MISSING_AGENT_TOKEN_MESSAGE = 'refusing to call GitHub without the agent token: '
+  + 'run this through `node scripts/agent/token.mjs exec -- <command>`';
 
 export class GitHubError extends Error {
   /**
@@ -60,11 +62,14 @@ export function repoFromEnv(env) {
 }
 
 /**
- * Agent machine only.
+ * Agent machine only. Refuses like `createClient` when `env.GH_TOKEN` is missing, because `resume`
+ * and `review-queue` call it before they build a client.
+ * @param {Record<string, string|undefined>} [env] defaults to the process environment, which `gh` inherits anyway
  * @returns {Promise<RepoRef>}
  */
-export async function currentRepo() {
-  const { code, stdout, stderr } = await runGh(['repo', 'view', '--json', 'owner,name']);
+export async function currentRepo(env = process.env) {
+  if (!env.GH_TOKEN) throw new GitHubError(MISSING_AGENT_TOKEN_MESSAGE);
+  const { code, stdout, stderr } = await runGh(['repo', 'view', '--json', 'owner,name'], undefined, env);
   if (code !== 0) throw new GitHubError(`gh repo view failed: ${firstLine(stderr)}`);
   try {
     const parsed = JSON.parse(stdout);
@@ -300,6 +305,9 @@ function buildClient(transport, send, onCall, apiBasePath = '') {
 }
 
 /**
+ * Outside Actions with no `token`, the client refuses unless `env.GH_TOKEN` is set, which
+ * `token.mjs exec` does for its child. The ambient `gh` login is never used.
+ *
  * Known limits: `GITHUB_API_URL` with a path prefix (GHES `/api/v3`) is not applied to `/graphql`
  * (GHES serves it at `/api/graphql`), and the `gh` transport does not strip a prefix from Link URLs.
  * @param {{ env: Record<string, string|undefined>, token?: string, onCall?: (record: CallRecord) => void,
@@ -309,6 +317,7 @@ function buildClient(transport, send, onCall, apiBasePath = '') {
 export function createClient({ env, token, onCall, fetchImpl = globalThis.fetch }) {
   const tokenGiven = token !== undefined;
   if (!tokenGiven && env.GITHUB_ACTIONS !== 'true') {
+    if (!env.GH_TOKEN) throw new GitHubError(MISSING_AGENT_TOKEN_MESSAGE);
     return buildClient('gh', ghTransport(env), onCall);
   }
   const resolvedToken = tokenGiven ? token : env.GITHUB_TOKEN;

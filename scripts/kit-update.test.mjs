@@ -19,6 +19,8 @@ const OLD_TAG = 'v1.0.0';
 const NEW_TAG = 'v1.1.0';
 const COMMITS = { [OLD_TAG]: 'c'.repeat(40), [NEW_TAG]: 'd'.repeat(40) };
 const NO_NETWORK_CLIENT = createFixtureClient({});
+// main builds its client from env; createClient refuses outside Actions without the GH_TOKEN that token.mjs exec sets.
+const AGENT_ENV = { GH_TOKEN: 'test-token' };
 
 function blobSha(text) {
   const content = Buffer.from(text);
@@ -232,8 +234,8 @@ test('AC3 main --json prints one object with ok on failure and on success', asyn
     const log = console.log;
     console.log = (line) => lines.push(line);
     try {
-      assert.equal(await main({ argv: ['nonsense', '--json'], env: {}, scriptUrl }), 1);
-      assert.equal(await main({ argv: [OLD_TAG, '--json'], env: {}, scriptUrl }), 0);
+      assert.equal(await main({ argv: ['nonsense', '--json'], env: AGENT_ENV, scriptUrl }), 1);
+      assert.equal(await main({ argv: [OLD_TAG, '--json'], env: AGENT_ENV, scriptUrl }), 0);
     } finally {
       console.log = log;
     }
