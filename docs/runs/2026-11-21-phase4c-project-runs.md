@@ -4,7 +4,7 @@ Dates: 2026-11-21 to 2026-11-22. Epic #168, task #198. Target: `wimdotgg/gw-p4-b
 
 Final `.github/groundwork/kit-version.txt` on `gw-p4-b` main (read 2026-11-22T07:07:52Z): `v0.7.0`.
 
-Owner decisions on epic #168 `## Decisions` ([issue 168](https://github.com/wimdotgg/groundwork/issues/168)): 2026-11-21 (the owner script approves the `production` deployment on `gw-p4-b` for the forced-smoke-failure rollback test, #198), 2026-11-22 (release merges and `size-exception` on `gw-p4-b`), 2026-11-22 (that approval covers both the `v0.1.0` and the `v0.2.0` deploy, cap of 2). Both production approvals (2026-11-22T06:54:07Z and 07:06:12Z, owner script log) came after those entries.
+Owner decisions on epic #168 `## Decisions` ([issue 168](https://github.com/wimdotgg/groundwork/issues/168)): 2026-11-21 (the owner script approves the `production` deployment on `gw-p4-b` for the forced-smoke-failure rollback test, #198), 2026-11-22 (release merges and `size-exception` on `gw-p4-b`), 2026-11-22 (that approval covers both the `v0.1.0` and the `v0.2.0` deploy, cap of 2). Both production approvals came after those entries: GitHub deployment status `queued` at 2026-11-22T06:53:49Z (deployment 7975215884) and 07:05:54Z (deployment 7975330706); owner script log times 06:54:07Z and 07:06:12Z. Epic #168 was last updated 2026-11-22T06:36:42Z (read 07:12:43Z), before both.
 
 ## Runs and PRs
 
@@ -21,8 +21,8 @@ Owner decisions on epic #168 `## Decisions` ([issue 168](https://github.com/wimd
 | Release PR `v0.2.0` | [gw-p4-b#19](https://github.com/wimdotgg/gw-p4-b/pull/19) | merged |
 | First `bootstrap-pass2` run | [groundwork run 44902909578](https://github.com/wimdotgg/groundwork/actions/runs/44902909578) | first pass 2 |
 | `bootstrap-pass2` rerun | [groundwork run 44994970845](https://github.com/wimdotgg/groundwork/actions/runs/44994970845) | closing check 83 rows, all match or deferred; `DEPLOY_ENABLED` set |
-| `deploy` run, `v0.1.0` | [run 44995716553](https://github.com/wimdotgg/gw-p4-b/actions/runs/44995716553) | approved 06:54:07Z; deployed, smoke passed; record `Result: deployed`, `Previous: none` |
-| `deploy` run, `v0.2.0` | [run 44996594461](https://github.com/wimdotgg/gw-p4-b/actions/runs/44996594461) | approved 07:06:12Z; smoke failed, rollback to `v0.1.0`, second smoke passed, job failed |
+| `deploy` run, `v0.1.0` | [run 44995716553](https://github.com/wimdotgg/gw-p4-b/actions/runs/44995716553) | approved 06:53:49Z (owner script log 06:54:07Z); deployed, smoke passed; record `Result: deployed`, `Previous: none` |
+| `deploy` run, `v0.2.0` | [run 44996594461](https://github.com/wimdotgg/gw-p4-b/actions/runs/44996594461) | approved 07:05:54Z (owner script log 07:06:12Z); smoke failed, rollback to `v0.1.0`, second smoke passed, job failed |
 | Release notes `v0.2.0` | [release](https://github.com/wimdotgg/gw-p4-b/releases/tag/v0.2.0) | `Result: rolled-back`, `Tag: v0.2.0`, `Previous: v0.1.0` |
 | Failure alert | [gw-p4-b#20](https://github.com/wimdotgg/gw-p4-b/issues/20) | opened by `failure-alert` |
 
