@@ -1,12 +1,10 @@
 name: release-please
 
 on:
-  push:
-    branches: [main]
-  # The merge queue pushes the squash commit to main a few seconds before GitHub
-  # marks the release PR merged, so the push run cannot see the merge (#238).
-  # The closed event fires once the PR is merged; the job `if` below keeps it
-  # to merged release-please PRs.
+  # No push trigger: the merge queue pushes the squash commit to main a few
+  # seconds before GitHub marks the PR merged, so a push run races the merge
+  # and a push payload carries no changed-file list to guard on (#238). The
+  # closed event fires once the PR is merged.
   pull_request:
     types: [closed]
     branches: [main]
@@ -16,23 +14,19 @@ permissions:
   contents: read
 
 jobs:
-  # Skipped until bootstrap sets GROUNDWORK_READY, so the run triggered by
-  # template generation does not fail on a missing environment.
+  # Skipped until bootstrap sets GROUNDWORK_READY, so a run before the
+  # environment exists does not fail on it.
   #
-  # A push that carries a release commit (one that changed the manifest) is
-  # left to the pull_request run: the push run would race the merge mark and
-  # open a stray release PR. Other PR closes skip.
+  # Any merged same-repository PR runs the job, so release PRs are created and
+  # updated after ordinary merges; unmerged and fork closes skip.
   release-please:
     if: >-
       vars.GROUNDWORK_READY == 'true' &&
-      (github.event_name != 'push' ||
-        !contains(toJSON(github.event.commits.*.modified), '".release-please-manifest.json"')) &&
       (github.event_name != 'pull_request' || (
         github.event.pull_request.merged &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        startsWith(github.event.pull_request.head.ref, 'release-please--')))
-    # On the job, not the workflow: a skipped job never joins the group, so the
-    # PR closes that skip cannot replace the pending run that builds a release.
+        github.event.pull_request.head.repo.full_name == github.repository))
+    # On the job, not the workflow, on the assumption that a skipped job never
+    # joins the group and so cannot replace the pending run that builds a release.
     concurrency:
       group: release-please
       cancel-in-progress: false

@@ -23,38 +23,37 @@ The step started 7 seconds before PR 9 read as merged. The merge queue pushes th
 
 ## Fix and trace under the new trigger
 
-`release-please.yml` now also runs on `pull_request: closed` with base `main`. The job `if` requires, per event:
+`release-please.yml` runs on `pull_request: closed` (base `main`) and `workflow_dispatch`. It has no `push` trigger (owner decision on #242, after review round 2 of #244). Two reasons: the push run races the merge mark, and an Actions `push` payload has no added, removed or modified file lists, so no push guard can tell a release commit from another. A first version of this fix keyed a push skip on `github.event.commits.*.modified`; that expression never matches.
 
-- `push`: no commit in the push may have changed `.release-please-manifest.json` (`contains(toJSON(github.event.commits.*.modified), '".release-please-manifest.json"')`). Every release commit changes it, and the check holds for a queue group where the release PR is not the tip.
-- `pull_request`: the PR is merged, its head repository is this repository and its head branch starts with `release-please--`.
-- `workflow_dispatch`: unchanged.
+The job `if` requires, per event:
+
+- `pull_request`: the PR is merged and its head repository is this repository. Any head branch qualifies, so release PRs are created and updated after ordinary merges.
+- `workflow_dispatch`: runs.
 
 Trace of the same timeline under the new trigger:
 
 | Time | Event | Result |
 |---|---|---|
-| 15:03:03Z | Queue pushes `0bc07a5` (changes the manifest) | `push` run created, job skipped by the manifest guard, no write |
-| 15:03:23Z | PR 9 marked merged | `pull_request` closed event, `merged == true`, head `release-please--branches--main`, `GITHUB_REF` `refs/heads/main`, job runs |
+| 15:03:03Z | Queue pushes `0bc07a5` | no `push` trigger, no run |
+| 15:03:23Z | PR 9 marked merged | `pull_request` closed event, `merged == true`, same repository, `GITHUB_REF` `refs/heads/main`, job runs |
 | after 15:03:23Z | closed run | release-please sees PR 9 merged, tags `v0.1.0`, publishes the release, then opens or updates the next release PR from commits after the tag |
 
-Queue group `[release PR, other PR]` (up to 3 entries land in one push):
-
-| Order | Push run | Closed run |
-|---|---|---|
-| release PR first, other PR tip | skipped: the release commit is in `commits` and changed the manifest | builds the release, then covers the other PR's commit |
-| other PR first, release PR tip | skipped, same reason | same |
-
-A separate push with no manifest change inside the roughly 20 s between a queue push and the merge mark still runs and races. The run can fail (alert) or open a stray release PR; the closed run still builds the release. The guard does not close this window.
-
-Any other PR close skips the job: `merged` is false, or the head branch does not start with `release-please--`. The `release-please` group moved from the workflow to the job, so a skipped run never joins it and cannot replace the pending closed run that builds a release. A running run is never cancelled; a pending run can be replaced by a later pending run, which sees the same merge. The action reads the default branch from the repository, not the event ref (`src/index.ts`, `loadOrBuildManifest`, at the pinned commit `45996ed`).
+A queue group `[release PR, other PR]` lands in one push; each PR gets its own closed event after the merge mark, and each run sees both merges, so the order inside the group does not matter. Unmerged and fork closes skip the job. The `release-please` group sits on the job with `cancel-in-progress: false`: a running run is never cancelled, a pending run can be replaced by a later pending run, which sees the same merges. A skipped job is assumed not to join the group (assumption, item 3 below). The action reads the default branch from the repository, not the event ref (`src/index.ts`, `loadOrBuildManifest`, at the pinned commit `45996ed`).
 
 For a merged close `GITHUB_REF` is `refs/heads/main`; only an unmerged close carries `refs/pull/N/merge`. That is why the `release` environment, whose deployment refs allow `main` only, admits the job: on any other ref it refuses before the job reads `RELEASE_APP_KEY`.
+
+## Consequences and limits
+
+- A merged fork PR runs nothing; the next same-repository merge or a dispatch picks it up.
+- The bootstrap commit is a push and starts no run; setup step 7 dispatches the workflow once.
+- A Dependabot PR close may run without the environment secrets (unverified).
+- A stray release PR stays wrong when no releasable commit follows: PR 29 stayed untouched after the owner's rerun built the release.
 
 ## Not proven here
 
 No workflow test harness exists, so the trigger conditions rest on the config diff and this trace. #243 proves it live on a repository with the merge queue, and must check each of these:
 
-1. The closed run starts after the merge mark with `GITHUB_REF` `refs/heads/main` and the `release` environment admits it.
-2. The `push` run for the release commit is skipped by the manifest guard (`github.event.commits.*.modified` holds `.release-please-manifest.json`).
+1. The first merged same-repository PR close builds or updates the release PR.
+2. Merging a release PR through the merge queue yields tag and release with no stray release PR, and the closed run's `GITHUB_REF` is `refs/heads/main`, which the `release` environment admits.
 3. PR closes that skip leave no cancelled or pending `release-please` run behind (skipped jobs never join the job-level group).
-4. The closed run creates the tag and release and opens no stray release PR.
+4. A Dependabot PR close: whether the job gets the environment secrets, if one is observable.
