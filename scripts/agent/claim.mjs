@@ -79,11 +79,17 @@ function renderComment(templates, sectionName, values) {
 const isOurPull = ({ repo, config }, pull) => sameLogin(pull.user?.login, config.accounts.agent)
   && sameLogin(pull.head?.repo?.full_name, `${repo.owner}/${repo.repo}`);
 
-/** The PR title gets its type from the issue type, so a type the issue title already carries is dropped, not doubled. */
-const withoutTypePrefix = (title) => parseConventionalTitle(title)?.summary ?? title;
-
-/** A closing reference in the title would close another issue when the PR merges, so such a title is replaced. */
-const summaryFor = (issue) => (findClosingRefs(issue.title).length > 0 ? `work on #${issue.number}` : withoutTypePrefix(issue.title));
+/**
+ * The PR title takes its type from the issue type, so a type the issue title already carries is dropped, not doubled;
+ * a breaking marker stays. A closing reference in the title would close another issue when the PR merges, so such a
+ * title is replaced.
+ */
+function prTitleFor(prefix, issue) {
+  if (findClosingRefs(issue.title).length > 0) return `${prefix}: work on #${issue.number}`;
+  const parsed = parseConventionalTitle(issue.title);
+  if (!parsed) return `${prefix}: ${issue.title}`;
+  return `${prefix}${parsed.breaking ? '!' : ''}: ${parsed.summary}`;
+}
 
 /** @returns {Promise<number[]>} the draft PRs on other issues that this session holds; a released draft is not held */
 async function findHeldDrafts(context) {
@@ -247,7 +253,7 @@ function renderPosts(context, issue, prefix) {
   return {
     pointer: renderComment(templates, 'Issue pointer', values),
     prClaim: renderComment(templates, 'PR claim', values),
-    prTitle: `${prefix}: ${summaryFor(issue)}`,
+    prTitle: prTitleFor(prefix, issue),
     prBody: fillOwned(templates.pullRequest, { issue: number, ...INITIAL_STATE, time: formatTime(now), agent, session }),
   };
 }
