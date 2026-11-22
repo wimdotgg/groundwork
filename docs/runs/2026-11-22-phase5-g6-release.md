@@ -11,7 +11,7 @@ The owner login `wianvdm` merged [gw-acceptance#9](https://github.com/wimdotgg/g
 
 ### Race
 
-release-please run 45036123914 started at 15:03:16Z, before the merge queue marked #9 merged. It built no release and failed with "state cannot be changed", then opened release PR #29 (0.2.0). The owner re-ran it; attempt 2 succeeded and produced the tag and release. #29 is untouched.
+release-please run 45036123914 attempt 1 was created at 15:03:03Z, before the merge queue marked #9 merged at 15:03:23Z. It opened release PR #29 (0.2.0) at 15:03:24Z, then failed at 15:03:26Z updating the closed #9: "state cannot be changed. The pull request cannot be reopened." It built no release. The owner re-ran it; attempt 2 succeeded and produced the tag and release. #29 is untouched.
 
 ## Tag probe (AC2)
 
@@ -34,9 +34,9 @@ Result: pass (83 rows, all match or deferred).
 match: 82, differ: 0, missing: 0, extra: 0, unreadable: 0, deferred: 1
 ```
 
-The summary lists counts only, so it names no rows. The tag-rule bypass actors come from the desired files on `gw-acceptance` `main` (`.github/groundwork/rulesets/`), which the check matched against live:
+The summary lists counts only. The one deferred row is not a tag-ruleset row: `deferred` comes only from the code-scanning and `assertWhen` variable paths (`scripts/lib/settings.mjs:304-309`, `:347`), so both tag rows are among the 82 matches. The tag-rule bypass actors come from the desired files on `gw-acceptance` `main` (`.github/groundwork/rulesets/`), which the check matched against live:
 
 - `release-tag-creation`: tag ruleset, active, rule `creation`, one bypass actor: Integration `{{app-id:release}}`, mode `always`. `GET apps/wimdotgg-release` gives id 5796650. The release App is the only bypass actor.
 - `release-tag-immutability`: tag ruleset, active, rules `deletion`, `update`, `non_fast_forward`, `bypass_actors: []`. No bypass actor at all, so the release App is not one here.
 
-The criterion says the release App is the only bypass actor on both rules. It is on creation and absent from immutability, which is the stricter reading (nothing may move or delete a tag). A direct read of live `bypass_actors` returns null for the agent App token, so the live side rests on the check's match, not on my read. Zero rows differ.
+AC3 says the release App is the only bypass actor on both rules. The design differs: spec 9.3 (`docs/spec.md:662-663`) fixes `release-tag-immutability` at `bypass_actors: []`, so no one can move or delete a release tag. The App's only privilege is creation (9.2). AC3's "both" is the mismatch, and the reviewer ruled AC3 met in substance. A direct read of live `bypass_actors` returns null for the agent App token, so the live side rests on the check's match, not on my read. Zero rows differ.
