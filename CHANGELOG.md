@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/wimdotgg/groundwork/compare/v0.8.0...v0.9.0) (2026-11-22)
+
+
+### Features
+
+* **agent:** fail closed without the token.mjs exec token ([#225](https://github.com/wimdotgg/groundwork/issues/225)) ([4f9a73a](https://github.com/wimdotgg/groundwork/commit/4f9a73a2f49042fdd6b1922d90440d62de626427))
+
+
+### Bug Fixes
+
+* **agent:** deny every bare gh call instead of per-subcommand rules ([#230](https://github.com/wimdotgg/groundwork/issues/230)) ([76a6f72](https://github.com/wimdotgg/groundwork/commit/76a6f72e45eab2ade1a6cdc6ca469fee2a904a14))
+* **agent:** deny gh config and alias writes, drop bare-read docs ([#228](https://github.com/wimdotgg/groundwork/issues/228)) ([879c2d4](https://github.com/wimdotgg/groundwork/commit/879c2d458f561355603ed2c25d343985d522bbfa))
+
 ## [0.8.0](https://github.com/wimdotgg/groundwork/compare/v0.7.0...v0.8.0) (2026-11-22)
 
 
