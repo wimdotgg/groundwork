@@ -33,7 +33,7 @@ Also exit 1 with the same line: `next`, `checkpoint`, `plan-lint`, `review-queue
 
 ## Settings probe (AC3)
 
-`.claude/settings.json` sets `GH_CONFIG_DIR=.claude/gh-agent` and `GCM_INTERACTIVE=never`, and denies `Bash(gh auth token*)`, `Bash(gh auth switch*)`, `Bash(gh api graphql*)` and `Bash(gh.exe *)`.
+`.claude/settings.json` sets `GH_CONFIG_DIR=.claude/gh-agent` and `GCM_INTERACTIVE=never`. It denies `gh auth token`, `gh auth git-credential`, `gh auth login`, `gh auth setup-git`, `gh auth refresh` and `gh auth switch`, each as a bare and a `token.mjs exec` form, plus `Bash(gh api graphql*)` and `Bash(*gh.exe *)`.
 
 ```
 $ GH_CONFIG_DIR=.claude/gh-agent GCM_INTERACTIVE=never gh auth status
@@ -41,7 +41,21 @@ You are not logged into any GitHub hosts. To log in, run: gh auth login
 exit 1
 ```
 
-The directory is never created, so `gh` reads no `hosts.yml`.
+The directory has no `hosts.yml`, so `gh` lists no host and its auth check refuses every command outside `gh auth`. That does not hide the owner's keyring token: gh v2.102.0 falls back to the keyring entry `gh:github.com` (found in review), and `gh auth token` and `gh auth git-credential` can print it. The deny rules cover those commands. The harness denied each probe below before it ran. The first host is invalid and the second has no stdin, so a miss would print no token:
+
+```
+$ gh auth token --hostname invalid.example
+Permission to use Bash with command gh auth token --hostname invalid.example has been denied.
+
+$ gh auth git-credential get
+Permission to use Bash with command gh auth git-credential get has been denied.
+
+$ node scripts/agent/token.mjs exec -- gh auth token --hostname invalid.example
+Permission to use Bash with command node scripts/agent/token.mjs exec -- gh auth token --hostname invalid.example has been denied.
+
+$ node scripts/agent/token.mjs exec -- gh.exe --version
+Permission to use Bash with command node scripts/agent/token.mjs exec -- gh.exe --version has been denied.
+```
 
 ## Gotchas
 
