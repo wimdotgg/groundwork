@@ -35,7 +35,7 @@ flowchart TD
 
 ## The worker scripts
 
-A worker session runs these as `node scripts/agent/<name>.mjs` on Node 24+. Everything that writes goes through `node scripts/agent/token.mjs exec -- `, so GitHub sees the agent App and never your login.
+A worker session runs these as `node scripts/agent/token.mjs exec -- node scripts/agent/<name>.mjs` on Node 24+. Every GitHub call, reads included, goes through `node scripts/agent/token.mjs exec -- `, so GitHub sees the agent App and never your login. A bare `gh` or `gh.exe` is denied outright.
 
 | Step | Command | Does |
 |---|---|---|
