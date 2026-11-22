@@ -15,7 +15,7 @@ Every GitHub write goes through the App helper:
 node scripts/agent/token.mjs exec -- <command>
 ```
 
-That covers `gh issue ...`, `gh api` writes and `plan-lint.mjs --post`. Bare writes are denied in `.claude/settings.json`; `gh api` with `-f`, `-F`, `--field`, `--method` or `--input` is denied bare even when read-only, so run it through the wrapper. Reads (`gh issue view`) run bare. Node 24+ must come first on PATH. The session id is the harness session id (Claude Code's `session_id`).
+That covers `gh issue ...`, `gh api` writes and `plan-lint.mjs --post`. Bare writes are denied in `.claude/settings.json`; `gh api` with `-f`, `-F`, `--field`, `--method` or `--input` is denied bare even when read-only, so run it through the wrapper. Reads (`gh issue view`) go through it too: a bare `gh` exits 4. Node 24+ must come first on PATH. The session id is the harness session id (Claude Code's `session_id`).
 
 Pace: at most 5 issue creations and 10 comments per minute, a pause between bulk writes. No polling loops.
 
@@ -28,7 +28,7 @@ Pace: at most 5 issue creations and 10 comments per minute, a pause between bulk
 
 ## Loop
 
-1. Read the goal and the repo: `docs/spec.md`, `.github/groundwork/hotspots.json`, open epics (`gh issue list --state open --search "type:Epic"`).
+1. Read the goal and the repo: `docs/spec.md`, `.github/groundwork/hotspots.json`, open epics (`node scripts/agent/token.mjs exec -- gh issue list --state open --search "type:Epic"`).
 2. Design the width plan before creating anything (6.2):
    - one contract task first (types, schema, API shape);
    - then lane tasks that can run concurrently;

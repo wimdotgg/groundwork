@@ -12,7 +12,7 @@ For one owner who works with agents on GitHub. Everything assumes a free GitHub 
 
 ## How a project starts
 
-1. The agent requests `scripts/admin/request.mjs bootstrap --repo <name> --args '{"description":"..."}'`; the owner approves.
+1. The agent requests `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs bootstrap --repo <name> --args '{"description":"..."}'`; the owner approves.
 2. Bootstrap pass 1 creates the repo, labels, settings and rulesets, writes the kit files from the release tag and opens a "Project setup" epic.
 3. The owner accepts the epic. Agents choose the stack, fill `scripts/verify` and write the project README.
 4. The agent requests `bootstrap-pass2`; the owner approves once. It enables CodeQL, and sets the deploy switch unless `config.json` says `"deploy": "none"`.
@@ -21,7 +21,7 @@ Agents work one issue per PR through the worker loop in [AGENTS.md](AGENTS.md); 
 
 ## Staying current
 
-A project updates to a newer release with a Chore issue and `node scripts/kit-update.mjs <vX.Y.Z>` on its `issue/N` branch (spec 13.1). The kit also ships the `deploy.yml` workflow, the `script` and `selftest` admin ops and `admin-ops/`.
+A project updates to a newer release with a Chore issue and `node scripts/agent/token.mjs exec -- node scripts/kit-update.mjs <vX.Y.Z>` on its `issue/N` branch (spec 13.1). The kit also ships the `deploy.yml` workflow, the `script` and `selftest` admin ops and `admin-ops/`.
 
 ## Docs
 
