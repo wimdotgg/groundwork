@@ -15,25 +15,27 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: release-please
-  cancel-in-progress: false
-
 jobs:
   # Skipped until bootstrap sets GROUNDWORK_READY, so the run triggered by
   # template generation does not fail on a missing environment.
   #
-  # A release commit is built only by the pull_request run: the push run would
-  # open a stray release PR before the merge shows. Other PR closes skip.
+  # A push that carries a release commit (one that changed the manifest) is
+  # left to the pull_request run: the push run would race the merge mark and
+  # open a stray release PR. Other PR closes skip.
   release-please:
     if: >-
       vars.GROUNDWORK_READY == 'true' &&
       (github.event_name != 'push' ||
-        !startsWith(github.event.head_commit.message, 'chore(main): release ')) &&
+        !contains(toJSON(github.event.commits.*.modified), '".release-please-manifest.json"')) &&
       (github.event_name != 'pull_request' || (
         github.event.pull_request.merged &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         startsWith(github.event.pull_request.head.ref, 'release-please--')))
+    # On the job, not the workflow: a skipped job never joins the group, so the
+    # PR closes that skip cannot replace the pending run that builds a release.
+    concurrency:
+      group: release-please
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: release
