@@ -28,7 +28,7 @@ Verify: each page shows the value you set after a reload.
 2. Install it on the org with "All repositories".
 3. Generate a private key and note the App ID and client ID.
 4. Store the key on the agent machine. On Windows, encrypt it for the current user with DPAPI at `%APPDATA%\groundwork\wimdotgg-agent.pem.dpapi` (`ConvertFrom-SecureString` output) and put `appId`, `slug` and `clientId` in `%APPDATA%\groundwork\wimdotgg-agent.json`. Elsewhere, keep the PEM outside any repo and export `GROUNDWORK_AGENT_KEY_FILE` (its path) and `GROUNDWORK_AGENT_CLIENT_ID`. Delete the downloaded `.pem`.
-5. Agents call GitHub only through `node scripts/agent/token.mjs exec -- <command>`. Your own `gh` and Git Credential Manager login may stay on the machine. GitHub does not keep it from agents (the org's third-party access restriction did not stop a GitHub CLI OAuth token writing to `groundwork`), so the client does: agent scripts refuse to run unless `GH_TOKEN` is set, which `token.mjs exec` does, and `.claude/settings.json` sets `GH_CONFIG_DIR` and `GCM_INTERACTIVE=never` and denies `gh auth token`, `gh auth git-credential`, `gh auth login`, `gh auth setup-git`, `gh auth refresh`, `gh auth switch`, bare `gh api graphql` and `gh.exe`. Keep those entries in any copy of the settings.
+5. Agents call GitHub only through `node scripts/agent/token.mjs exec -- <command>`. Your own `gh` and Git Credential Manager login may stay on the machine. GitHub does not keep it from agents (the org's third-party access restriction did not stop a GitHub CLI OAuth token writing to `groundwork`), so the client does: agent scripts refuse to run unless `GH_TOKEN` is set, which `token.mjs exec` does, and `.claude/settings.json` sets `GH_CONFIG_DIR` and `GCM_INTERACTIVE=never` and denies `gh auth token`, `gh auth git-credential`, `gh auth login`, `gh auth setup-git`, `gh auth refresh`, `gh auth switch`, `gh config set`, `gh alias set`, `gh alias import`, `gh extension`, `gh ext`, `gh extensions`, `gh release download`, `gh attestation`, `gh copilot`, bare `gh api graphql` and `gh.exe`. Keep those entries in any copy of the settings.
 
 Verify: `node scripts/agent/token.mjs exec -- gh api repos/wimdotgg/groundwork --jq .full_name` prints `wimdotgg/groundwork`.
 
@@ -84,7 +84,7 @@ Verify: the environment page shows one reviewer, one branch rule, two secrets an
 
 ### 6. First admin runs
 
-The agent starts each run with `node scripts/admin/request.mjs <op> ...`. It prints the run URL. For every run you:
+The agent starts each run with `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs <op> ...`. It prints the run URL. For every run you:
 
 1. Open the URL.
 2. Read the `plan` job summary (operation, target, args, token permissions).
@@ -116,7 +116,7 @@ Pass 1, the probe and pass 2 run through `request.mjs`; every `admin` run waits 
 
 Available now for existing repos: `apply-settings --repo <name> [--ref <sha>]` (after a settings PR merges; you also approve the PR as CODEOWNER), `check --repo <name>` (read-only drift check), `script --repo <name> --script <admin-ops file> [--ref <sha>] [--args <json>]` (one reviewed script from `admin-ops/`; the delegated approval needs `ref` equal to the `main` head) and `selftest` (bootstraps a throwaway `selftest-<run id>` repository, runs `check` and four probes, archives it; deleting it stays yours).
 
-To move a project to a newer release, an agent claims a Chore issue and runs `node scripts/kit-update.mjs <vX.Y.Z>` on its `issue/N` branch. A project older than `v0.7.0` has no script yet: copy `scripts/kit-update.mjs` from the tag by hand first. The first update is large and may need your `size-exception`. `kit-update` adds `.github/workflows/deploy.yml` when the project has none, so a project that deploys from a differently named workflow renames it to `deploy.yml` first, or it deploys twice.
+To move a project to a newer release, an agent claims a Chore issue and runs `node scripts/agent/token.mjs exec -- node scripts/kit-update.mjs <vX.Y.Z>` on its `issue/N` branch. A project older than `v0.7.0` has no script yet: copy `scripts/kit-update.mjs` from the tag by hand first. The first update is large and may need your `size-exception`. `kit-update` adds `.github/workflows/deploy.yml` when the project has none, so a project that deploys from a differently named workflow renames it to `deploy.yml` first, or it deploys twice.
 
 ## Security notes
 
