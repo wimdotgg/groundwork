@@ -34,22 +34,29 @@ Run: [groundwork run 45026736246](https://github.com/wimdotgg/groundwork/actions
 Closing check, from the `apply` log:
 
 ```
-check wimdotgg/gw-acceptance: 83 rows, all match or deferred
-match: 82, deferred: 1, differ: 0
+## check wimdotgg/gw-acceptance
+Result: **pass** (83 rows, all match or deferred).
+- match: 82
+- differ: 0
+- missing: 0
+- extra: 0
+- unreadable: 0
+- deferred: 1
 ```
 
 Zero mismatching rows. The README "Setup" line from PR #12 links this run and states the same counts.
 
 ## Owner actions (AC3)
 
-Bootstrap to the end of pass 2, in order:
+Bootstrap to the end of pass 2:
 
 1. Approved the `admin` deployment of bootstrap run 45018831414.
 2. Applied `accepted` to gw-acceptance#1 (12:27:45Z).
 3. Approved CODEOWNERS review on PR #8 (12:50:54Z), PR #10 (13:11:06Z) and PR #11 (13:11:18Z).
 4. Approved the `admin` deployment of pass-2 run 45026736246.
+5. Decided on 2026-11-22 that #5 and #6 close by evidence comment, not by PR, relayed through the orchestrator. A scope decision made off GitHub: no GitHub write, no admin or settings action. #5 and #6 closed at 12:58:09Z and 12:58:16Z, between the approvals on PR #8 and PR #10.
 
-Nothing else: no secret entered, no ruleset or setting edited by hand, no merge. Each action is one of the setup epic acceptance, a CODEOWNERS approval or one of the two admin approvals.
+Nothing else: no secret entered, no ruleset or setting edited by hand, no merge. Actions 1 to 4 are the setup epic acceptance, CODEOWNERS approvals and the two admin approvals that AC3 allows. Action 5 is a decision, not a GitHub write, and no admin or settings path is involved, so AC3 is read to allow it, as AC1 is read for #5 and #6.
 
 ## Acceptance and close
 
