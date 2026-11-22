@@ -252,6 +252,13 @@ test('AC8: a Conventional type already in the issue title is not doubled in the 
   }
 });
 
+test('AC8: a breaking marker in the issue title survives into the PR title', async () => {
+  const issue = { number: 7, title: 'feat(x)!: drop the old API', type: { name: 'Feature' } };
+  const { client, calls } = recordingClient({ ...creationRoutes, 'GET /repos/o/r/issues/7': ok(issue) });
+  await run(client);
+  assert.equal(bodyOf(calls, POST_PULL).title, 'feat!: drop the old API');
+});
+
 test('an existing ref claimed by another session is held (exit 3) with no write', async () => {
   const { client, calls } = recordingClient({
     ...creationRoutes,
