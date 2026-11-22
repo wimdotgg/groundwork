@@ -29,13 +29,13 @@ reviews:          0
 autoMergeRequest: SQUASH (enabled by app/wimdotgg-agent)
 ```
 
-The merge queue for `main` was empty (GraphQL `mergeQueue.entries.nodes: []`). The PR timeline holds `committed`, `review_requested` and `auto_merge_enabled` only: no `added_to_merge_queue`, no `reviewed`. The PR was closed unmerged (`mergedAt: null`).
+The merge queue for `main` was empty (GraphQL `mergeQueue.entries.nodes: []`). Before closing, the PR timeline held `committed`, `review_requested` and `auto_merge_enabled` only: no `added_to_merge_queue`, no `reviewed`. Closing adds `closed`, `auto_merge_disabled`, `commented` and `cross-referenced`. The PR was closed unmerged (`mergedAt: null`).
 
 Reading: with every check green, the only unmet gate is the code-owner review, and auto-merge does not enqueue without it.
 
 ## AC2: no accepted ancestor epic
 
-[PR #23](https://github.com/wimdotgg/gw-acceptance/pull/23): check run [PR metadata](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031874518/job/137237020882) FAILURE. The workflow writes its errors to the step summary only. The same validator, run locally against the PR's event payload, reports:
+[PR #23](https://github.com/wimdotgg/gw-acceptance/pull/23): check run [PR metadata](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031874518/job/137237020882) FAILURE. The workflow writes its errors to the step summary. The API and `gh run view` expose only the annotation "Process completed with exit code 1" (check run `output.title` and `summary` are null), and the step summary page was not read. The text below comes from re-running the validator locally against the PR's event payload:
 
 ```
 Conclusion: **fail**
@@ -46,7 +46,7 @@ Conclusion: **fail**
 
 ## AC3: AC without an evidence row
 
-[PR #24](https://github.com/wimdotgg/gw-acceptance/pull/24): check run [PR metadata](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031882938/job/137237047084) FAILURE. The local run of the same validator:
+[PR #24](https://github.com/wimdotgg/gw-acceptance/pull/24): check run [PR metadata](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031882938/job/137237047084) FAILURE, same exposure as #23. The text below comes from the same local re-run against this PR's event payload:
 
 ```
 Conclusion: **fail**
