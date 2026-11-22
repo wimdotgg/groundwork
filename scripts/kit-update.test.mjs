@@ -442,3 +442,22 @@ test('R1 run copies the new tag ci.yml with its local reusable-workflow referenc
     assert.ok(result.changed.includes('.github/workflows/ci.yml'));
   });
 });
+
+test('AC6 run copies deploy.yml into a project that has none', async () => {
+  const tagDeploy = 'name: deploy\non: release\n';
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    const result = await execute(project, releasesClient(OLD_TREE, { ...NEW_TREE, '.github/workflows/deploy.yml': tagDeploy }));
+    assert.equal(await readProject(project, '.github/workflows/deploy.yml'), tagDeploy);
+    assert.ok(result.changed.includes('.github/workflows/deploy.yml'));
+  });
+});
+
+test('AC6 run leaves an existing deploy.yml untouched', async () => {
+  const projectDeploy = 'name: deploy\non: release\n# project edit\n';
+  const files = { ...PROJECT_FILES, '.github/workflows/deploy.yml': projectDeploy };
+  await withProject(files, {}, async (project) => {
+    const result = await execute(project, releasesClient(OLD_TREE, { ...NEW_TREE, '.github/workflows/deploy.yml': 'name: deploy\n' }));
+    assert.equal(await readProject(project, '.github/workflows/deploy.yml'), projectDeploy);
+    assert.ok(!result.changed.includes('.github/workflows/deploy.yml'));
+  });
+});

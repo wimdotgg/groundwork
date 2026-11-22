@@ -158,7 +158,11 @@ test('loadHotspots returns [] when hotspots.json is absent', async () => {
   await withTempRoot({}, async (root) => {
     assert.deepEqual(await loadHotspots({ root }), []);
   });
-  assert.deepEqual(await loadHotspots({ root: realRoot }), []);
+});
+
+test('loadHotspots reads the running repository whatever hotspots it lists', async () => {
+  const hotspots = await loadHotspots({ root: realRoot });
+  assert.ok(Array.isArray(hotspots));
 });
 
 test('loadHotspots reads a valid file and rejects a malformed one', async () => {
