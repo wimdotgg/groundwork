@@ -17,7 +17,14 @@ Issue #224, epic #169. Session 298f2bc2-9741-4e1c-8da5-bd87919b0be7, `sonnet/cla
 
 ## Final check (AC4)
 
-CHECK_RESULT
+[groundwork run 45047718564](https://github.com/wimdotgg/groundwork/actions/runs/45047718564), `admin-run check groundwork`, requested after every other Phase 5 PR merged. `plan` and `apply` succeeded, the owner approved the `admin` environment, and the run finished 2026-11-22T17:11:10Z. From the `apply` log:
+
+```
+check wimdotgg/groundwork: 88 rows, all match or deferred
+match: 87, differ: 0, missing: 0, extra: 0, unreadable: 0, deferred: 1
+```
+
+Zero mismatching rows. The summary lists counts only, so it does not name the one deferred row.
 
 ## Carry-over (AC6, AC7)
 
