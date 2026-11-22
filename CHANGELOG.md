@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/wimdotgg/groundwork/compare/v0.9.0...v0.10.0) (2026-11-22)
+
+
+### Features
+
+* **spec:** mark the spec v1 done, run the final check and release ([#239](https://github.com/wimdotgg/groundwork/issues/239)) ([04da522](https://github.com/wimdotgg/groundwork/commit/04da5226820988968177b5d3f1f03ac3e79d5798))
+
 ## [0.9.0](https://github.com/wimdotgg/groundwork/compare/v0.8.0...v0.9.0) (2026-11-22)
 
 
