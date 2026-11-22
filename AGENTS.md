@@ -11,7 +11,7 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 ## Identity and pacing (2.2)
 
 - Act only as `wimdotgg-agent[bot]`. Never write to GitHub under another login, whatever `gh` or Git are logged in as.
-- Every GitHub write goes through `node scripts/agent/token.mjs exec -- <gh or git command>`, enqueue and `gh pr ready` included. It mints an installation token and sets the bot name and noreply email on commits. Plain `git push` and bare `gh` writes are forbidden, as is `gh api` with `-X`, `--method`, `-f`, `-F`, `--field`, `--raw-field` or `--input`. Read-only GraphQL goes through the wrapper too.
+- Every GitHub write goes through `node scripts/agent/token.mjs exec -- <gh or git command>`, enqueue and `gh pr ready` included. It mints an installation token and sets the bot name and noreply email on commits. A bare `git push` and every bare `gh` or `gh.exe` call, reads included, are denied outright. `gh api` with a method, field or input flag is forbidden even through the wrapper: use the `gh` subcommand (`gh issue edit --type`, `--parent`, `--add-blocked-by`; `gh pr review --comment --body-file`) or stop and ask. Read-only GraphQL goes through the wrapper too.
 - Pace writes: at most 5 issue creations and 10 comments per minute, a pause between bulk writes, no polling loops against the API.
 
 ## Never
@@ -100,7 +100,7 @@ Run every script as `node scripts/agent/token.mjs exec -- node scripts/agent/<na
 ## Leases and takeover (6.4)
 
 - A claim is a lease only while the PR is draft. Ready, queued and awaiting-owner PRs never expire.
-- Lease expires after 4 hours without an agent-account PR comment (claim, checkpoint, takeover each post one), falling back to the PR `created_at`. PR `updated_at` and commit dates are not used.
+- Lease expires after the configured lease (`limits.draftLeaseMinutes`, default 4 hours) without an agent-account PR comment (claim, checkpoint, takeover each post one), falling back to the PR `created_at`. PR `updated_at` and commit dates are not used.
 - A ref with no PR expires 15 minutes after the pointer comment, or when there is none, after the claim commit's committer date (GitHub stamps it, since `claim` creates it through the API).
 - Takeover candidates: draft PRs with an expired lease or the `<!-- groundwork:released -->` body marker, and no `needs-decision` label. Release adds the marker; takeover removes it.
 - Takeover is compare-and-swap: read head SHA, create `chore(claim): #N takeover [session <id>]` with that parent, then `PATCH /git/refs/heads/issue/N` with `force: false`. If the head moved, the update fails; move on. Winner posts a takeover comment.

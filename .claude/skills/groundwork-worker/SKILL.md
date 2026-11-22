@@ -15,7 +15,7 @@ Every GitHub write goes through the App helper:
 node scripts/agent/token.mjs exec -- <command>
 ```
 
-That covers `git push`, `gh pr ...`, `gh issue ...` and `gh api` writes. Bare forms are denied in `.claude/settings.json`. Reads go through it too: with no login for `gh` to find, a bare `gh issue view` or `gh pr checks` exits 4. `gh api` with `-f`, `-F`, `--field`, `--method` or `--input` is denied bare even when read-only (GraphQL). `claim.mjs`, `checkpoint.mjs` and `release.mjs` write too: run them under the wrapper. Node 24+ must come first on PATH, for you and for the hooks; an older `node` makes every agent script exit 1. Never force-push, rebase, push `main` or use `--no-verify`.
+That covers `git push`, `gh pr ...`, `gh issue ...`. Every bare `gh` call is denied in `.claude/settings.json`, reads included, so reads (`gh issue view`, `gh pr checks`) go through the wrapper too. `gh api` with a method, field or input flag is forbidden even through the wrapper: use the `gh` subcommand or stop and ask. `claim.mjs`, `checkpoint.mjs` and `release.mjs` write too: run them under the wrapper. Node 24+ must come first on PATH, for you and for the hooks; an older `node` makes every agent script exit 1. Never force-push, rebase, push `main` or use `--no-verify`.
 
 Pace: at most 5 issue creations and 10 comments per minute. No polling loops.
 
