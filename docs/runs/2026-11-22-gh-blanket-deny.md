@@ -44,7 +44,34 @@ Permission to use Bash with command node scripts/agent/token.mjs exec -- gh copi
 
 The probes ended in `2>&1 | head -3`; the harness echoes the `2>&1` in the denial text. A bare `gh` with no arguments is denied, so `Bash(gh)` is needed next to `Bash(gh *)`. The wrapped `gh at --help` ran. The wrapped `gh attestation*` rule is gone too, so `gh attestation` runs wrapped as well.
 
-Not probed: the wrapped `gh aw`, `gh stack` and `gh webhook` denies (the stubs may start an extension install when gh can prompt or `CI` is set). Their rules have the same shape as the probed `gh copilot` rule.
+## Review round 1 probes (R1, R3, R5)
+
+Review round 1 found the first version let a wrapped `gh.exe` past every wrapped deny: it had narrowed `Bash(*gh.exe *)` to `gh.exe *` and `*/gh.exe *`. The fix restores `Bash(*gh.exe *)` (plus `Bash(gh.exe)` for no arguments), drops the two narrower rules and replaces the six wrapped `gh auth` rules with `Bash(*token.mjs* exec -- gh auth*)`. Probed after the fix:
+
+```
+$ node scripts/agent/token.mjs exec -- gh.exe --version
+Permission to use Bash with command node scripts/agent/token.mjs exec -- gh.exe --version has been denied.
+$ node scripts/agent/token.mjs exec -- gh.exe auth token --help
+Permission to use Bash with command node scripts/agent/token.mjs exec -- gh.exe auth token --help has been denied.
+$ node scripts/agent/token.mjs exec -- "C:\Program Files\GitHub CLI\gh.exe" --version
+Permission to use Bash with command node scripts/agent/token.mjs exec -- "C:\Program Files\GitHub CLI\gh.exe" --version has been denied.
+$ node scripts/agent/token.mjs exec -- gh pr view 230 --json number
+{"number":230}
+$ env gh --version
+Permission to use Bash with command env gh --version has been denied.
+$ command gh --version
+Permission to use Bash with command command gh --version has been denied.
+$ echo token.mjs exec -- gh auth status --show-token
+Permission to use Bash with command echo token.mjs exec -- gh auth status --show-token has been denied.
+$ echo token.mjs exec -- gh aw --help
+Permission to use Bash with command echo token.mjs exec -- gh aw --help has been denied.
+$ echo token.mjs exec -- gh stack --help       (denied, same text)
+$ echo token.mjs exec -- gh webhook --help     (denied, same text)
+```
+
+The `echo` probes only print the command text, so they exercise the wrapped rules (which start with a wildcard) without risking a token print or an extension install.
+
+No `node --test` case can exercise harness rule matching, so there is no failing test first: the before and after probes stand in.
 
 ## Which wrapped denies stay (AC3)
 
@@ -52,9 +79,7 @@ Under the wrapper gh runs with `GH_TOKEN` set (`scripts/agent/token.mjs` env blo
 
 | Wrapped form | Decision | Reason |
 |---|---|---|
-| `gh auth token`, `gh auth git-credential` | stay | print the installation token into the transcript |
-| `gh auth login`, `refresh`, `switch` | stay | change credential state; no agent task needs them |
-| `gh auth setup-git` | stay | writes the global Git config; the helper would outlive the wrapper (`gh help auth setup-git`) |
+| `gh auth` (one rule, every subcommand) | stay | `token`, `git-credential` and `status --show-token` print the installation token into the transcript; `login`, `refresh`, `switch` change credential state; `setup-git` writes the global Git config, so the helper would outlive the wrapper (`gh help auth setup-git`). No script calls `gh auth` |
 | `gh config set` | stay | writes `hosts.yml` or settings that later runs read without the wrapper |
 | `gh alias set`, `gh alias import` | stay | a `!` alias is a shell command no Bash rule sees (`gh help alias set`) |
 | `gh extension`, `gh ext`, `gh extensions` | stay | install and run foreign code with `GH_TOKEN` |
@@ -86,5 +111,6 @@ $ git grep -n -E "node scripts/agent/(next|claim|resume|checkpoint|release|revie
 
 ## Gotchas
 
-- `Bash(*/gh *)` and `Bash(*/gh.exe *)` need the `/` right before `gh`, so they do not match `token.mjs exec -- gh ...`. The old `Bash(*gh.exe *)` became `*/gh.exe *`; `Bash(gh.exe *)` covers the bare form.
-- Not covered: `gh` behind another command (`env gh`, `command gh`, `xargs gh`), `GH_HOST`, an overridden `GH_CONFIG_DIR`. Spec 21 lists them.
+- `Bash(*/gh *)` needs the `/` right before `gh` and `Bash(*gh.exe *)` needs `gh.exe`, so neither matches `token.mjs exec -- gh ...`. A command whose text contains `gh.exe` and a space is denied, even inside an `echo` or a heredoc; write such text with the Write or Edit tool.
+- Open cases, listed in spec 17 and 21: a case variant (`GH --version` ran at review round 1), `bash -c "gh ..."`, `sh -c`, `eval`, `xargs gh` (not probed), `GH_HOST`, an overridden `GH_CONFIG_DIR`. `env gh` and `command gh` are denied (probed above).
+- Review round 1 R6 (`AGENTS.md:14` and the `groundwork-*` skills still describe bare `gh` as "forbidden" or "exits 4") is outside #229's Touches and goes to #224.
