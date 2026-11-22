@@ -34,6 +34,29 @@ Permission to use Bash with command node scripts/agent/token.mjs exec -- gh alia
 
 The probes ended in `2>&1 | head -3`; the harness echoes the `2>&1` in the denial text.
 
+## Widened denies (AC7)
+
+The owner widened #227 on 2026-11-22 to the commands that skip gh's auth check. Before the change, on `0020158`, the bare and wrapped `--help` forms of `gh extension`, `gh ext`, `gh extensions`, `gh release download` and `gh attestation` printed usage. `gh copilot` was not probed before: bare `gh copilot` can offer to download a binary.
+
+After the change the harness denied all twelve forms: `gh extension`, `gh ext`, `gh extensions`, `gh release download`, `gh attestation` and `gh copilot`, each bare and under `node scripts/agent/token.mjs exec -- `. The first run of four bare forms printed usage because the harness had not reloaded the file yet; the rerun was denied. Example:
+
+```
+$ gh extension --help
+Permission to use Bash with command gh extension --help 2>&1 has been denied.
+$ node scripts/agent/token.mjs exec -- gh copilot --help
+Permission to use Bash with command node scripts/agent/token.mjs exec -- gh copilot --help 2>&1 has been denied.
+```
+
+## AGENTS.md (AC8)
+
+```
+$ git grep -n -E "scripts/agent/(next|resume|review-queue|plan-lint).mjs" -- AGENTS.md
+AGENTS.md:84:1. `node scripts/agent/token.mjs exec -- node scripts/agent/next.mjs`: ...
+AGENTS.md:91:3. ... `node scripts/agent/token.mjs exec -- node scripts/agent/resume.mjs N --session <id>` ...
+```
+
+Line 82 now says every script runs under `token.mjs exec`, reads included. No bare agent script is left in `AGENTS.md`.
+
 ## Ignore rule (AC2)
 
 ```
@@ -57,12 +80,12 @@ $ git grep -n '"Bash(gh [a-z]* [a-z]* \*)"' -- .claude/settings.json
 
 Every remaining `gh issue`, `gh pr`, `request.mjs` and `kit-update.mjs` mention under `.claude/skills/`, `docs/setup.md` and `README.md` sits behind `node scripts/agent/token.mjs exec --`, or is prose that names the script (`docs/setup.md:110`) or tells the reader to run reads under the wrapper.
 
-## Spec diff (AC3, AC5, AC6)
+## Spec diff (AC3, AC5, AC6, AC9)
 
-`git diff origin/main -- docs/spec.md` changes 14.1 step 3 and the credentials bullet of section 17, and adds the entry "2026-11-22: gh config and alias denies (#227)" above the #216 entry. No line inside an earlier section 21 entry changes.
+`git diff origin/main -- docs/spec.md` changes the 2.1 `wianvdm` row, 14.1 step 3, the 15 allow-rules line and the credentials bullet of section 17, and adds the entry "2026-11-22: gh config and alias denies (#227)" above the #216 entry. No line inside an earlier section 21 entry changes.
 
 ## Gotchas
 
-- `gh release download`, `gh extension install` and installed extensions skip gh's auth check and send the keyring token with no host listed. Round 1 read this from the gh v2.102.0 source; spec 17 states it and denies wait for an owner decision.
+- `gh release download`, `gh extension install`, installed extensions, `gh copilot`, `gh attestation trusted-root` and `gh attestation verify --bundle` skip gh's auth check. The first three send the keyring token with no host listed (gh v2.102.0 source, review round 1); the last three were not traced to a request. AC7 denies them.
 - `GH_HOST` and an overridden `GH_CONFIG_DIR` are environment, not command text: no deny rule matches them. Spec 17 states the limit.
 - The `gh config set` write itself was not run: it would create `hosts.yml` and expose the owner's keyring token to the next `gh` call.

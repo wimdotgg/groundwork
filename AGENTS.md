@@ -79,16 +79,16 @@ Canonical rules for every agent harness in this repo. Spec: [docs/spec.md](docs/
 
 ## Worker loop (6.3)
 
-Run every script as `node scripts/agent/<name>.mjs`. Scripts that write run under `node scripts/agent/token.mjs exec -- ` (`claim`, `checkpoint`, `release`; the hooks already do). Exit codes: 0 done, 1 error or refusal, 3 held by another session.
+Run every script as `node scripts/agent/token.mjs exec -- node scripts/agent/<name>.mjs`. Since #225 each one refuses to call GitHub without the wrapper's token, reads included (`next`, `resume`, `review-queue`, `plan-lint`; the hooks already do). Exit codes: 0 done, 1 error or refusal, 3 held by another session.
 
-1. `next`: ready task, Definition of Ready met, hotspot free. Takeover candidates first, then `priority:p0`, epic priority (ties by epic number), sub-issue order. Nothing ready: stop and report the skipped reasons.
+1. `node scripts/agent/token.mjs exec -- node scripts/agent/next.mjs`: ready task, Definition of Ready met, hotspot free. Takeover candidates first, then `priority:p0`, epic priority (ties by epic number), sub-issue order. Nothing ready: stop and report the skipped reasons.
 2. `claim N --session <id> --agent <model>/<harness>`:
    - empty commit `chore(claim): #N [session <id>]` via `POST /git/commits` (tree and parent from `main`), no author or committer dates;
    - `POST /git/refs` for `refs/heads/issue/N`. Only HTTP 201 means claimed;
    - pointer comment on the issue with `<!-- groundwork:claim -->`;
    - draft PR from `issue/N` with the PR template, `Closes #N`, initial `## State`; then the claim comment on the PR.
    - Exit 3: held, not claimable, or Definition of Ready unmet; run `next` again. Exit 1: stop and report. A rerun by the same session completes missing steps. On a takeover candidate `claim` takes over (6.4).
-3. After a takeover, or when revived: `resume N --session <id>`, then continue from its briefing. Exit 3 or 1: stop.
+3. After a takeover, or when revived: `node scripts/agent/token.mjs exec -- node scripts/agent/resume.mjs N --session <id>`, then continue from its briefing. Exit 3 or 1: stop.
 4. Build on `issue/N`; push early through the wrapper; merge main in, never rebase.
 5. `node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --session <id>` at the required moments (6.5), from `.artifacts/checkpoint.json`.
 6. Mark ready when Definition of Done is met: `node scripts/agent/token.mjs exec -- gh pr ready N`.
