@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/wimdotgg/groundwork/compare/v0.7.0...v0.8.0) (2026-11-22)
+
+
+### Features
+
+* **kit:** align the spec and adopter docs with Phase 4c ([#212](https://github.com/wimdotgg/groundwork/issues/212)) ([756d1e3](https://github.com/wimdotgg/groundwork/commit/756d1e3e57cd90101f73b08a7bef37066b4e5468))
+
 ## [0.7.0](https://github.com/wimdotgg/groundwork/compare/v0.6.0...v0.7.0) (2026-11-21)
 
 
