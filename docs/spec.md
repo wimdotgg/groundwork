@@ -24,7 +24,7 @@ Its purpose: a solo human orchestrates, AI agents do the work (plan, implement, 
 | D6 | Status is derived, never stored in labels | Label writes by `GITHUB_TOKEN` do not trigger workflows; a label state machine fails silently. |
 | D7 | No stacked PRs | Merge queue only serves `main`; contract-first planning plus `blocked-by` replaces stacks. |
 | D8 | Context lives in issue (intent), PR `## State` (current state), PR comments (journal) | No committed plan or state files. |
-| D9 | Agents act through an org-owned GitHub App (`wimdotgg-agent`) | Your admin credentials are never stored on the agent machine, and an App cannot be spam-flagged like a machine user was. |
+| D9 | Agents act through an org-owned GitHub App (`wimdotgg-agent`) | Agent scripts run on the App token: they refuse to call GitHub unless `GH_TOKEN` is set, which `token.mjs exec` does (2.1, 17). An App cannot be spam-flagged like a machine user was. |
 | D10 | Admin work runs through approval-gated tiers | Agents request, you approve with one click, GitHub runs it with a short-lived scoped token. |
 | D11 | Agents may edit workflows; all secrets live in protected environments | CODEOWNERS gates the merge; PR runs cannot reach environment secrets. |
 | D12 | Reviewer agent is advisory | Deterministic checks and your CODEOWNERS approval are the blockers. |
@@ -43,7 +43,7 @@ Its purpose: a solo human orchestrates, AI agents do the work (plan, implement, 
 
 | Identity | Kind | Role | Credentials on the agent machine |
 |---|---|---|---|
-| `wianvdm` | Your user | Org owner | **None.** You act in the browser or GitHub mobile app. Bootstrap and admin work go through tier 2 (section 12). Until the Phase 4b epic (#167) closes, a delegation applies (section 21, "2026-11-21: Phase 4b owner delegation"). |
+| `wianvdm` | Your user | Org owner | Your `gh` keyring login and Git Credential Manager login may stay on the machine. GitHub does not keep them from agents, so the client does: with the org's third-party access restriction on and no approved apps, your GitHub CLI OAuth token still wrote to `groundwork` (probes #214 and #215, `docs/runs/2026-11-22-phase5-contract.md`). Agent scripts refuse to call GitHub unless `GH_TOKEN` is set, which `token.mjs exec` does (13.1, `lib/github.mjs`); `.claude/settings.json` sets `GH_CONFIG_DIR` to a directory with no `hosts.yml` and `GCM_INTERACTIVE=never` and denies `gh auth token`, `gh auth git-credential`, `gh auth login`, `gh auth setup-git`, `gh auth refresh`, `gh auth switch`, bare `gh api graphql` and `gh.exe` (17). That stops accidental ambient use, not a deliberate bypass. You act in the browser or GitHub mobile app. Bootstrap and admin work go through tier 2 (section 12). |
 | `wimdotgg-agent` | GitHub App (App ID 5853598, client ID `Iv23lic380KcYz17cWxi`) | Installed on all org repos, permissions in 2.2 | Key encrypted on the agent machine (2.2); installation tokens minted per command. |
 | `wimdotgg-release` | GitHub App | Installed on all org repos | None. Key only in each repo's `release` environment. |
 | `wimdotgg-admin` | GitHub App (App ID 5782869, client ID `Iv23lipUuaiDCWGAKcYI`) | Installed on all org repos | None. Key only in the control repo's `admin` environment. |
@@ -635,7 +635,7 @@ Shapes checked against the REST reference for `POST /repos/{owner}/{repo}/rulese
 
 - `strict` is off because the merge queue tests each group on top of `main`.
 - `actor_id` is ignored for `OrganizationAdmin`; the file sends `1`, and read-back returns `null` (Phase 0). `check` compares `OrganizationAdmin` bypass actors by `actor_type` and `bypass_mode` only; every other bypass actor by `actor_type`, resolved `actor_id` and `bypass_mode`.
-- The org-admin bypass is pull-request-only (valid for branch rulesets only). It exists so you can merge your own protected-path PRs, which you cannot approve yourself. A bypass merge also skips the merge queue (V6). Your admin credentials are never on the agent machine, so agents cannot use it.
+- The org-admin bypass is pull-request-only (valid for branch rulesets only). It exists so you can merge your own protected-path PRs, which you cannot approve yourself. A bypass merge also skips the merge queue (V6). Agents cannot use it: they act as the App, which is not an organization admin, and the client-side rules in 2.1 stop accidental use of your login in their calls.
 - The merge queue cannot be combined with wildcard branch patterns; `~DEFAULT_BRANCH` is fine.
 - Projects bootstrapped from releases after `v0.5.0` get the `code_scanning` rule in `rulesets/main.json` from the template; earlier ones add it through setup task 05. Pass 2 puts it into the live ruleset and adds `{ "type": "code_scanning", "parameters": { "code_scanning_tools": [ { "tool": "CodeQL", "security_alerts_threshold": "high_or_higher", "alerts_threshold": "errors" } ] } }` (all three fields required). It works with the merge queue: no CodeQL analysis is produced for the queue ref, and the PR analysis satisfies the rule (V10). Before pass 2 (the live `main` ruleset has no `code_scanning` rule) and while CodeQL default setup is not `configured`, `apply-settings` sends `main` without a `code_scanning` rule present in `rulesets/main.json`, and `check` reports that rule `deferred`, not `differ`. Once the live rule exists, pass 2 has run and `check` fails closed: the rule, the default setup and `DEPLOY_ENABLED` are compared normally (10).
 - Rulesets are applied idempotently: look up by `name`, then `PUT /repos/{o}/{r}/rulesets/{id}` or `POST`. The files hold no `id`.
@@ -837,7 +837,7 @@ Concurrency group `admin-${{ inputs.target_repo || 'org' }}`, never cancelled.
 
 ## 13. Scripts
 
-Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent machine) or `fetch` with the token from `env` (CI and `admin-run`); `scripts/lib/github.mjs` hides the difference. The one exception is `gh secret set` / `gh variable set` in `admin-run` (10.1). Every script exits non-zero with a one-line reason on failure and supports `--json`. Run as `node scripts/agent/<name>.mjs`; Windows works under PowerShell and Git Bash.
+Node 24+, ESM, no npm dependencies. They call GitHub through `gh api` (agent machine, with the `GH_TOKEN` that `token.mjs exec` sets) or `fetch` with the token from `env` (CI and `admin-run`); `scripts/lib/github.mjs` hides the difference. The one exception is `gh secret set` / `gh variable set` in `admin-run` (10.1). Every script exits non-zero with a one-line reason on failure and supports `--json`. Run as `node scripts/agent/<name>.mjs`; Windows works under PowerShell and Git Bash.
 
 | Script | Inputs | Output and effects |
 |---|---|---|
@@ -978,11 +978,11 @@ Each module under `scripts/groundwork` exports `OP`, `PERMISSIONS`, `TOKEN_SCOPE
 
 | Export | Contract |
 |---|---|
-| `createClient({ env, token?, onCall? }) → GitHubClient` | `token` given: `fetch` with that token (`admin-run` minted tokens). Else `env.GITHUB_ACTIONS === 'true'`: `fetch` with `env.GITHUB_TOKEN` (empty token throws). Else `gh`: spawns `gh api -i --method <m> <path>` with an argument array (no shell), body on stdin (`--input -`), status and headers parsed from the `-i` output. Base URL `env.GITHUB_API_URL` or `https://api.github.com`. `onCall(CallRecord)` runs after every call (the `admin-run` summary). |
+| `createClient({ env, token?, onCall? }) → GitHubClient` | `token` given: `fetch` with that token (`admin-run` minted tokens). Else `env.GITHUB_ACTIONS === 'true'`: `fetch` with `env.GITHUB_TOKEN` (empty token throws). Else outside Actions `env.GH_TOKEN` is required, which `token.mjs exec` sets for its child: without it `createClient` throws a `GitHubError` naming `token.mjs exec` before any `gh` process starts, so a bare agent script exits 1 and makes no GitHub call. The ambient `gh` login is never used and no read-only path keeps an exception (`next`, `resume`, `review-queue`, `inbox` and `plan-lint` run under `token.mjs exec` too). With `GH_TOKEN`: `gh`, which spawns `gh api -i --method <m> <path>` with an argument array (no shell), body on stdin (`--input -`), status and headers parsed from the `-i` output. Base URL `env.GITHUB_API_URL` or `https://api.github.com`. `onCall(CallRecord)` runs after every call (the `admin-run` summary). |
 | `createFixtureClient(routes, { onCall? }) → GitHubClient` | `routes`: `Record<string, Response \| Response[]>` keyed `"<METHOD> <path>"` with query parameters sorted by name and encoded; route keys are normalised to the same form as lookups (`"GET /repos/o/r/pulls/7/files?per_page=100"` for the first page, `"GET /repos/o/r/pulls/7/files?page=2&per_page=100"` for the next); an array yields successive responses. GraphQL calls are keyed `"POST /graphql"` with an ordered array of responses, one per call. An unmatched call throws `GitHubError` (status 0, `no fixture for <key>`). Every test uses this; no test touches the network. |
 | `apiPath(template, params) → string` | Fills `{name}` segments with `encodeURIComponent(params.name)`; a missing param throws `GitHubError` (status 0). |
 | `repoFromEnv(env) → RepoRef` | From `GITHUB_REPOSITORY`; throws `GitHubError` (status 0) when absent or malformed. |
-| `currentRepo() → Promise<RepoRef>` | Agent machine only: `gh repo view --json owner,name`. |
+| `currentRepo(env = process.env) → Promise<RepoRef>` | Agent machine only: `gh repo view --json owner,name`. Refuses without `env.GH_TOKEN` like `createClient`, because `resume` and `review-queue` call it first. |
 | `class GitHubError extends Error` | Fields `status` (0 for transport failures), `method`, `path`, `apiMessage`. |
 
 Behaviour shared by all transports: `request` rejects a path that does not start with `/` (`GitHubError`, status 0). It resolves on 2xx and on any status in `okStatuses` (`claim` passes `[422]`, existence probes pass `[404]`), and throws `GitHubError` otherwise. `paginate`'s first request is `path` with the caller's `query` plus `per_page=100` and no `page` parameter; each later request is the `Link: rel="next"` URL reduced to path plus query (base URL dropped), and the fixture key is that path with its query sorted; `itemsKey` unwraps responses such as `{ total_count, workflow_runs }`. `graphql` posts to `/graphql` and throws `GitHubError` with the first `errors[].message` when the response carries errors. No retries: callers re-run. Bodies never reach `onCall`.
@@ -1169,7 +1169,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 1. Create the free organization; enable 2FA requirement and the settings in 2.5.
 2. Transfer `wianvdm/groundwork` into the organization (done: `wimdotgg/groundwork`); the template flag is unused, since `bootstrap` reads the release tree. Its `main` must already contain `admin-run.yml`: nothing below works before that.
-3. Create `wimdotgg-agent` as an organization-owned App (2.2; `docs/setup.md`), install it on the org with All repositories, and store its key on the agent machine. Remove your own `gh` and Git Credential Manager login for github.com from that machine (temporary exception: section 21, "2026-11-21: Phase 4b owner delegation").
+3. Create `wimdotgg-agent` as an organization-owned App (2.2; `docs/setup.md`), install it on the org with All repositories, and store its key on the agent machine. Your own `gh` and Git Credential Manager login may stay on that machine; the client-side rules in 2.1 keep agents off it (section 21, "2026-11-22: Phase 5 contract (#216)").
 4. Create `wimdotgg-admin` and `wimdotgg-release` as organization-owned Apps (no manifests; `docs/setup.md` gives the manual form) and install both on the org with All repositories. The slugs are recorded in `config.json`.
 5. In `groundwork`, create environment `admin` (reviewer you, deployment branch `main`, selected-branches policy, "Allow administrators to bypass" off) and store both App keys and their App IDs or client IDs there.
 6. Approve `admin-run op=create-issue-types`, then `admin-run op=apply-settings --repo groundwork --ref <main sha>`. The second run creates groundwork's `release` environment with its key, sets `GROUNDWORK_READY`, applies the rulesets and ends with `check`. From here `main` is protected; the agent runs `request.mjs probe --repo groundwork` to confirm.
@@ -1234,7 +1234,7 @@ Tests: `scripts/ci/<name>.test.mjs` runs every case in `scripts/ci/fixtures/<nam
 
 ## 17. Security model
 
-- **Credentials on the agent machine:** only the agent App key (DPAPI-encrypted on Windows). The tokens it mints cannot change settings, rulesets, environments or secrets.
+- **Credentials on the agent machine:** the agent App key (DPAPI-encrypted on Windows) is the only one agents use; the tokens it mints cannot change settings, rulesets, environments or secrets. Your `gh` and Git Credential Manager login may also be present, and GitHub does not stop it acting on `groundwork` (probes #214 and #215). Separation is client-side: agent scripts refuse to call GitHub unless `GH_TOKEN` is set, which `token.mjs exec` does (13.1), and `.claude/settings.json` points `GH_CONFIG_DIR` at a directory with no `hosts.yml`, sets `GCM_INTERACTIVE=never` and denies `gh auth token`, `gh auth git-credential`, `gh auth login`, `gh auth setup-git`, `gh auth refresh`, `gh auth switch`, bare `gh api graphql` and `gh.exe`. With `GH_CONFIG_DIR` set gh lists no host, so its auth check refuses every command outside `gh auth`; the keyring token stays readable through `gh auth token` and `gh auth git-credential`, which the deny rules cover. These rules stop accidental ambient use, not a deliberate bypass: the deny rules match command text, and `GH_TOKEN` is not checked for origin.
 - **Secrets:** only in environments restricted to `main`, `v*` tags, and (for `admin`, `production`) your approval. PR runs reach none of them.
 - **Required checks:** pinned to the GitHub Actions app; the agent cannot post fake results (no Checks or Statuses write). A workflow that fakes a check name must be in the PR's own head commit, which puts it under `.github/` and behind your approval.
 - **Rules the PR is judged by:** validators run from the base commit; workflow changes need your CODEOWNERS approval.
@@ -1300,6 +1300,16 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-22: Phase 5 contract (#216)
+
+Epic #169 proves v1 on `gw-acceptance`. Before it, the owner's decisions of 2026-11-22 (Decisions on #169) replaced the plan to remove the owner's `gh` and Git Credential Manager login from the agent machine. Two probe issues (#214, #215, closed) showed why removal was not the answer: the org's third-party access restriction was on with no approved apps, yet the owner's GitHub CLI OAuth token still wrote to `groundwork`. GitHub does not enforce the separation, so the client does.
+
+Contract: `createClient` outside Actions without a token refuses unless `GH_TOKEN` is set, which `token.mjs exec` does, and names `token.mjs exec` in the error; `currentRepo` refuses the same way, because `resume` and `review-queue` call it first (13.1). No read-only path keeps the ambient `gh` login: every caller already runs under the wrapper, `inbox` included (13). `.claude/settings.json` carries `GH_CONFIG_DIR=.claude/gh-agent` (a directory with no `hosts.yml`: gh lists no host, so its auth check refuses every command outside `gh auth`; the keyring token stays readable through `gh auth token` and `gh auth git-credential`, which the deny rules cover), `GCM_INTERACTIVE=never` and deny rules: `gh auth token`, `gh auth git-credential`, `gh auth login`, `gh auth setup-git`, `gh auth refresh`, `gh auth switch`, bare `gh api graphql` and `gh.exe`. The first rules came from the untracked `settings.local.json`. Review of #225 added the `gh auth` subcommands that reach the keyring token or write a login, and a leading wildcard on `gh.exe` so a wrapped call matches.
+
+Corrections applied: D9; 2.1 (`wianvdm` row); 9.1 (org-admin bypass); 13.1 (`createClient`, `currentRepo`, the `gh` sentence); 14.1 step 3; 17 (credentials). `docs/setup.md` part 1, section 3 step 5 follows. The run note `docs/runs/2026-11-22-phase5-contract.md` holds the probe evidence and the fail-closed transcripts.
+
+Known limits: the rules stop accidental ambient use, not a deliberate bypass, and G4 (epic #169) proves they bind the bot identity. With `GH_CONFIG_DIR` set, the bare read-only commands in `permissions.allow` (`gh issue view` and the like) find no login and need the wrapper. `GH_TOKEN` set by anything other than `token.mjs exec` passes the check.
 
 ### 2026-11-22: Phase 4c integration (#200)
 

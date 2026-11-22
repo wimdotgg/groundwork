@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GitHubError, apiPath, createClient, createFixtureClient, parseGhOutput, repoFromEnv,
+  GitHubError, apiPath, createClient, createFixtureClient, currentRepo, parseGhOutput, repoFromEnv,
 } from './github.mjs';
 
 const ok = (data, headers = {}) => ({ status: 200, data, headers });
@@ -178,10 +178,6 @@ test('fetch transport: empty GITHUB_TOKEN throws; network failure is status 0', 
   assert.deepEqual(calls, [{ method: 'GET', path: '/x', status: 0 }]);
 });
 
-test('createClient picks the gh transport outside Actions without spawning', () => {
-  assert.equal(createClient({ env: {} }).transport, 'gh');
-});
-
 test('fixture: spec-style route keys with unsorted or unencoded queries match', async () => {
   const client = createFixtureClient({ 'GET /x?per_page=100&head=o:b': ok([1]) });
   assert.deepEqual(await client.paginate('/x', { query: { head: 'o:b' } }), [1]);
@@ -269,4 +265,25 @@ test('graphql returns {} when data is absent; exhausted fixture message', async 
   assert.deepEqual(await client.graphql('q'), {});
   await client.request('GET', '/a');
   await assert.rejects(client.request('GET', '/a'), (e) => e instanceof GitHubError && e.status === 0 && e.message === 'no fixture for GET /a (responses exhausted)');
+});
+
+test('createClient outside Actions without a token refuses and names token.mjs exec', () => {
+  const refusal = (error) => error instanceof GitHubError
+    && error.status === 0
+    && error.message.includes('token.mjs exec')
+    && !error.message.includes('\n');
+  assert.throws(() => createClient({ env: {} }), refusal);
+  assert.throws(() => createClient({ env: { GH_TOKEN: '' } }), refusal);
+  // gh is only spawned by a request; a synchronous throw leaves no client to send one.
+});
+
+test('createClient picks the gh transport outside Actions with GH_TOKEN, without spawning', () => {
+  assert.equal(createClient({ env: { GH_TOKEN: 'minted' } }).transport, 'gh');
+});
+
+test('currentRepo refuses without GH_TOKEN before it runs gh', async () => {
+  await assert.rejects(
+    currentRepo({}),
+    (error) => error instanceof GitHubError && error.message.includes('token.mjs exec'),
+  );
 });
