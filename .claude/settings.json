@@ -15,6 +15,7 @@
       "Bash(gh.exe)",
       "Bash(*gh.exe *)",
       "Bash(*/gh *)",
+      "Bash(*\\\\gh *)",
       "Bash(*token.mjs* exec -- gh auth*)",
       "Bash(*token.mjs* exec -- gh config set*)",
       "Bash(*token.mjs* exec -- gh alias set*)",

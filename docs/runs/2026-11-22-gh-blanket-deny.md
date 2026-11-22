@@ -71,6 +71,23 @@ $ echo token.mjs exec -- gh webhook --help     (denied, same text)
 
 The `echo` probes only print the command text, so they exercise the wrapped rules (which start with a wildcard) without risking a token print or an extension install.
 
+## Review round 2 probes (R7, R9)
+
+```
+$ echo --version | xargs gh
+Permission to use Bash with command xargs gh has been denied.
+$ node scripts/agent/token.mjs exec -- "C:\Program Files\GitHub CLI\gh" --version      (before the rule)
+gh version 2.102.0 (2026-09-30)
+$ node scripts/agent/token.mjs exec -- "C:\Program Files\GitHub CLI\gh" --version      (rule written *\gh *, still ran)
+gh version 2.102.0 (2026-09-30)
+$ node scripts/agent/token.mjs exec -- "C:\Program Files\GitHub CLI\gh" --version      (rule written *\\gh *)
+Permission to use Bash with command node scripts/agent/token.mjs exec -- "C:\Program Files\GitHub CLI\gh" --version has been denied.
+$ node scripts/agent/token.mjs exec -- gh pr view 230 --json number
+{"number":230}
+$ gh --version
+Permission to use Bash with command gh --version has been denied.
+```
+
 No `node --test` case can exercise harness rule matching, so there is no failing test first: the before and after probes stand in.
 
 ## Which wrapped denies stay (AC3)
@@ -111,6 +128,6 @@ $ git grep -n -E "node scripts/agent/(next|claim|resume|checkpoint|release|revie
 
 ## Gotchas
 
-- `Bash(*/gh *)` needs the `/` right before `gh` and `Bash(*gh.exe *)` needs `gh.exe`, so neither matches `token.mjs exec -- gh ...`. A command whose text contains `gh.exe` and a space is denied, even inside an `echo` or a heredoc; write such text with the Write or Edit tool.
-- Open cases, listed in spec 17 and 21: a case variant (`GH --version` ran at review round 1), `bash -c "gh ..."`, `sh -c`, `eval`, `xargs gh` (not probed), `GH_HOST`, an overridden `GH_CONFIG_DIR`. `env gh` and `command gh` are denied (probed above).
+- `Bash(*/gh *)` needs a `/` right before `gh`, `Bash(*\\gh *)` a backslash and `Bash(*gh.exe *)` needs `gh.exe`, so none matches `token.mjs exec -- gh ...`. The first backslash rule, `Bash(*\gh *)`, did not match: rule syntax needs the backslash escaped, and the JSON file spells it `"Bash(*\\\\gh *)"`. A command whose text contains `gh.exe` and a space is denied, even inside an `echo` or a heredoc; write such text with the Write or Edit tool.
+- Open cases, listed in spec 17 and 21: a case variant (`GH --version` ran at review round 1), `bash -c "gh ..."`, `sh -c`, `eval`, `GH_HOST`, an overridden `GH_CONFIG_DIR`. `env gh`, `command gh` and `xargs gh` are denied (probed above and in round 2).
 - Review round 1 R6 (`AGENTS.md:14` and the `groundwork-*` skills still describe bare `gh` as "forbidden" or "exits 4") is outside #229's Touches and goes to #224.
