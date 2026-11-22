@@ -3,6 +3,13 @@ name: release-please
 on:
   push:
     branches: [main]
+  # The merge queue pushes the squash commit to main a few seconds before GitHub
+  # marks the release PR merged, so the push run cannot see the merge (#238).
+  # The closed event fires once the PR is merged; the job `if` below keeps it
+  # to merged release-please PRs.
+  pull_request:
+    types: [closed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,8 +22,18 @@ concurrency:
 jobs:
   # Skipped until bootstrap sets GROUNDWORK_READY, so the run triggered by
   # template generation does not fail on a missing environment.
+  #
+  # A release commit is built only by the pull_request run: the push run would
+  # open a stray release PR before the merge shows. Other PR closes skip.
   release-please:
-    if: vars.GROUNDWORK_READY == 'true'
+    if: >-
+      vars.GROUNDWORK_READY == 'true' &&
+      (github.event_name != 'push' ||
+        !startsWith(github.event.head_commit.message, 'chore(main): release ')) &&
+      (github.event_name != 'pull_request' || (
+        github.event.pull_request.merged &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'release-please--')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: release
