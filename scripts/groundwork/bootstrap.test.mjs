@@ -444,7 +444,10 @@ test('an ours run whose setup-epic marker was planted by another login fails the
 // --- adopt (spec 14.4) ------------------------------------------------------------------------------------------
 
 const ADOPT_ARGS = { description: DESCRIPTION, adopt: true };
-const ADOPT_FILES = { ...RELEASE_FILES, '.github/CODEOWNERS': '* @wianvdm\n', LICENSE: 'MIT\n' };
+// #285 fills the kit CODEOWNERS from the release config's accounts.owner.
+const ADOPT_FILES = {
+  ...RELEASE_FILES, '.github/groundwork/config.json': JSON.stringify({ org: ORG, accounts: { owner: 'wianvdm' } }), '.github/CODEOWNERS': '* @wianvdm\n', LICENSE: 'MIT\n',
+};
 const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
 const releaseSha = (filePath) => releaseEntries(ADOPT_FILES).find((entry) => entry.path === filePath).sha;
 const blob = (filePath, sha) => ({ path: filePath, type: 'blob', sha });
