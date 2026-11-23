@@ -279,3 +279,10 @@ Bootstrap refuses `foreign`: an existing repository with no `kit-version.txt` th
   - the manifest-flow `localhost` redirect;
   - GitHub's handling of a CODEOWNERS owner without write access in a cloned org (E5);
   - that `gh repo create --source` keeps Actions enabled in a new org.
+
+## Follow-up epics
+
+Opened as proposed by #254 on 2026-11-23, following the owner's answers in #251 `## Decisions`. Where they differ from the recommendations above, the answers win: Q2 C (desk check, no second-org dry run) and Q4 C (existing-repo adoption inside the onboarding epic).
+
+- #258 Onboarding: portability, setup entry point and guide. Also carries the PR #255 round-2 review items.
+- #259 Architecture docs and triage.
