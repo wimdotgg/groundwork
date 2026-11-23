@@ -550,6 +550,11 @@ const PROJECT_CODEOWNERS = '/src/ @project-team\n';
 const KIT_CODEOWNERS = ADOPT_FILES['.github/CODEOWNERS'];
 
 /** An apply world on a clean foreign target: the kit blobs the merge posts come back with their release SHAs. */
+/** A project label the kit does not ship: the full sync deletes it, so only after the ref update. */
+const PROJECT_LABEL = { name: 'bug', color: 'd73a4a', description: 'Something is wrong' };
+const LABEL_EDITS = new Set(['PATCH', 'DELETE']);
+const labelEditsOf = (world) => writesOf(world).filter((call) => LABEL_EDITS.has(call.method) && call.path.startsWith(`${TARGET_PATH}/labels/`));
+
 function adoptApplyWorld(overrides = {}) {
   const { treeEntries, contents } = expectedTree(ADOPT_FILES);
   const merged = adoptTreeEntries({ treeEntries, contents, target: { tree: PROJECT_TREE, codeowners: PROJECT_CODEOWNERS } });
@@ -559,7 +564,8 @@ function adoptApplyWorld(overrides = {}) {
     args: ADOPT_ARGS,
     overrides: {
       ...foreignRoutes(),
-      [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, []), reply(200, LABELS)],
+      [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, [PROJECT_LABEL]), reply(200, [PROJECT_LABEL, ...LABELS]), reply(200, LABELS)],
+      [`DELETE ${TARGET_PATH}/labels/bug`]: reply(204),
       [`GET ${TARGET_PATH}/git/blobs/p4`]: reply(200, { content: base64(PROJECT_CODEOWNERS), encoding: 'base64' }),
       [`POST ${TARGET_PATH}/git/blobs`]: merged.filter((entry) => entry.sha).map((entry) => reply(201, { sha: entry.sha })),
       ...overrides,
@@ -588,6 +594,28 @@ test('#274 AC1 AC2 AC4 apply merges the kit over the target tree at the pinned h
   assert.equal(world.calls.some((call) => call.path === `/orgs/${ORG}/repos`), false);
 });
 
+test('#274 adopt creates the missing kit labels before the commit and updates or deletes project labels only after the ref update', async () => {
+  const world = adoptApplyWorld();
+  const result = await run(world.ctx, world.seams);
+  assert.equal(result.ok, true, result.summary);
+  assert.ok(result.summary.split('\n').includes('- labels (missing kit labels): 2 created'), result.summary);
+  const order = [`POST ${TARGET_PATH}/labels`, `POST ${TARGET_PATH}/git/commits`, `PATCH ${TARGET_PATH}/git/refs/heads/main`, `DELETE ${TARGET_PATH}/labels/bug`].map((line) => indexOfLine(world, line));
+  assert.ok(order.every((index) => index >= 0), order.join(','));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  const commit = order[1];
+  assert.deepEqual(world.calls.filter((call, index) => index < commit && call.method === 'POST' && call.path === `${TARGET_PATH}/labels`).length, 2);
+  assert.deepEqual(labelEditsOf(world).map(lineOf), [`DELETE ${TARGET_PATH}/labels/bug`]);
+});
+
+test('#274 a main that moves after the label create refuses the commit and leaves every project label unchanged', async () => {
+  const head = (sha) => reply(200, { object: { sha } });
+  const world = adoptApplyWorld({ [`GET ${TARGET_PATH}/git/ref/heads/main`]: [head('head-main'), head('head-main'), head('head-moved')] });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /main moved from head-main to head-moved after the adopt preflight; no commit was made/.test(error.message));
+  assert.ok(indexOfLine(world, `POST ${TARGET_PATH}/labels`) >= 0, 'the missing kit labels were created');
+  assert.deepEqual(labelEditsOf(world), []);
+  assert.deepEqual(writesOf(world).filter((call) => call.path.includes('/git/')), []);
+});
+
 test('#274 AC4 apply refuses before any write, label sync included, when main moved after the preflight read', async () => {
   const moved = [reply(200, { object: { sha: 'head-main' } }), reply(200, { object: { sha: 'head-moved' } })];
   const world = adoptApplyWorld({ [`GET ${TARGET_PATH}/git/ref/heads/main`]: moved });
@@ -598,6 +626,7 @@ test('#274 AC4 apply refuses before any write, label sync included, when main mo
 test('#274 a main that moves during the blob posts refuses the ref update with the same rerun advice', async () => {
   const world = adoptApplyWorld({ [`PATCH ${TARGET_PATH}/git/refs/heads/main`]: reply(422, { message: 'Update is not a fast forward' }) });
   await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /main moved during the commit; no ref update was made, rerun bootstrap/.test(error.message));
+  assert.deepEqual(labelEditsOf(world), []);
 });
 
 test('#274 the plan reports a license-like file as kept and a missing one as left to the repository owner', async () => {

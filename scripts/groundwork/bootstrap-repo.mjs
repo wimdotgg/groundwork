@@ -229,8 +229,24 @@ export async function commitAdoptTree({ client, org, repo, tag, pin, treeEntries
  */
 export async function requireMainHead({ client, org, repo, headSha }) {
   const head = await readMainHead({ client, org, repo });
-  if (head !== headSha) throw new SettingsError(`${org}/${repo} main moved from ${headSha} to ${head} after the adopt preflight; no write was made since, rerun bootstrap`);
+  if (head !== headSha) throw new SettingsError(`${org}/${repo} main moved from ${headSha} to ${head} after the adopt preflight; no commit was made, rerun bootstrap`);
   return head;
+}
+
+/**
+ * Spec 14.4: before the kit merge an adopted repository only gains the kit labels it lacks (Dependabot needs
+ * `dependencies`), so a refused commit leaves no project label changed or deleted.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string,
+ *   labels: Array<{ name: string, color: string, description: string }> }} options the kit labels
+ * @returns {Promise<number>} how many were created
+ */
+export async function createMissingLabels({ client, org, repo, labels }) {
+  const live = new Set((await client.paginate(repoPath(org, repo, '/labels'))).map((label) => normalizeLabel(label.name)));
+  const missing = labels.filter((label) => !live.has(normalizeLabel(label.name)));
+  for (const { name, color, description } of missing) {
+    await client.request('POST', repoPath(org, repo, '/labels'), { body: { name, color, description } });
+  }
+  return missing.length;
 }
 
 async function readMainHead({ client, org, repo }) {

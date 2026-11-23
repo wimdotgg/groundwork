@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { SettingsError, repoKind } from '../lib/settings.mjs';
 import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
-  commitAdoptTree, commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
+  commitAdoptTree, commitBootstrapTree, createMissingLabels, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
   readBlobTexts, readKitVersion, readReleaseTree, requireMainHead, resolveTagCommit,
 } from './bootstrap-repo.mjs';
 import { CODEOWNERS_PATH, adoptTreeEntries, buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
@@ -148,7 +148,7 @@ export async function plan({ client, org, controlRepo, request, config }) {
 }
 
 /** Any shape but a list of objects with a string name, unparsable JSON included, is one SettingsError, so `plan` reports a problem. */
-function kitLabelNames(kit) {
+function kitLabels(kit) {
   const problem = new SettingsError(`${LABELS_PATH} in the release tree is missing or not a label list`);
   let labels;
   try {
@@ -157,7 +157,7 @@ function kitLabelNames(kit) {
     throw problem;
   }
   if (!Array.isArray(labels) || !labels.every((label) => typeof label?.name === 'string')) throw problem;
-  return labels.map((label) => label.name);
+  return labels;
 }
 
 async function adoptionPlan({ client, org, controlRepo, request, config }) {
@@ -169,7 +169,7 @@ async function adoptionPlan({ client, org, controlRepo, request, config }) {
   const tag = await latestReleaseTag({ client, org, controlRepo });
   const kit = await readKit({ client, org, controlRepo, repo, description: args.description, tag });
   const { rows, empty, headSha, tree } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
-  const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabelNames(kit), empty, tree });
+  const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabels(kit).map((label) => label.name), empty, tree });
   const failing = rows.filter((row) => row.fail).length;
   // admin-run cuts each fact at 200 characters, so the outcome is its own fact and neither carries the target name.
   const outcome = failing > 0 ? 'Apply stops before any write' : 'If the target is still foreign when apply runs, apply merges the kit into main at the target head';
@@ -181,6 +181,24 @@ async function adoptionPlan({ client, org, controlRepo, request, config }) {
 
 /** @returns {string[]} the `- step: result` lines of an `applySections` summary */
 const stepLines = ({ summary }) => summary.split('\n').filter((line) => line.startsWith('- '));
+
+const commitLine = (kind, commit) => `- ${kind} commit: ${commit.created ? `pushed ${commit.sha}` : 'already on main'}`;
+
+/**
+ * Steps 4 and 5 of 14.2. An adopted repository gets only its missing kit labels before the kit merge; the full sync,
+ * which changes and deletes project labels for good, runs once the ref update landed (14.4).
+ */
+async function labelsAndCommit({ client, org, repo, source, sleep, sections }) {
+  const kit = { client, org, repo, tag: source.tag, treeEntries: source.treeEntries, blobs: source.blobs, sleep };
+  if (source.pin === undefined) {
+    const labels = stepLines(await sections(['labels']));
+    return [...labels, commitLine('bootstrap', await commitBootstrapTree(kit))];
+  }
+  await requireMainHead({ client, org, repo, headSha: source.pin.headSha });
+  const created = await createMissingLabels({ client, org, repo, labels: kitLabels(source) });
+  const commit = await commitAdoptTree({ ...kit, pin: source.pin });
+  return [`- labels (missing kit labels): ${created} created`, commitLine('adopt', commit), ...stepLines(await sections(['labels']))];
+}
 
 /** Owner decision on #167 (Q4): once the setup epic is accepted or closed, `apply-settings` is the repair path. */
 async function refuseAfterSetupAcceptance({ client, org, repo, adminBot }) {
@@ -200,12 +218,7 @@ async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
   const sections = (groups) => applySections(targetContext, groups, settingsDependencies);
   const lines = [];
 
-  // The label sync deletes project labels for good, so a moved main refuses before it (spec 14.4).
-  if (source.pin !== undefined) await requireMainHead({ client, org, repo, headSha: source.pin.headSha });
-  lines.push(...stepLines(await sections(['labels'])));
-  const kit = { client, org, repo, tag: source.tag, treeEntries: source.treeEntries, blobs: source.blobs, sleep };
-  const commit = source.pin === undefined ? await commitBootstrapTree(kit) : await commitAdoptTree({ ...kit, pin: source.pin });
-  lines.push(`- ${source.pin === undefined ? 'bootstrap' : 'adopt'} commit: ${commit.created ? `pushed ${commit.sha}` : 'already on main'}`);
+  lines.push(...await labelsAndCommit({ client, org, repo, source, sleep, sections }));
   for (const groups of [['settings'], ['rulesets'], ['variables']]) lines.push(...stepLines(await sections(groups)));
   const epic = await openSetupEpic({ client, org, repo, templates: source.templates, adminBot, sleep });
   lines.push(`- setup epic: #${epic.epic}, ${epic.created.length} issue(s) created`);
