@@ -14,19 +14,33 @@ permissions:
   contents: read
 
 jobs:
+  # A merged close runs on refs/pull/N/merge, which the `release` environment
+  # refuses (#247). This job only dispatches the workflow on main, where the
+  # release job below is admitted. Events sent with GITHUB_TOKEN start no run,
+  # except workflow_dispatch and repository_dispatch.
+  dispatch-on-main:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - run: gh workflow run release-please.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+
   # Skipped until bootstrap sets GROUNDWORK_READY, so a run before the
   # environment exists does not fail on it.
-  #
-  # Any merged same-repository PR runs the job, so release PRs are created and
-  # updated after ordinary merges; unmerged and fork closes skip.
   release-please:
     if: >-
       vars.GROUNDWORK_READY == 'true' &&
-      (github.event_name != 'pull_request' || (
-        github.event.pull_request.merged &&
-        github.event.pull_request.head.repo.full_name == github.repository))
-    # On the job, not the workflow, on the assumption that a skipped job never
-    # joins the group and so cannot replace the pending run that builds a release.
+      github.event_name == 'workflow_dispatch'
+    # On the job, not the workflow, so a close that skips never joins the group.
+    # Each closed run's own dispatch queues a real run last either way.
     concurrency:
       group: release-please
       cancel-in-progress: false
