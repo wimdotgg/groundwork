@@ -1,13 +1,13 @@
 # Phase 5 G6 release run 2026-11-22
 
-Issue #222, epic #169. Session 86a0f304-8103-4782-933e-8efd2bd8de52, `sonnet/claude-code`. Target: `wimdotgg/gw-acceptance`.
+Issue #222, epic #169. Session 86a0f304-8103-4782-933e-8efd2bd8de52, `sonnet/claude-code`. Target: `gw-acceptance` (owner `wimdotgg`). `gw-acceptance` is deleted by the owner once epic #242 closes (#242 Decisions), so this note is the record: every reference to it is a name, number, run ID or quoted value, not a link. `{owner}` in a path or quoted output stands for `wimdotgg`.
 
 ## Release (AC1)
 
-The owner login `wianvdm` merged [gw-acceptance#9](https://github.com/wimdotgg/gw-acceptance/pull/9) ("chore(main): release 0.1.0") at 2026-11-22T15:03:23Z through the merge queue. Merge commit `0bc07a5`.
+The owner login `wianvdm` merged gw-acceptance#9 ("chore(main): release 0.1.0") at 2026-11-22T15:03:23Z through the merge queue. Merge commit `0bc07a5`.
 
 - Tag `v0.1.0`: `GET git/ref/tags/v0.1.0` returns `0bc07a51f398b664f0c38be6fbc3823e711e69d5`.
-- Release: [v0.1.0](https://github.com/wimdotgg/gw-acceptance/releases/tag/v0.1.0), not a draft, published 15:09:24Z, author `wimdotgg-release[bot]`.
+- Release: gw-acceptance release v0.1.0, not a draft, published 15:09:24Z, author `wimdotgg-release[bot]`.
 
 ### Race
 
@@ -18,7 +18,7 @@ release-please run 45036123914 attempt 1 was created at 15:03:03Z, before the me
 One request, as sanctioned for #222 only (epic #169 Decision 2026-11-22). Agent App through the wrapper, body `{"ref":"refs/tags/v0.0.0-probe","sha":"0bc07a51f398b664f0c38be6fbc3823e711e69d5"}`:
 
 ```
-$ node scripts/agent/token.mjs exec -- gh api repos/wimdotgg/gw-acceptance/git/refs --input probe.json
+$ node scripts/agent/token.mjs exec -- gh api repos/{owner}/gw-acceptance/git/refs --input probe.json
 {"message":"Reference update failed","documentation_url":"https://docs.github.com/rest/git/refs#create-a-reference","status":"422"}
 gh: Reference update failed (HTTP 422)
 ```
