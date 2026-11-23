@@ -1,27 +1,35 @@
 # groundwork
 
-A solo human orchestrates, AI agents plan, implement, review and merge, and strict, mostly deterministic gates keep the output from becoming slop. This repository holds the kit that sets that up. Status: `0.x`.
+A template and rules kit for GitHub. AI agents plan, build, review and merge work. Deterministic gates (CI checks, rulesets, a merge queue) decide what lands. One human owner sets the goals and approves the risky steps. Status: `0.x`.
 
-It is three things in one public repository:
+## Who it is for
 
-1. **Template.** `bootstrap` creates new projects from the latest release. They start with every workflow, rule and agent convention in place.
-2. **Rules source.** The reusable CI workflows and agent scripts live here. Projects pin the workflows to a release tag's commit.
-3. **Control repo.** Admin operations (bootstrap, settings changes) run here, behind the owner's approval.
+A solo owner directing AI agents on GitHub:
 
-For one owner who works with agents on GitHub. Everything assumes a free GitHub organization and public repositories (spec D1, D2).
+- You work in a free GitHub organization with public repositories. Rulesets, the merge queue and CodeQL are free only there (spec D1, D2).
+- You want one issue per PR, agents that claim a task and hand it over, and gates that do not rely on an agent's word.
+- You run Node 24+ and an agent harness that reads [AGENTS.md](AGENTS.md).
 
-## How a project starts
+Usable from any organization, with a catch: the org, owner and App names live in `.github/groundwork/config.json`, but [docs/setup.md](docs/setup.md), `AGENTS.md` and the spec still use the `wimdotgg` values. Expect to swap them by hand.
 
-1. The agent requests `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs bootstrap --repo <name> --args '{"description":"..."}'`; the owner approves.
-2. Bootstrap pass 1 creates the repo, labels, settings and rulesets, writes the kit files from the release tag and opens a "Project setup" epic.
-3. The owner accepts the epic. Agents choose the stack, fill `scripts/verify` and write the project README.
-4. The agent requests `bootstrap-pass2`; the owner approves once. It enables CodeQL, and sets the deploy switch unless `config.json` says `"deploy": "none"`.
+## What you get
 
-Agents work one issue per PR through the worker loop in [AGENTS.md](AGENTS.md); the merge queue lands the PRs.
+A new project starts with the CI workflows, rulesets, labels and agent scripts already in place. Agents work through a fixed loop (`next`, `claim`, build, `checkpoint`, ready, enqueue), and the merge queue lands the PRs. You step in to accept epics, approve admin runs and merge releases.
 
-## Staying current
+## Get started
 
-A project updates to a newer release with a Chore issue and `node scripts/agent/token.mjs exec -- node scripts/kit-update.mjs <vX.Y.Z>` on its `issue/N` branch (spec 13.1). The kit also ships the `deploy.yml` workflow, the `script` and `selftest` admin ops and `admin-ops/`.
+Setup is manual today. There is no one-command installer.
+
+1. Once per organization: create the org, three GitHub Apps (agent, admin, release) and the agent key, and put this repository in the org as the control repo. Follow part 1 of [docs/setup.md](docs/setup.md), about 20 minutes in the browser.
+2. For each project: an agent requests a bootstrap, you approve the run in the browser, then you accept the "Project setup" epic.
+
+```
+node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs bootstrap --repo <name> --args '{"description":"..."}'
+```
+
+Part 2 of `docs/setup.md` has the full per-project path, including pass 2 and updating a project with `node scripts/agent/token.mjs exec -- node scripts/kit-update.mjs <vX.Y.Z>`.
+
+Easier setup and portability to other organizations are planned, see epic #251.
 
 ## Docs
 
