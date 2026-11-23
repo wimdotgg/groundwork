@@ -314,6 +314,7 @@ test('a mention that is not a Reported in line under Context does not link', asy
     143: taskBody('## Context', '<!-- Reported in #143 -->'),
     144: '## Context\n```\nReported in #144\n```\n',
     145: 'See #145 for details.',
+    146: '### Context\n\nnone\n\n### Risk\nReported in #146\n',
   };
   const numbers = Object.keys(bodies).map(Number);
   const timelines = Object.fromEntries(numbers.map((number) => [number, [mention({ number: 903, body: bodies[number] })]]));
