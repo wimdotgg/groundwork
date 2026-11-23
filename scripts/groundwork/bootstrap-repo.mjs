@@ -221,8 +221,6 @@ const ADOPT_KEPT_PATHS = new Set(['README.md', 'LICENSE', '.github/CODEOWNERS'])
 const LIST_BUDGET = 120;
 const NOT_CHECKED_EMPTY = 'not checked: empty repository';
 
-/** @typedef {{ name: string, fail: boolean, detail: string }} GapRow */
-
 const gapRow = (name, fail, detail) => ({ name, fail, detail });
 
 function listNames(names) {
@@ -234,10 +232,7 @@ function listNames(names) {
   return `${listed}${shown > 0 ? ' ' : ''}and ${names.length - shown} more`;
 }
 
-function gitBlobSha(text) {
-  const bytes = Buffer.from(text, 'utf8');
-  return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
-}
+const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
 
 async function readMainProtection({ client, org, repo }) {
   const { status, data } = await client.request('GET', repoPath(org, repo, `/branches/${DEFAULT_BRANCH}`), { okStatuses: [404] });
@@ -275,12 +270,7 @@ async function readCollisions({ client, org, repo, branch, kitEntries }) {
   return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha };
 }
 
-/**
- * The failing rows of spec 14.4, from GET calls only.
- * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string,
- *   kitEntries: Array<{ path: string, sha?: string, content?: string }> }} options `kitEntries` is the built kit tree
- * @returns {Promise<{ rows: GapRow[], empty: boolean, headSha?: string }>} `headSha` is the commit the collisions were read at
- */
+/** The failing rows of spec 14.4 against the built kit tree, from GET calls; `headSha` is the commit the tree was read at. */
 export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
   const { data: repository } = await client.request('GET', repoPath(org, repo, ''));
   const branch = repository.default_branch;
@@ -297,11 +287,7 @@ export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
   return { rows: [...rows, row], empty, headSha };
 }
 
-/**
- * The reported rows of spec 14.4: they inform the owner and never fail. Merge settings and secret names are not read.
- * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string, kitLabels: string[], empty: boolean }} options
- * @returns {Promise<Array<{ name: string, detail: string }>>}
- */
+/** The reported rows of spec 14.4, which never fail; merge settings and secret names are not read. */
 export async function readAdoptionReport({ client, org, repo, kitLabels, empty }) {
   const kept = new Set(kitLabels.map(normalizeLabel));
   const labels = (await client.paginate(repoPath(org, repo, '/labels'))).map((label) => label.name).filter((name) => !kept.has(normalizeLabel(name)));

@@ -314,7 +314,7 @@ export async function plan(env, overrides = {}) {
   return { exitCode: 0, summary, outputs: details.outputs };
 }
 
-/** An op that must show the owner more than its inputs (the `script` file, the `bootstrap` adopt preflight) exports `plan`; a refusal is its `problem`. */
+/** An op that must show the owner more than its inputs (the `script` file) exports `plan`; a refusal is its `problem`. */
 async function planDetails({ createClient: makeClient, env, config, request }) {
   if (typeof request.module.plan !== 'function') return {};
   const { org, controlRepo } = config;

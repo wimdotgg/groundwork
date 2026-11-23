@@ -49,13 +49,14 @@ const STOPPED_AFTER_PREFLIGHT = 'adopt: stopped after the preflight: the kit mer
  */
 export function validateArgs(args) {
   if (args === null || typeof args !== 'object' || Array.isArray(args)) return ['args must be a JSON object'];
-  const problems = Object.keys(args).filter((key) => !ALLOWED_KEYS.has(key)).map((key) => `unknown argument "${key}"`);
-  if (Object.hasOwn(args, 'adopt') && args.adopt !== true) problems.push('adopt must be true when given');
+  const unknown = Object.keys(args).filter((key) => !ALLOWED_KEYS.has(key)).map((key) => `unknown argument "${key}"`);
+  // An adopt key with any value but true is reported beside the unknown keys.
+  if (Object.hasOwn(args, 'adopt') && args.adopt !== true) unknown.push('adopt must be true when given');
   const { description } = args;
-  if (typeof description !== 'string' || description === '') return [...problems, 'description is required: a non-empty string'];
-  if (description.length > DESCRIPTION_MAX_LENGTH) return [...problems, `description must be at most ${DESCRIPTION_MAX_LENGTH} characters`];
-  if (!PRINTABLE_ASCII.test(description)) return [...problems, 'description must be printable ASCII'];
-  return problems;
+  if (typeof description !== 'string' || description === '') return [...unknown, 'description is required: a non-empty string'];
+  if (description.length > DESCRIPTION_MAX_LENGTH) return [...unknown, `description must be at most ${DESCRIPTION_MAX_LENGTH} characters`];
+  if (!PRINTABLE_ASCII.test(description)) return [...unknown, 'description must be printable ASCII'];
+  return unknown;
 }
 
 /** @param {Record<string, string|undefined>} env the dispatch input, re-validated because `ctx` carries no args */
@@ -120,23 +121,17 @@ const gapLine = ({ name, fail, detail }) => `${fail ? 'FAIL' : 'ok'} ${name}: ${
 
 /** Until the kit merge ships, an adopt run ends here: it refuses on a failing row and otherwise stops without a write. */
 function stopAfterPreflight({ heading, source, log }) {
-  // One log line per row: the error names the failing rows, the log keeps each row's detail whole.
   for (const row of source.gaps) log(gapLine(row));
   const failing = source.gaps.filter((row) => row.fail);
   if (failing.length > 0) throw new SettingsError(`adopt preflight failed: ${failing.map((row) => row.name).join(', ')}`);
-  const lines = [
-    '- inspect: foreign', `- release tag: ${source.tag}`, `- target head: ${source.headSha}`,
-    ...source.gaps.map((row) => `- ${gapLine(row)}`), `- ${STOPPED_AFTER_PREFLIGHT}`,
-  ];
+  const rows = source.gaps.map((row) => `- ${gapLine(row)}`);
+  const lines = ['- inspect: foreign', `- release tag: ${source.tag}`, `- target head: ${source.headSha}`, ...rows, `- ${STOPPED_AFTER_PREFLIGHT}`];
   return { ok: false, summary: [heading, '', ...lines].join('\n') };
 }
 
 /**
- * Spec 14.4 preflight, printed in admin-run `plan` so the owner reads it before approving. GET calls only, with the
- * `plan` job's token; failing rows do not fail `plan`, because `apply` repeats them and stops.
- * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string,
- *   request: { targetRepo: string, args: object }, config: object }} options
- * @returns {Promise<{ facts?: string[], problem?: string }>}
+ * Spec 14.4 preflight, printed in admin-run `plan` before the owner approves. GET calls only, with the `plan` job's
+ * token; failing rows do not fail `plan`, because `apply` repeats them and stops.
  */
 export async function plan({ client, org, controlRepo, request, config }) {
   if (request.args.adopt !== true) return {};
@@ -149,13 +144,9 @@ export async function plan({ client, org, controlRepo, request, config }) {
 }
 
 function kitLabelNames(kit) {
-  const text = settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH];
-  if (text === undefined) throw new SettingsError(`the release tree has no ${LABELS_PATH}`);
-  try {
-    return JSON.parse(text).labels.map((label) => label.name);
-  } catch {
-    throw new SettingsError(`${LABELS_PATH} in the release tree is not a label list`);
-  }
+  const labels = JSON.parse(settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH] ?? 'null')?.labels;
+  if (!Array.isArray(labels)) throw new SettingsError(`${LABELS_PATH} in the release tree is missing or not a label list`);
+  return labels.map((label) => label.name);
 }
 
 async function adoptionPlan({ client, org, controlRepo, request, config }) {
@@ -169,16 +160,10 @@ async function adoptionPlan({ client, org, controlRepo, request, config }) {
   const { rows, empty } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
   const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabelNames(kit), empty });
   const failing = rows.filter((row) => row.fail).length;
-  const outcome = failing > 0
-    ? 'apply stops before any write'
+  const outcome = failing > 0 ? 'apply stops before any write'
     : 'if the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships';
-  return {
-    facts: [
-      `Adoption preflight of ${org}/${repo} against ${tag}: ${failing} failing row(s); ${outcome}`,
-      ...rows.map(gapLine),
-      ...report.map(({ name, detail }) => `report ${name}: ${detail}`),
-    ],
-  };
+  const heading = `Adoption preflight of ${org}/${repo} against ${tag}: ${failing} failing row(s); ${outcome}`;
+  return { facts: [heading, ...rows.map(gapLine), ...report.map(({ name, detail }) => `report ${name}: ${detail}`)] };
 }
 
 /** @returns {string[]} the `- step: result` lines of an `applySections` summary */

@@ -475,9 +475,9 @@ function foreignRoutes({ repository = {}, empty = false, branch = { protected: f
 
 const adoptWorld = (gaps, state = 'foreign') => createWorld({ state, files: ADOPT_FILES, args: ADOPT_ARGS, overrides: state === 'foreign' ? foreignRoutes(gaps) : {} });
 
-function planCall({ state = 'foreign', gaps, args = ADOPT_ARGS } = {}) {
+function planCall({ state = 'foreign', gaps, args = ADOPT_ARGS, files = ADOPT_FILES, overrides = {} } = {}) {
   const calls = [];
-  const routes = { ...targetRoutes(state, ADOPT_FILES), ...controlRoutes(ADOPT_FILES), ...(state === 'foreign' ? foreignRoutes(gaps) : {}) };
+  const routes = { ...targetRoutes(state, files), ...controlRoutes(files), ...(state === 'foreign' ? foreignRoutes(gaps) : {}), ...overrides };
   const client = createFixtureClient(routes, { onCall: ({ method, path: callPath }) => calls.push(`${method} ${urlKey(callPath)}`) });
   const request = { op: OP, targetRepo: REPO, args };
   return { calls, result: plan({ client, org: ORG, controlRepo: CONTROL, request, config: CONFIG }) };
@@ -541,10 +541,10 @@ test('AC4 apply with the opt-in and no failing row ends after the preflight with
   const result = await run(world.ctx, world.seams);
   assert.equal(result.ok, false);
   const lines = result.summary.split('\n');
-  for (const line of ['- inspect: foreign', '- ok collisions: none', '- ok protected main: not set']) assert.ok(lines.includes(line), line);
+  for (const line of ['- inspect: foreign', '- target head: head-main', '- ok collisions: none', '- ok protected main: not set']) assert.ok(lines.includes(line), line);
+  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/head-main`), 'the tree is read at the head commit SHA');
   assert.match(result.summary, /stopped after the preflight: the kit merge \(#274\) is not built, so no write was made/);
   assert.deepEqual(writesOf(world), []);
-  assert.deepEqual(world.bodies, []);
   assert.deepEqual(world.written, []);
   assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
   assert.equal(world.calls.some((call) => /\/(labels|issues|environments)$/.test(call.path)), false);
@@ -568,19 +568,9 @@ test('adopt on an ours target resumes as usual', async () => {
   assert.equal((await run(world.ctx, world.seams)).ok, true);
 });
 
-test('AC4 the preflight reads the tree by the head commit SHA and apply reports that SHA', async () => {
-  const world = adoptWorld();
-  const { summary } = await run(world.ctx, world.seams);
-  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/head-main`));
-  assert.ok(summary.split('\n').includes('- target head: head-main'));
-});
-
 test('AC2 a long row keeps its count within the rendered fact length', async () => {
   const labels = Array.from({ length: 30 }, (_, index) => ({ name: `project-label-number-${index}` }));
-  const client = createFixtureClient({
-    ...targetRoutes('foreign', ADOPT_FILES), ...controlRoutes(ADOPT_FILES), ...foreignRoutes(), [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, labels),
-  });
-  const { facts } = await plan({ client, org: ORG, controlRepo: CONTROL, request: { op: OP, targetRepo: REPO, args: ADOPT_ARGS }, config: CONFIG });
+  const { facts } = await planCall({ overrides: { [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, labels) } }).result;
   const row = facts.find((fact) => fact.startsWith('report labels the sync deletes: '));
   assert.ok(row.length <= 200, row);
   assert.match(row, / and \d+ more$/);
@@ -589,8 +579,6 @@ test('AC2 a long row keeps its count within the rendered fact length', async () 
 test('plan turns a broken release tree into a problem instead of a crash', async () => {
   const files = { ...ADOPT_FILES };
   delete files['.github/groundwork/labels.json'];
-  const routes = { ...targetRoutes('foreign', files), ...controlRoutes(files), ...foreignRoutes() };
-  const client = createFixtureClient(routes);
-  const { problem } = await plan({ client, org: ORG, controlRepo: CONTROL, request: { op: OP, targetRepo: REPO, args: ADOPT_ARGS }, config: CONFIG });
+  const { problem } = await planCall({ files }).result;
   assert.match(problem, /labels\.json/);
 });
