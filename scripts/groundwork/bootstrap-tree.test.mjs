@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { SettingsError } from '../lib/settings.mjs';
+import { KIT_EXCLUDED_PATHS, isKitPath } from '../kit-update.mjs';
 import {
   CONTROL_PATHS,
   KIT_VERSION_PATH,
@@ -371,4 +372,11 @@ test('#274 AC2: a target without README.md, LICENSE or CODEOWNERS gets the kit f
 test('#274 AC2: a target CODEOWNERS without its text is a SettingsError, not a silent replace', () => {
   const { treeEntries, contents } = adoptFixture();
   assert.throws(() => adoptTreeEntries({ treeEntries, contents, target: { tree: EXISTING_TREE } }), (error) => error instanceof SettingsError && /\.github\/CODEOWNERS/.test(error.message));
+});
+
+// Lives here, not in kit-update.test.mjs: scripts/groundwork/ never ships to projects, and that test does.
+test('#290: no CONTROL_PATHS entry is a kit path, and every KIT_EXCLUDED_PATHS entry is a control path', () => {
+  assert.ok(KIT_EXCLUDED_PATHS.every((excluded) => CONTROL_PATHS.includes(excluded)));
+  const leaking = CONTROL_PATHS.filter((entry) => isKitPath(entry.endsWith('/') ? `${entry}probe` : entry));
+  assert.deepEqual(leaking, []);
 });
