@@ -11,6 +11,7 @@ import {
 } from './settings.mjs';
 
 const REAL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const CONFIG_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'config-root');
 const CONFIG = {
   controlRepo: 'groundwork',
   accounts: { owner: 'wianvdm', agent: 'wimdotgg-agent[bot]' },
@@ -171,7 +172,7 @@ test('loadDesiredState rejects a placeholder outside bypass actor ids', () => as
 test('loadDesiredState rejects a missing settings file', () => assertLoadFails((files) => { delete files['settings.json']; }, /file not found/));
 
 test('resolvePlaceholders resolves an app id through the fixture client and copies', async () => {
-  const config = await loadConfig({ root: REAL_ROOT });
+  const config = await loadConfig({ root: CONFIG_ROOT });
   const client = createFixtureClient({ 'GET /apps/wimdotgg-release': { status: 200, data: { id: 4242 } } });
   const ruleset = { name: 'x', bypass_actors: [{ actor_type: 'Integration', actor_id: '{{app-id:release}}', bypass_mode: 'always' }] };
   const resolved = await resolvePlaceholders(ruleset, { client, config });

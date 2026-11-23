@@ -10,7 +10,7 @@ A solo owner directing AI agents on GitHub:
 - You want one issue per PR, agents that claim a task and hand it over, and gates that do not rely on an agent's word.
 - You run Node 24+ and Claude Code, on Windows, macOS or Linux. Other harnesses can follow [AGENTS.md](AGENTS.md) but lose the hooks and the client-side separation from your own GitHub login; only Windows has been run so far.
 
-Built to run from any organization, tested only in `wimdotgg`. The org, owner and App names live in `.github/groundwork/config.json`, but `.github/CODEOWNERS`, [docs/setup.md](docs/setup.md), `AGENTS.md`, the spec and the test fixtures still use the `wimdotgg` and `wianvdm` values. Swap them by hand: after a config-only swap 108 tests fail, and a CODEOWNERS that still names `@wianvdm` is expected to let protected paths merge without your review.
+Built to run from any organization, tested only in `wimdotgg`. The org, owner and App names live in `.github/groundwork/config.json`, but `.github/CODEOWNERS`, [docs/setup.md](docs/setup.md), `AGENTS.md` and the spec still use the `wimdotgg` and `wianvdm` values. Swap them by hand. The tests and their fixtures carry those names as frozen example data and read a frozen copy of the config, so a config swap leaves them green. A CODEOWNERS that still names `@wianvdm` is expected to let protected paths merge without your review.
 
 ## What you get
 
