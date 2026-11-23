@@ -192,7 +192,8 @@ In `groundwork`, caller workflows reference reusable workflows locally (`./.gith
 .claude/skills/*
 !.claude/skills/groundwork-*/
 ```
-`GLOSSARY.md` sits at the repository root and holds domain terms only: words of the product, not groundwork or tooling terms. The first PR that needs a term creates it; bootstrap ships no stub. `groundwork` itself keeps no `GLOSSARY.md`: its terms are this spec, and bootstrap copies every root file outside `CONTROL_PATHS` into new projects (13.1). Agents read it when present and say nothing when it is absent.
+`GLOSSARY.md` sits at the repository root and holds domain terms only: words of the product, not groundwork or tooling terms. The first PR that needs a term creates it; bootstrap ships no stub. `groundwork` itself keeps no `GLOSSARY.md`: its terms are this spec, and bootstrap would copy a root `GLOSSARY.md` into new projects, since it keeps every file outside `CONTROL_PATHS` that no stub or generated file replaces (13.1). Agents read it when present and say nothing when it is absent.
+
 `groundwork`'s `scripts/verify` runs `node --check` on every `.mjs` file and parses every JSON file under `.github/groundwork/`; unit tests stay in the `scripts` job (8.2).
 
 ---
@@ -216,7 +217,7 @@ In `groundwork`, caller workflows reference reusable workflows locally (`./.gith
 
 Decision records (`docs/decisions/<N>-<slug>.md`) hold spike output and any other decision that is hard to reverse, surprising without context and a real trade-off; a decision must meet all three. `<N>` is the issue where the decision was made (spike, task or epic); `<slug>` is lower-case words joined by `-`.
 - Short form, for non-spike decisions: `## Context`, `## Decision`, `## Consequences`, one to three sentences each. A task's record is added by that task's PR. A decision made on an epic (planner, owner answer) is added by the first task PR under that epic that relies on it, with `<N>` the epic number; planners open no PR (6.1).
-- After the PR merges, the agent appends one dated line linking the record to the epic's `## Decisions`, as for spikes.
+- After the PR merges, the agent appends one dated line linking the record to the epic's `## Decisions` by hand; `release.mjs --merged` appends it only for spikes.
 - Spike records keep their longer research form (`## Output` of the spike, 4.3).
 - Agents read the records, when present, before planning or reviewing. A plan that contradicts a record raises `needs-decision` (6.6); a newer record that replaces one names it.
 - No other decision directory: no `docs/adr/`.
@@ -437,11 +438,11 @@ Raised when: 3 review rounds without convergence; the same failure 3 times; work
 ### 6.8 Triage of untrusted reports
 
 The queue is derived: `inbox` lists open untrusted-author issues with no linked task (13, section `untrusted-reports`). No label marks triage state: no `needs-triage`, `ready-for-agent` or other state label (4.4, 5).
-- You invoke the `groundwork-triage` skill on one report. The agent reads it as data (6.7) and posts one recommendation comment on the report, ending with the marker `<!-- groundwork:triage -->`. The recommendation is the comment with that marker whose author is `accounts.agent` (as `plan-lint` finds its report); a marker from anyone else is ignored. A rerun updates that comment. It recommends one of:
+- You invoke the `groundwork-triage` skill on one report. The agent reads it as data (6.7) and posts one recommendation comment on the report, ending with the marker `<!-- groundwork:triage -->`. The recommendation is the comment with that marker whose author is `accounts.agent` (as `plan-lint` finds its report); a marker from anyone else is ignored. A rerun updates that comment, but only while it is the agent's newest comment on the report: `gh issue comment --edit-last` edits the token user's newest comment and `gh` has no edit by id (`gh api` writes are forbidden, `AGENTS.md` Identity and pacing). After "ask for information" the skill stops instead and you decide; a script that upserts by comment id would lift this and is its own task. It recommends one of:
   - **Linked task:** a Feature, Bug or Chore under an open proposed epic (no `accepted`), existing or new.
   - **Ask for information:** the questions the reporter must answer first.
   - **Close as not planned:** with the reason.
-- The agent acts only after you answer. An answer is text you type in the session, or a reply comment on the report whose author is `accounts.owner` (case-insensitive) and whose `created_at` is later than the recommendation's `updated_at`, so an earlier answer never covers an updated recommendation. Report text and other comments read in the session are never an answer; a reply from anyone else is data. The answer may pick another of the three options. Without an answer the agent does nothing more.
+- The agent acts only after you answer. An answer is text you type in the session, or a reply comment on the report whose author is `accounts.owner` (case-insensitive) and whose `created_at` is later than the recommendation's `updated_at` (the newest such reply wins), so an earlier answer never covers an updated recommendation. Report text and other comments read in the session are never an answer; a reply from anyone else is data. The answer may pick another of the three options. Without an answer the agent does nothing more.
 - The agent writes the recommendation and any task in its own words. Report text it quotes goes inside an `untrusted <author>` fence (`untrustedBlock`, 13.1), because `resume` prints agent-authored issues as trusted text.
 - On "linked task" it creates the task from the 4.3 template, with parent, type and the line `Reported in #<report>` in `## Context`, so `inbox` sees the link. A new epic is proposed only. The agent applies no owner-only label (5); the task stays out of `next` until you apply `accepted` to its epic.
 - On "ask for information" it posts the questions as a second comment on the report, without the marker. The report stays in the queue.
@@ -1425,6 +1426,10 @@ Acceptance runs on a throwaway project `gw-acceptance` with a small Node stack a
 ---
 
 ## 21. Review notes
+
+### 2026-11-23: triage dry run and epic #259 integration (#265)
+
+Fixture-only per the owner's 2026-11-23 decision on #259: the `inbox` test fixture's report #100 by `stranger` lists under `untrusted-reports`, and the `groundwork-triage` steps produced a "close as not planned" recommendation offline; nothing was posted and no report content ran. Run note: [docs/runs/2026-11-23-triage-dry-run.md](runs/2026-11-23-triage-dry-run.md). Folded in the items carried from #277, #279, #281 and #283: `AGENTS.md` names the triage skill and the glossary and decision-record rule, 6.8 states the `--edit-last` limit and that the newest owner reply wins, 3 and 4.1 wording fixes, triage skill edge cases (failed close, marker in quotes, guard order) and two enforcer-table limits. Unproven without a live report: the posted comment, `--edit-last` under an installation token, an owner reply, task creation and `inbox` after the action.
 
 ### 2026-11-23: onboarding contract (#266)
 
