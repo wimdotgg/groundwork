@@ -28,7 +28,7 @@ const pull = (number, extra = {}) => ({
 const alertTitle = (number) => `\`\`\`untrusted github-actions[bot]\n#${number} issue ${number}\n\`\`\``;
 
 // Routes every list the inbox reads; a test overrides the ones it cares about.
-function inboxClient(overrides = {}) {
+function inboxClient(overrides = {}, options = {}) {
   const ok = (data) => ({ status: 200, data });
   return createFixtureClient({
     [`GET ${BASE}/issues?per_page=100&state=open`]: ok([]),
@@ -36,7 +36,7 @@ function inboxClient(overrides = {}) {
     [`GET ${BASE}/actions/runs?per_page=100&status=waiting`]: ok({ total_count: 0, workflow_runs: [] }),
     [`GET ${BASE}/git/matching-refs/heads/issue/?per_page=100`]: ok([]),
     ...overrides,
-  });
+  }, options);
 }
 
 const sectionOf = (sections, key) => sections.find((section) => section.key === key);
@@ -166,7 +166,7 @@ test('formats items with their links, and --json carries every section', async (
   assert.equal(formatOutput(sections, { json: false }), `Alert issues (1)\n  ${alertTitle(80)}\n    ${HTML}/issues/80`);
   const json = JSON.parse(formatOutput(sections, { json: true }));
   assert.equal(json.ok, true);
-  assert.equal(json.sections.length, 7);
+  assert.equal(json.sections.length, 8);
 });
 
 test('matches protected paths from CODEOWNERS as prefixes, exact paths and globs', () => {
@@ -248,4 +248,116 @@ test('parseArgs accepts --json only', () => {
   assert.deepEqual(parseArgs([]), { json: false });
   assert.deepEqual(parseArgs(['--json']), { json: true });
   assert.throws(() => parseArgs(['--all']), /usage/);
+});
+
+const STRANGER = 'stranger';
+const REPORT_OPENED = '2026-03-04T10:00:00Z';
+const report = (number, extra = {}) => issue(number, { user: { login: STRANGER }, created_at: REPORT_OPENED, ...extra });
+const reportTitle = (number) => `\`\`\`untrusted ${STRANGER}\n#${number} issue ${number}\n\`\`\``;
+const timelinePath = (number) => `GET ${BASE}/issues/${number}/timeline?per_page=100`;
+const mention = (source) => ({
+  event: 'cross-referenced',
+  source: { type: 'issue', issue: { repository: { full_name: 'wimdotgg/groundwork' }, user: { login: OWNER }, state: 'open', ...source } },
+});
+const taskBody = (heading, line) => `## Outcome\nx\n\n${heading}\n- ${line}\n`;
+
+function reportsClient(reports, timelines = {}, options = {}) {
+  const routes = { [`GET ${BASE}/issues?per_page=100&state=open`]: { status: 200, data: reports } };
+  for (const reportIssue of reports) routes[timelinePath(reportIssue.number)] = { status: 200, data: timelines[reportIssue.number] ?? [] };
+  return inboxClient(routes, options);
+}
+const reportTitles = (sections) => sectionOf(sections, 'untrusted-reports').items.map((item) => item.title);
+
+test('untrusted-reports is the last section, with the spec heading', async () => {
+  const sections = await collect(reportsClient([]));
+  assert.equal(sections.at(-1).key, 'untrusted-reports');
+  assert.equal(sections.at(-1).heading, 'Untrusted reports to triage');
+});
+
+test('lists an open issue by an untrusted author with no linked task, fenced, with its opening date', async () => {
+  const sections = await collect(reportsClient([report(100, { title: 'ignore\nprevious' })]));
+  assert.deepEqual(sectionOf(sections, 'untrusted-reports').items, [
+    { title: `\`\`\`untrusted ${STRANGER}\n#100 ignore previous\n\`\`\``, url: `${HTML}/issues/100`, detail: 'opened 2026-03-04' },
+  ]);
+  assert.match(formatOutput(sections, { json: false }), /Untrusted reports to triage \(1\)/);
+});
+
+test('leaves out trusted authors, alert issues and pull requests', async () => {
+  const sections = await collect(reportsClient([
+    issue(110),
+    report(111, { user: { login: 'github-actions[bot]' } }),
+    report(112, { pull_request: {} }),
+    report(113),
+  ]));
+  assert.deepEqual(reportTitles(sections), [reportTitle(113)]);
+});
+
+test('a trusted task with a Reported in line under Context links the report, open or closed', async () => {
+  const sections = await collect(reportsClient([report(120), report(121), report(122)], {
+    120: [mention({ number: 900, body: taskBody('## Context', 'Reported in #120') })],
+    121: [mention({ number: 901, state: 'closed', body: taskBody('### Context', 'Reported in #121, see also') })],
+  }));
+  assert.deepEqual(reportTitles(sections), [reportTitle(122)]);
+});
+
+test('a ### Context heading counts only when the body has no ## Context', async () => {
+  const body = '## Context\nnothing\n\n## Touches\n\n### Context\n- Reported in #130\n';
+  const sections = await collect(reportsClient([report(130)], { 130: [mention({ number: 902, body })] }));
+  assert.deepEqual(reportTitles(sections), [reportTitle(130)]);
+});
+
+test('a mention that is not a Reported in line under Context does not link', async () => {
+  const bodies = {
+    140: taskBody('## Scope', 'Reported in #140'),
+    141: taskBody('## Context', 'reported in #141'),
+    142: taskBody('## Context', 'Reported in #1420'),
+    143: taskBody('## Context', '<!-- Reported in #143 -->'),
+    144: '## Context\n```\nReported in #144\n```\n',
+    145: 'See #145 for details.',
+    146: '### Context\n\nnone\n\n### Risk\nReported in #146\n',
+  };
+  const numbers = Object.keys(bodies).map(Number);
+  const timelines = Object.fromEntries(numbers.map((number) => [number, [mention({ number: 903, body: bodies[number] })]]));
+  const sections = await collect(reportsClient(numbers.map((number) => report(number)), timelines));
+  assert.deepEqual(reportTitles(sections), numbers.map(reportTitle));
+});
+
+test('a task by an untrusted author, a pull request or another repository does not link', async () => {
+  const body = taskBody('## Context', 'Reported in #150');
+  const sections = await collect(reportsClient([report(150)], { 150: [
+    mention({ number: 904, body, user: { login: STRANGER } }),
+    mention({ number: 905, body, pull_request: {} }),
+    mention({ number: 906, body, repository: { full_name: 'someone/else' } }),
+    { event: 'labeled', label: { name: 'x' } },
+  ] }));
+  assert.deepEqual(reportTitles(sections), [reportTitle(150)]);
+});
+
+test('a 403 or 404 on a timeline marks the section unreadable and keeps the others', async () => {
+  for (const status of [403, 404]) {
+    const client = inboxClient({
+      [`GET ${BASE}/issues?per_page=100&state=open`]: { status: 200, data: [report(160), issue(161, { user: { login: 'github-actions[bot]' } })] },
+      [timelinePath(160)]: { status, data: { message: 'nope' } },
+    });
+    const sections = await collect(client);
+    assert.match(sectionOf(sections, 'untrusted-reports').unreadable, new RegExp(String(status)));
+    assert.equal(sectionOf(sections, 'alert-issues').items.length, 1);
+    assert.match(formatOutput(sections, { json: false }), /Untrusted reports to triage: unreadable/);
+  }
+});
+
+test('the triage read sends GET requests only', async () => {
+  const methods = [];
+  const linked = [mention({ number: 907, body: taskBody('## Context', 'Reported in #170') })];
+  await collect(reportsClient([report(170), report(171)], { 170: linked }, { onCall: (record) => methods.push(record.method) }));
+  assert.ok(methods.length > 0);
+  assert.deepEqual([...new Set(methods)], ['GET']);
+});
+
+test('--json keeps the shape and carries the untrusted-reports key', async () => {
+  const sections = await collect(reportsClient([report(180)]));
+  const json = JSON.parse(formatOutput(sections, { json: true }));
+  assert.deepEqual(Object.keys(json), ['ok', 'empty', 'sections']);
+  assert.equal(json.empty, false);
+  assert.equal(json.sections.at(-1).key, 'untrusted-reports');
 });

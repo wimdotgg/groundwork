@@ -3,6 +3,7 @@ import path from 'node:path';
 import { GitHubError, apiPath, createClient, currentRepo } from '../lib/github.mjs';
 import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { deriveStatus, loadIssueFacts } from '../lib/issue-model.mjs';
+import { parseSections, stripCommentsAndFences } from '../lib/markdown.mjs';
 import { isTrustedAuthor, normalizeLabel, sameLogin, untrustedBlock, validLabels } from '../lib/trust.mjs';
 import '../agent/token.mjs'; // exits on an unsupported Node before the script runs
 
@@ -18,6 +19,9 @@ const ALERT_AUTHOR = 'github-actions[bot]';
 const RELEASE_LABEL_PREFIX = 'autorelease:';
 const APPROVAL_ENVIRONMENTS = ['production', 'admin'];
 const ISSUE_BRANCH = /^refs\/heads\/issue\/(\d+)$/;
+const CROSS_REFERENCED = 'cross-referenced';
+const FORM_CONTEXT_HEADING = /^###[ \t]+Context[ \t]*$/;
+const ANY_HEADING = /^#{1,3}[ \t]/;
 const EMPTY_INBOX = 'inbox empty: nothing waits on you';
 
 const labelName = (label) => (typeof label === 'string' ? label : label?.name);
@@ -141,6 +145,42 @@ async function orphanedClaims({ openIssues, openPulls, client, repoRef, config }
   return items;
 }
 
+// Web-form bodies (4.3) use `### Context`; parseSections only reads `##`, so that fallback scans the stripped text itself.
+function contextSection(body) {
+  const { byName } = parseSections(body);
+  if (byName.Context !== undefined) return byName.Context;
+  const lines = stripCommentsAndFences(body).split('\n');
+  const start = lines.findIndex((line) => FORM_CONTEXT_HEADING.test(line));
+  if (start === -1) return '';
+  const length = lines.slice(start + 1).findIndex((line) => ANY_HEADING.test(line));
+  return lines.slice(start + 1, length === -1 ? undefined : start + 1 + length).join('\n');
+}
+
+const namesReport = (body, number) => new RegExp(`Reported in #${number}(?!\\d)`).test(contextSection(String(body ?? '')));
+
+function isLinkedTask(source, { number, repoRef, config }) {
+  if (source.pull_request || !sameRepository(source.repository?.full_name, repoRef)) return false;
+  if (!isTrustedAuthor({ login: source.user?.login ?? '', kind: 'issue' }, config)) return false;
+  return namesReport(source.body, number);
+}
+
+async function hasLinkedTask(report, { client, repoRef, config }) {
+  const timeline = await client.paginate(apiPath(`${REPO_PATH}/issues/{number}/timeline`, { ...repoRef, number: report.number }));
+  return timeline.some((event) => event.event === CROSS_REFERENCED && event.source?.issue
+    && isLinkedTask(event.source.issue, { number: report.number, repoRef, config }));
+}
+
+async function untrustedReports({ openIssues, client, repoRef, config }) {
+  const reports = (await openIssues()).filter((issue) => !isTrustedAuthor({ login: issue.user?.login ?? '', kind: 'issue' }, config)
+    && !sameLogin(issue.user?.login, ALERT_AUTHOR));
+  const items = [];
+  for (const report of reports) {
+    if (await hasLinkedTask(report, { client, repoRef, config })) continue;
+    items.push({ ...itemFor(report, { kind: 'issue', config }), detail: `opened ${String(report.created_at).slice(0, 10)}` });
+  }
+  return items;
+}
+
 const SECTIONS = [
   { key: 'proposed-epics', heading: 'Epics to accept', load: proposedEpics },
   { key: 'needs-decision', heading: 'Needs decision', load: needsDecision },
@@ -149,6 +189,7 @@ const SECTIONS = [
   { key: 'pending-approvals', heading: 'Pending production and admin approvals', load: pendingApprovals },
   { key: 'alert-issues', heading: 'Alert issues', load: alertIssues },
   { key: 'orphaned-claims', heading: 'Orphaned claims', load: orphanedClaims },
+  { key: 'untrusted-reports', heading: 'Untrusted reports to triage', load: untrustedReports },
 ];
 
 function memoize(load) {
