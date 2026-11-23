@@ -1,7 +1,7 @@
 // Owner wizard (spec 14.3). The owner runs it in their own terminal under their own login; agents never do.
 // Imports stay inside Node built-ins, scripts/owner/ and scripts/lib/ (all CODEOWNERS paths).
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -135,6 +135,12 @@ export function stepsToRun(state, stepArgument) {
 }
 
 export const gitArguments = (hooksDir, args) => ['-c', `core.hooksPath=${hooksDir}`, '-c', 'core.fsmonitor=false', ...args];
+
+// The same settings for the git a child runs itself (gh repo create runs git remote add), through Git's environment config.
+export const gitConfigEnvironment = (env, hooksDir) => ({
+  ...env, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: hooksDir,
+  GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
+});
 
 export function checkReviewedCode(io) {
   const git = (...args) => {
@@ -355,11 +361,16 @@ export function askHidden({ input, output }, question) {
   });
 }
 
-/** Writes a key only the owner can read; chmod covers a file that already existed with wider modes. */
+/**
+ * Writes a key only the owner can read. The key goes to a new file created 0600 (wx never follows or reuses one),
+ * which then replaces the target, so an existing wider file never holds it; a symlink target is refused.
+ */
 export function writePrivateFile(file, text) {
+  if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) refuse(`${clean(file)} is a symlink: remove it or choose another path`);
   mkdirSync(path.dirname(file), { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
-  writeFileSync(file, text, { mode: PRIVATE_FILE_MODE });
-  chmodSync(file, PRIVATE_FILE_MODE);
+  const fresh = `${file}.${process.pid}.new`;
+  writeFileSync(fresh, text, { mode: PRIVATE_FILE_MODE, flag: 'wx' });
+  renameSync(fresh, file);
 }
 
 const OPENERS = { win32: ['rundll32', 'url.dll,FileProtocolHandler'], darwin: ['open'] };
@@ -382,7 +393,8 @@ function terminalIo() {
       process.once('exit', () => { if (hooksDir) rmSync(hooksDir, { recursive: true, force: true }); });
     }
     const fullArgs = command === 'git' ? gitArguments(noHooksDir(), args) : args;
-    const env = command === 'gh' ? ghEnvironment(process.env) : process.env;
+    const childEnv = gitConfigEnvironment(process.env, noHooksDir());
+    const env = command === 'gh' ? ghEnvironment(childEnv) : childEnv;
     const result = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', stdio, env, input });
     if (interrupted || wasInterrupted(result)) throw new Error(INTERRUPTED);
     if (result.error) throw result.error;

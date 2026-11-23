@@ -1,6 +1,7 @@
 // Owner wizard steps from repo-copy on (spec 14.3): the clone copy, the App pages, the agent key and the admin environment.
 // Same rules as setup.mjs: Node built-ins only, every write shown and behind its own y/N, no value taken from setup-state.json.
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 const CONTROL_CHARACTERS = /\p{Cc}/gu;
 const CONFIG_PATH = '.github/groundwork/config.json';
@@ -14,6 +15,11 @@ const CLIENT_ID = /^[A-Za-z0-9.]+$/;
 const APP_ID = /^\d+$/;
 const PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+-----END [A-Z ]*PRIVATE KEY-----/;
 const SURROUNDING_QUOTES = /^["']|["']$/g;
+const HOME_PREFIX = /^~(?=$|[\\/])/;
+const IDENT_TIMESTAMP = /\s+\d+\s+[+-]\d{4}$/;
+const BOT_IDENTITY = /\[bot\]/i;
+const UNTRACKED = '??';
+const MAIN_ONLY = 'branch:main';
 // Same rule shape as bootstrap's CODEOWNERS fill: pattern, owners, optional trailing comment.
 const CODEOWNERS_RULE = /^(\s*[^\s#]+\s+)([^#]*?)(\s*(?:#[^\n]*)?)$/;
 // Reads the PEM from stdin and prints the DPAPI string token.mjs decrypts with ConvertTo-SecureString.
@@ -63,13 +69,23 @@ function git(io, ...args) {
   return result.status === 0 ? result.stdout.trimEnd() : refuse(`git ${args[0]} failed with exit ${result.status}`);
 }
 
-// Shows the exact command, asks y/N and runs it; input goes on stdin and is named, never shown.
-async function confirmRun(io, { command, args, input, inputLabel }) {
-  io.print(`${command} ${args.join(' ')}${inputLabel ? ` < ${inputLabel}` : ''}`);
+const errorText = (result) => result.stderr.trim().split(/\r?\n/).map(clean).filter(Boolean).join(' | ');
+
+/**
+ * Shows the exact command, asks y/N and runs it. input goes on stdin and is named by inputLabel, never shown.
+ * A secret's run names its key file instead and keeps the child's output hidden, also on failure.
+ */
+async function confirmRun(io, { command, args, input, inputLabel, secretFile }) {
+  const shown = `${command} ${args.join(' ')}`;
+  const stdinName = secretFile === undefined ? inputLabel : clean(secretFile);
+  io.print(`${shown}${stdinName ? ` < ${stdinName}` : ''}`);
   if (!(await confirm(io, 'Run it? y/N '))) return false;
   const result = input === undefined ? io.attach(command, args) : io.pipe(command, args, input);
-  if (result.status !== 0) refuse(`${command} ${args.slice(0, 3).join(' ')} failed with exit ${result.status}`);
-  return true;
+  if (result.status === 0) return true;
+  const failed = `${command} ${args.slice(0, 3).join(' ')} failed with exit ${result.status}`;
+  if (secretFile !== undefined) refuse(`${failed}; its output is hidden because it read a key; run it yourself to see why: ${shown} < ${stdinName}`);
+  const cause = errorText(result);
+  return refuse(cause ? `${failed}: ${cause}` : failed);
 }
 
 /** origin once it holds main (upstream before repo-copy, the org's repository after it), else upstream. */
@@ -100,9 +116,16 @@ async function askMatching(io, { question, pattern, fallback = '' }) {
   return pattern.test(answer) ? answer : refuse(`${question.trim()} must match ${pattern.source}`);
 }
 
+// A shell expands ~ before a program sees it; a path typed at a prompt needs it done here.
+function expandHome(io, file) {
+  const home = io.env.HOME || io.env.USERPROFILE;
+  return HOME_PREFIX.test(file) && home ? path.join(home, file.slice(1)) : file;
+}
+
 async function readKey(io, label) {
-  const file = (await io.ask(`Path to the ${label} private key (.pem): `)).trim().replace(SURROUNDING_QUOTES, '');
-  if (!file) refuse(`no key path given for ${label}`);
+  const typed = (await io.ask(`Path to the ${label} private key (.pem, ~ allowed): `)).trim().replace(SURROUNDING_QUOTES, '');
+  if (!typed) refuse(`no key path given for ${label}`);
+  const file = expandHome(io, typed);
   const pem = io.readText(file);
   if (pem === null) refuse(`${clean(file)} not found`);
   if (!PRIVATE_KEY.test(pem)) refuse(`${clean(file)} is not a PEM private key`);
@@ -118,8 +141,10 @@ async function offerDelete(io, file) {
 
 const consentNote = (state) => `docs/runs/${state.consent.answeredAt.slice(0, 10)}-setup-consent.md`;
 
-function refuseWithRecovery(io, { reason, remote, note }) {
-  io.print(`Recover with (keep a copy of ${note} first):\n  git restore .\n  git reset --hard ${remote}/main`);
+// git restore and git reset leave untracked files, so each one outside repo-copy is named for deletion.
+function refuseWithRecovery(io, { reason, remote, note, untracked = [] }) {
+  const deletions = untracked.map((file) => `\n  delete ${clean(file)}`).join('');
+  io.print(`Recover with (keep a copy of ${note} first):\n  git restore .\n  git reset --hard ${remote}/main${deletions}`);
   refuse(reason);
 }
 
@@ -136,8 +161,12 @@ function inspectClone(io, note) {
   if (ahead > 1) refuseWithRecovery(io, { reason: `HEAD is ${ahead} commits ahead of ${baseline}; repo-copy adds one`, remote, note });
   const committed = ahead ? outside(lines(git(io, 'diff', '--name-only', baseline, 'HEAD'))) : undefined;
   if (committed !== undefined) refuseWithRecovery(io, { reason: `the commit ahead of ${baseline} changes ${clean(committed)}`, remote, note });
-  const dirty = outside(lines(git(io, 'status', '--porcelain', '--untracked-files=all')).map((line) => line.slice(3)));
-  if (dirty !== undefined) refuseWithRecovery(io, { reason: `${clean(dirty)} has local changes outside repo-copy`, remote, note });
+  const changes = lines(git(io, 'status', '--porcelain', '--untracked-files=all')).map((line) => ({ code: line.slice(0, 2), file: line.slice(3) }));
+  const foreign = changes.filter(({ file }) => !allowed.has(file));
+  if (foreign.length) {
+    const untracked = foreign.filter(({ code }) => code === UNTRACKED).map(({ file }) => file);
+    refuseWithRecovery(io, { reason: `${clean(foreign[0].file)} has local changes outside repo-copy`, remote, note, untracked });
+  }
   return { ahead: ahead === 1, remote, baseline };
 }
 
@@ -155,6 +184,18 @@ function fillCodeowners(text, owner) {
   }).join('\n');
 }
 
+const nestedJson = (value) => JSON.stringify(value, null, 2).replaceAll('\n', '\n  ');
+
+// Rewrites only org, accounts and apps, so the rest of the file keeps its layout and upstream merges stay clean.
+function updateConfigText(text, { org, accounts, apps }) {
+  const updated = text
+    .replace(/("org":\s*)"[^"]*"/, (_, key) => `${key}${JSON.stringify(org)}`)
+    .replace(/("accounts":\s*)\{[^{}]*\}/, (_, key) => `${key}${nestedJson(accounts)}`)
+    .replace(/("apps":\s*)\{[^{}]*\}/, (_, key) => `${key}${nestedJson(apps)}`);
+  const expected = { ...JSON.parse(text), org, accounts, apps };
+  return isDeepStrictEqual(JSON.parse(updated), expected) ? updated : refuse(`cannot update org, accounts and apps in ${CONFIG_PATH} in place`);
+}
+
 async function writeSetupFiles(io, org) {
   const owner = (await askMatching(io, { question: 'Owner login (your GitHub user): ', pattern: LOGIN })).toLowerCase();
   const apps = {};
@@ -162,13 +203,14 @@ async function writeSetupFiles(io, org) {
     const fallback = `${org.toLowerCase()}-${role}`;
     apps[role] = await askMatching(io, { question: `${role} App slug [${fallback}]: `, pattern: SLUG, fallback });
   }
-  const config = readConfig(io);
-  const accounts = { ...config.accounts, owner, agent: `${apps.agent}[bot]` };
+  const configText = io.readText(fromRoot(io, CONFIG_PATH)) ?? refuse(`${CONFIG_PATH} not found`);
+  const accounts = { ...JSON.parse(configText).accounts, owner, agent: `${apps.agent}[bot]` };
+  const updated = updateConfigText(configText, { org, accounts, apps });
   io.print(`write ${CONFIG_PATH}:`);
   printBlock(io, JSON.stringify({ org, accounts, apps }, null, 2));
   io.print(`write ${CODEOWNERS_PATH}: every owner becomes @${owner}`);
   if (!(await confirm(io, 'Write them? y/N '))) return false;
-  io.writeText(fromRoot(io, CONFIG_PATH), `${JSON.stringify({ ...config, org, accounts, apps }, null, 2)}\n`);
+  io.writeText(fromRoot(io, CONFIG_PATH), updated);
   const codeowners = io.readText(fromRoot(io, CODEOWNERS_PATH)) ?? refuse(`${CODEOWNERS_PATH} not found`);
   io.writeText(fromRoot(io, CODEOWNERS_PATH), fillCodeowners(codeowners, owner));
   return true;
@@ -193,16 +235,25 @@ async function commitSetup(io, { org, note }) {
   printBlock(io, git(io, 'diff', '--cached', '--no-color', '--no-ext-diff'));
   io.print(`Consent note ${note}:`);
   printBlock(io, io.readText(fromRoot(io, note)));
+  const author = clean(git(io, 'var', 'GIT_AUTHOR_IDENT').replace(IDENT_TIMESTAMP, ''));
+  if (BOT_IDENTITY.test(author)) refuse(`git would commit as ${author}: set your own user.name and user.email in this clone, then rerun`);
+  io.print(`author: ${author}`);
   const message = `chore: set up ${org} from groundwork ${upstreamVersion(io)}`;
   return confirmRun(io, { command: 'git', args: ['commit', '-m', message] });
 }
 
+const isOrgRepositoryUrl = (url, org) => new RegExp(`^(https://github\\.com/|git@github\\.com:|ssh://git@github\\.com/)${org}/${CONTROL_REPO}(\\.git)?$`, 'i').test(url);
+
+// gh only creates the repository and adds origin; the push runs through the wizard's own git, with hooks off.
 async function pushCopy(io, org) {
-  // After a push that failed past gh's remote add, origin exists and only the push is left.
-  const pushed = lines(git(io, 'remote')).includes('origin')
-    ? ['git', ['push', '--set-upstream', 'origin', 'main']]
-    : ['gh', ['repo', 'create', `${org}/${CONTROL_REPO}`, '--public', '--source', '.', '--remote', 'origin', '--push']];
-  return confirmRun(io, { command: pushed[0], args: pushed[1] });
+  const remotes = lines(git(io, 'remote'));
+  if (!remotes.includes('upstream')) refuse('remote upstream is missing: repo-copy renames origin to upstream before it pushes');
+  const create = { command: 'gh', args: ['repo', 'create', `${org}/${CONTROL_REPO}`, '--public', '--source', '.', '--remote', 'origin'] };
+  if (!remotes.includes('origin') && !(await confirmRun(io, create))) return false;
+  const url = clean(git(io, 'remote', 'get-url', '--push', 'origin'));
+  if (!isOrgRepositoryUrl(url, org)) refuse(`origin pushes to ${url}, not github.com/${org}/${CONTROL_REPO}: fix it with git remote set-url origin, then rerun`);
+  io.print(`push to ${url}`);
+  return confirmRun(io, { command: 'git', args: ['push', '--set-upstream', 'origin', 'main'] });
 }
 
 async function repoCopy(io, context) {
@@ -257,12 +308,14 @@ async function storeWithDpapi(io, { slug, clientId, key }) {
   io.print(`write ${clean(metadataFile)}: appId ${appId}, slug ${slug}, clientId ${clientId}`);
   if (!(await confirm(io, 'Store the key? y/N '))) return false;
   const encrypted = io.pipe('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', DPAPI_ENCRYPT], key.pem);
-  if (encrypted.status !== 0 || !encrypted.stdout.trim()) refuse(`DPAPI encryption failed with exit ${encrypted.status}`);
+  if (encrypted.status !== 0 || !encrypted.stdout.trim()) refuse(`DPAPI encryption failed with exit ${encrypted.status}; PowerShell's output is hidden because it read the key; nothing was written`);
   io.writeText(dpapiFile, `${encrypted.stdout.trim()}\n`);
   io.writeText(metadataFile, `${JSON.stringify({ appId: Number(appId), slug, clientId })}\n`);
   await offerDelete(io, key.file);
   return true;
 }
+
+const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 
 async function storePemFile(io, { slug, clientId, key }) {
   const home = io.env.HOME;
@@ -270,7 +323,8 @@ async function storePemFile(io, { slug, clientId, key }) {
   io.print(`write ${clean(target)} (mode 0600) from ${clean(key.file)}`);
   if (!(await confirm(io, 'Store the key? y/N '))) return false;
   io.writePrivateFile(target, key.pem);
-  io.print(`Add to your shell profile:\n  export ${AGENT_KEY_FILE}=${clean(target)}\n  export ${AGENT_CLIENT_ID}=${clientId}`);
+  io.print(`Add to your shell profile:\n  export ${AGENT_KEY_FILE}=${shellQuote(clean(target))}\n  export ${AGENT_CLIENT_ID}=${clientId}`);
+  io.print(`Then delete the downloaded key ${clean(key.file)} once token.mjs works.`);
   return true;
 }
 
@@ -284,25 +338,42 @@ async function agentKeyStore(io) {
 
 // admin environment and its secrets (spec 10.1)
 
-function ownerId(io, owner) {
-  const result = io.capture('gh', ['api', `/users/${owner}`, '--jq', '.id']);
-  const id = Number(result.stdout.trim());
-  return result.status === 0 && Number.isSafeInteger(id) && id > 0 ? id : refuse(`cannot read the user id of ${owner} (exit ${result.status})`);
+function ghRead(io, { args, what }) {
+  const result = io.capture('gh', args);
+  if (result.status === 0) return result.stdout;
+  const cause = errorText(result);
+  return refuse(`cannot read ${what} (exit ${result.status})${cause ? `: ${cause}` : ''}`);
+}
+
+// The reviewer is the signed-in owner, checked against config.json, never taken from the file alone.
+function signedInOwner(io, config) {
+  const [login, idText] = ghRead(io, { args: ['api', 'user', '--jq', '.login + " " + (.id | tostring)'], what: 'your GitHub user' }).trim().split(' ');
+  const id = Number(idText);
+  if (!LOGIN.test(login ?? '') || !Number.isSafeInteger(id) || id <= 0) refuse('gh api user returned no login and id');
+  const configured = ownerLogin(config);
+  if (login.toLowerCase() !== configured.toLowerCase()) refuse(`gh is signed in as ${login}, but ${CONFIG_PATH} accounts.owner is ${configured}: sign in as the owner or fix the file`);
+  return { login, id };
 }
 
 async function adminEnvironment(io, context) {
   const repo = `${context.state.org}/${CONTROL_REPO}`;
   const environment = `/repos/${repo}/environments/admin`;
+  const reviewer = signedInOwner(io, readConfig(io));
   const body = {
-    reviewers: [{ type: 'User', id: ownerId(io, ownerLogin(readConfig(io))) }], prevent_self_review: false, can_admins_bypass: false,
+    reviewers: [{ type: 'User', id: reviewer.id }], prevent_self_review: false, can_admins_bypass: false,
     deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
   };
+  io.print(`reviewer: ${reviewer.login} (id ${reviewer.id})`);
   printBlock(io, JSON.stringify(body, null, 2));
   const put = { command: 'gh', args: ['api', '-X', 'PUT', environment, '--input', '-'], input: JSON.stringify(body), inputLabel: 'the body above' };
   if (!(await confirmRun(io, put))) return false;
-  const policies = io.capture('gh', ['api', `${environment}/deployment-branch-policies`, '--jq', '.branch_policies[] | .type + ":" + .name']);
-  if (policies.status !== 0) refuse(`cannot read the admin deployment branch policies (exit ${policies.status})`);
-  if (lines(policies.stdout).includes('branch:main')) return true;
+  const policyArgs = ['api', `${environment}/deployment-branch-policies`, '--jq', '.branch_policies[] | .type + ":" + .name'];
+  const policies = lines(ghRead(io, { args: policyArgs, what: 'the admin deployment branch policies' }));
+  if (policies.length === 1 && policies[0] === MAIN_ONLY) return true;
+  if (policies.length) {
+    io.print(`admin allows ${policies.map(clean).join(', ')}; spec 10.1 allows only ${MAIN_ONLY}. Remove the others in the environment settings, then rerun.`);
+    return false;
+  }
   return confirmRun(io, { command: 'gh', args: ['api', '-X', 'POST', `${environment}/deployment-branch-policies`, '-f', 'name=main', '-f', 'type=branch'] });
 }
 
@@ -313,7 +384,7 @@ async function adminSecrets(io, context) {
   for (const { role, secret, variable } of ADMIN_SECRETS) {
     const slug = appSlug(config, role);
     const key = await readKey(io, slug);
-    const setSecret = { command: 'gh', args: ['secret', 'set', secret, '--env', 'admin', '--repo', repo], input: key.pem, inputLabel: clean(key.file) };
+    const setSecret = { command: 'gh', args: ['secret', 'set', secret, '--env', 'admin', '--repo', repo], input: key.pem, secretFile: key.file };
     if (!(await confirmRun(io, setSecret))) return false;
     const id = await askMatching(io, { question: `${slug} client ID or App ID: `, pattern: CLIENT_ID });
     if (!(await confirmRun(io, { command: 'gh', args: ['variable', 'set', variable, '--env', 'admin', '--repo', repo, '--body', id] }))) return false;

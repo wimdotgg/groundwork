@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { STEP_HANDLERS } from './steps.mjs';
-import { ghEnvironment, main, writePrivateFile } from './setup.mjs';
+import { ghEnvironment, gitConfigEnvironment, main, writePrivateFile } from './setup.mjs';
 
 const NOW = '2026-11-23T09:00:00Z';
 const NOTE = 'docs/runs/2026-11-23-setup-consent.md';
@@ -17,11 +17,16 @@ const CONFIG = {
   schemaVersion: 1, org: 'wimdotgg', controlRepo: 'groundwork', accounts: { owner: 'wianvdm', agent: 'wimdotgg-agent[bot]' },
   apps: { admin: 'acme-admin', agent: 'acme-agent', release: 'acme-release' }, deploy: 'none',
 };
+// The live file's layout: inline objects that JSON.stringify would reflow.
+const INLINE_LINE = '    { "actor": "owner", "scope": "any" }';
+const CONFIG_TEXT = `${JSON.stringify(CONFIG, null, 2).replace(/\n}$/, `,\n  "trustedAuthors": [\n${INLINE_LINE}\n  ]\n}`)}\n`;
 const COPY_ADD = `git add -- ${CONFIG_PATH} .github/CODEOWNERS .release-please-manifest.json version.txt CHANGELOG.md ${NOTE}`;
-const REPO_CREATE = 'gh repo create acme/groundwork --public --source . --remote origin --push';
+const REPO_CREATE = 'gh repo create acme/groundwork --public --source . --remote origin';
+const ORG_URL = 'https://github.com/acme/groundwork.git';
+const PUSH = 'git push --set-upstream origin main';
 const COMMIT = 'git commit -m chore: set up acme from groundwork v1.2.3';
-const stateWith = (steps = {}) => ({
-  schemaVersion: 1, org: 'acme', consent: { answer: 'B', classes: ['wizard'], answeredAt: NOW, endedAt: null }, steps,
+const stateWith = (steps = {}, consent = { answer: 'B', classes: ['wizard'] }) => ({
+  schemaVersion: 1, org: 'acme', consent: { ...consent, answeredAt: NOW, endedAt: null }, steps,
 });
 const context = () => ({ state: stateWith(), statePath: STATE_PATH });
 const OK = { status: 0, stdout: '', stderr: '' };
@@ -82,7 +87,7 @@ function cloneFixture(t) {
   mkdirSync(upstream);
   git(upstream, 'init', '-q', '-b', 'main');
   for (const [file, text] of [
-    [CONFIG_PATH, `${JSON.stringify(CONFIG, null, 2)}\n`], ['.github/CODEOWNERS', '# owners\n/.github/  @wianvdm\n/scripts/ @wianvdm @other # kit\n'],
+    [CONFIG_PATH, CONFIG_TEXT], ['.github/CODEOWNERS', '# owners\n/.github/  @wianvdm\n/scripts/ @wianvdm @other # kit\n'],
     ['.release-please-manifest.json', '{".":"1.2.3"}\n'], ['version.txt', '1.2.3\n'], ['CHANGELOG.md', '# Changelog\n\n## 1.2.3\n'], ['README.md', 'kit\n'],
   ]) write(upstream, file, text);
   git(upstream, 'add', '.');
@@ -96,12 +101,19 @@ function cloneFixture(t) {
   return { clone, org };
 }
 
-// Runs git for real in the clone; gh is the given fake.
-function cloneIo(clone, { answers, gh = () => OK }) {
+// gh repo create without --push: it adds origin and pushes nothing.
+const addOrigin = (clone, url = ORG_URL) => () => {
+  git(clone, 'remote', 'add', 'origin', url);
+  return OK;
+};
+
+// Runs git for real in the clone; gh is the given fake, and a push to origin lands in the bare org repository.
+function cloneIo(clone, { answers, gh = addOrigin(clone), org, pushStatus = 0 }) {
   const io = fakeIo({ answers });
   const run = (command, args) => {
     io.calls.push([command, ...args].join(' '));
     if (command === 'gh') return gh(args);
+    if (args[0] === 'push') return pushToOrg(clone, { org, pushStatus });
     const result = spawnSync('git', args, { cwd: clone, encoding: 'utf8' });
     return { status: result.status, stdout: result.stdout, stderr: result.stderr };
   };
@@ -111,21 +123,32 @@ function cloneIo(clone, { answers, gh = () => OK }) {
     writeText: (file, text) => writeFileSync(file, text),
   });
 }
-// y to the rename, owner login, three default slugs, then y to the files, the release reset, the commit and the push.
-const COPY_ANSWERS = ['y', 'Owner-Login', '', '', '', 'y', 'y', 'y', 'y'];
+
+function pushToOrg(clone, { org, pushStatus }) {
+  if (pushStatus !== 0 || !org) return { ...OK, status: pushStatus };
+  git(clone, 'push', '-q', org, 'HEAD:refs/heads/main');
+  git(clone, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  return OK;
+}
+
+// y to the rename, owner login, three default slugs, then y to the files, the release reset, the commit, the create and the push.
+const COPY_ANSWERS = ['y', 'Owner-Login', '', '', '', 'y', 'y', 'y', 'y', 'y'];
 const repoCopy = (io) => STEP_HANDLERS['repo-copy'](io, context());
 
-test('AC1 repo-copy renames, writes, resets, stages by name, shows diff and note, commits, then pushes last', async (t) => {
-  const { clone } = cloneFixture(t);
-  const io = cloneIo(clone, { answers: [...COPY_ANSWERS] });
+test('AC1 repo-copy renames, writes, resets, stages by name, shows diff, note and author, commits, creates, then pushes last', async (t) => {
+  const { clone, org } = cloneFixture(t);
+  const io = cloneIo(clone, { answers: [...COPY_ANSWERS], org });
   assert.equal(await repoCopy(io), true);
   const at = (call) => io.calls.indexOf(call);
-  assert.ok(at('git remote rename origin upstream') < at(COPY_ADD) && at(COPY_ADD) < at(COMMIT));
-  assert.equal(io.calls.at(-1), REPO_CREATE);
-  assert.ok(!io.calls.some((call) => / add (-A|--all|\.)/.test(call) || call.includes('commit -a')));
+  assert.ok(at('git remote rename origin upstream') < at(COPY_ADD) && at(COPY_ADD) < at(COMMIT) && at(COMMIT) < at(REPO_CREATE));
+  assert.ok(at(REPO_CREATE) < at('git remote get-url --push origin'));
+  assert.equal(io.calls.at(-1), PUSH);
+  assert.ok(!io.calls.some((call) => / add (-A|--all|\.)/.test(call) || call.includes('commit -a') || (call.startsWith('gh ') && call.includes('--push'))));
   const shown = io.output.indexOf(COMMIT);
   assert.ok(io.output.findIndex((line) => line === '+0.0.0') < shown);
   assert.ok(io.output.indexOf('answer: B') < shown && io.output.indexOf('answer: B') > -1);
+  assert.ok(io.output.indexOf('author: Owner <owner@example.com>') < shown && io.output.indexOf('author: Owner <owner@example.com>') > -1);
+  assert.ok(io.output.indexOf(`push to ${ORG_URL}`) < io.output.indexOf(PUSH));
   const read = (file) => readFileSync(path.join(clone, file), 'utf8');
   assert.equal(read('.release-please-manifest.json'), '{}\n');
   assert.equal(read('version.txt'), '0.0.0\n');
@@ -133,9 +156,10 @@ test('AC1 repo-copy renames, writes, resets, stages by name, shows diff and note
   assert.equal(read('.github/CODEOWNERS'), '# owners\n/.github/  @owner-login\n/scripts/ @owner-login # kit\n');
   const config = JSON.parse(read(CONFIG_PATH));
   assert.deepEqual([config.org, config.accounts, config.apps], ['acme', { owner: 'owner-login', agent: 'acme-agent[bot]' }, CONFIG.apps]);
+  assert.ok(read(CONFIG_PATH).includes(`\n${INLINE_LINE}\n`));
   assert.equal(git(clone, 'log', '-1', '--format=%an %s'), 'Owner chore: set up acme from groundwork v1.2.3');
   assert.equal(git(clone, 'status', '--porcelain'), '');
-  assert.equal(git(clone, 'remote'), 'upstream');
+  assert.equal(git(org, 'rev-parse', 'main'), git(clone, 'rev-parse', 'HEAD'));
 });
 
 test('AC1 repo-copy refuses a missing consent note, another branch or a dirty tree, naming the cause', async (t) => {
@@ -152,28 +176,53 @@ test('AC1 repo-copy refuses a missing consent note, another branch or a dirty tr
   assert.deepEqual(dirty.calls.filter((call) => !call.startsWith('git') || /^git (remote rename|add|commit) /.test(call)), []);
 });
 
-test('AC6 after a decline at the commit y/N a rerun passes the prechecks and completes', async (t) => {
+test('repo-copy refuses the bot identity and an existing upstream remote beside origin', async (t) => {
   const { clone } = cloneFixture(t);
-  const declined = cloneIo(clone, { answers: [...COPY_ANSWERS.slice(0, -2), 'n'] });
+  git(clone, 'remote', 'add', 'upstream', ORG_URL);
+  await assert.rejects(repoCopy(cloneIo(clone, { answers: ['y'] })), /remotes origin and upstream both exist/);
+  git(clone, 'remote', 'remove', 'upstream');
+  git(clone, 'config', 'user.name', 'acme-agent[bot]');
+  const bot = cloneIo(clone, { answers: [...COPY_ANSWERS] });
+  await assert.rejects(repoCopy(bot), /git would commit as acme-agent\[bot\]/);
+  assert.ok(!bot.calls.includes(COMMIT));
+});
+
+test('repo-copy refuses a push target that is not the org repository, or no upstream remote', async (t) => {
+  const { clone } = cloneFixture(t);
+  const elsewhere = cloneIo(clone, { answers: [...COPY_ANSWERS], gh: addOrigin(clone, 'https://github.com/other/groundwork.git') });
+  await assert.rejects(repoCopy(elsewhere), /origin pushes to https:\/\/github\.com\/other\/groundwork\.git, not github\.com\/acme\/groundwork/);
+  assert.ok(!elsewhere.calls.includes(PUSH));
+  // A fresh clone with a hand-made setup commit: origin is still upstream.
+  const { clone: fresh } = cloneFixture(t);
+  write(fresh, '.github/CODEOWNERS', '');
+  git(fresh, 'commit', '-q', '-am', 'hand');
+  const handMade = cloneIo(fresh, { answers: ['y'] });
+  await assert.rejects(repoCopy(handMade), /remote upstream is missing/);
+  assert.ok(!handMade.calls.includes(PUSH));
+});
+
+test('AC6 after a decline at the commit y/N a rerun passes the prechecks and completes', async (t) => {
+  const { clone, org } = cloneFixture(t);
+  const declined = cloneIo(clone, { answers: [...COPY_ANSWERS.slice(0, -3), 'n'] });
   assert.equal(await repoCopy(declined), false);
   assert.ok(!declined.calls.includes(REPO_CREATE));
-  const rerun = cloneIo(clone, { answers: COPY_ANSWERS.slice(1) });
+  const rerun = cloneIo(clone, { answers: COPY_ANSWERS.slice(1), org });
   assert.equal(await repoCopy(rerun), true);
   assert.ok(!rerun.calls.includes('git remote rename origin upstream'));
-  assert.equal(rerun.calls.at(-1), REPO_CREATE);
+  assert.equal(rerun.calls.at(-1), PUSH);
   assert.equal(git(clone, 'rev-list', '--count', 'refs/remotes/upstream/main..HEAD'), '1');
 });
 
-test('AC6 after a failed push a rerun prints the commit and pushes it', async (t) => {
+test('AC6 after a failed push a rerun prints the commit, checks origin and pushes it', async (t) => {
   const { clone, org } = cloneFixture(t);
-  // gh adds the remote, then the push fails.
-  const failing = cloneIo(clone, { answers: [...COPY_ANSWERS], gh: () => { git(clone, 'remote', 'add', 'origin', org); return { ...OK, status: 1 }; } });
-  await assert.rejects(repoCopy(failing), /gh repo create acme\/groundwork failed with exit 1/);
-  const rerun = cloneIo(clone, { answers: ['y'] });
+  const failing = cloneIo(clone, { answers: [...COPY_ANSWERS], pushStatus: 1 });
+  await assert.rejects(repoCopy(failing), /git push --set-upstream origin failed with exit 1/);
+  const rerun = cloneIo(clone, { answers: ['y'], org });
   assert.equal(await repoCopy(rerun), true);
   assert.ok(rerun.output.includes('Commit ahead of refs/remotes/upstream/main, from an earlier run:'));
-  assert.ok(rerun.output.indexOf('+0.0.0') < rerun.output.indexOf('git push --set-upstream origin main'));
-  assert.equal(rerun.calls.at(-1), 'git push --set-upstream origin main');
+  assert.ok(rerun.output.indexOf('+0.0.0') < rerun.output.indexOf(PUSH));
+  assert.ok(!rerun.calls.includes(REPO_CREATE));
+  assert.equal(rerun.calls.at(-1), PUSH);
   assert.equal(git(org, 'rev-parse', 'main'), git(clone, 'rev-parse', 'HEAD'));
 });
 
@@ -185,6 +234,7 @@ test('AC6 a modified path repo-copy does not write refuses and prints the recove
   const io = cloneIo(clone, { answers: [] });
   await assert.rejects(repoCopy(io), /scripts\/x\.mjs has local changes outside repo-copy/);
   assert.match(io.output.join('\n'), RECOVERY);
+  assert.match(io.output.join('\n'), /\n {2}delete scripts\/x\.mjs$/);
 });
 
 test('AC6 a commit outside repo-copy, or a second commit, refuses and prints the recovery commands', async (t) => {
@@ -199,6 +249,20 @@ test('AC6 a commit outside repo-copy, or a second commit, refuses and prints the
   const second = cloneIo(clone, { answers: [] });
   await assert.rejects(repoCopy(second), /HEAD is 2 commits ahead/);
   assert.match(second.output.join('\n'), RECOVERY);
+});
+
+test('consent A refuses repo-copy after the skip prompt, before any write', async () => {
+  const io = fakeIo({ answers: [''], files: { [STATE_PATH]: JSON.stringify(stateWith({}, { answer: 'A', classes: [] })) } });
+  assert.equal(await main(io, ['--step', 'repo-copy']), 1);
+  assert.match(io.output.join('\n'), /consent A keeps repo-copy in the browser/);
+  assert.ok(!io.calls.some((call) => /^git (remote rename|add|commit)|^gh repo/.test(call)));
+});
+
+test('every child gets the hook-free git config in its environment, so the git gh runs skips hooks too', () => {
+  assert.deepEqual(gitConfigEnvironment({ PATH: '/bin' }, '/empty'), {
+    PATH: '/bin', GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/empty',
+    GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
+  });
 });
 
 // Spec 2.2 to 2.4, copied here so a change to the step's list fails this test.
@@ -243,38 +307,72 @@ test('AC3 admin-secrets sends each key only on stdin; argv, output and setup-sta
   const notKey = fakeIo({ answers: ['/keys/x.pem'], files: { '/keys/x.pem': 'ADMIN-SECRET-MATERIAL' } });
   await assert.rejects(STEP_HANDLERS['admin-secrets'](notKey, context()), /\/keys\/x\.pem is not a PEM private key/);
   assert.doesNotMatch(everything(notKey), /SECRET-MATERIAL/);
+  const failing = fakeIo({ answers: ['/keys/admin.pem', 'y'], files, replies: { 'gh secret set': { status: 1, stdout: '', stderr: 'HTTP 404' } } });
+  await assert.rejects(STEP_HANDLERS['admin-secrets'](failing, context()),
+    /gh secret set ADMIN_APP_KEY failed with exit 1; its output is hidden because it read a key; run it yourself to see why: gh secret set ADMIN_APP_KEY --env admin --repo acme\/groundwork < \/keys\/admin\.pem$/);
 });
 
-test('AC4 admin-environment sends the owner as reviewer, a main branch policy and no admin bypass', async () => {
-  const io = fakeIo({ answers: ['y', 'y'], replies: { 'gh api /users/wianvdm': { ...OK, stdout: '4242\n' } } });
+const SIGNED_IN = { 'gh api user': { ...OK, stdout: 'WianVDM 4242\n' } };
+const POLICIES = 'gh api /repos/acme/groundwork/environments/admin/deployment-branch-policies';
+
+test('AC4 admin-environment sends the signed-in owner as reviewer, a main branch policy and no admin bypass', async () => {
+  const io = fakeIo({ answers: ['y', 'y'], replies: SIGNED_IN });
   assert.equal(await STEP_HANDLERS['admin-environment'](io, context()), true);
+  assert.ok(io.output.indexOf('reviewer: WianVDM (id 4242)') < io.output.indexOf('gh api -X PUT /repos/acme/groundwork/environments/admin --input - < the body above'));
   assert.equal(io.piped[0].call, 'gh api -X PUT /repos/acme/groundwork/environments/admin --input -');
   assert.deepEqual(JSON.parse(io.piped[0].input), {
     reviewers: [{ type: 'User', id: 4242 }], prevent_self_review: false, can_admins_bypass: false,
     deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
   });
   assert.equal(io.calls.at(-1), 'gh api -X POST /repos/acme/groundwork/environments/admin/deployment-branch-policies -f name=main -f type=branch');
-  const rerun = fakeIo({ answers: ['y'], replies: { 'gh api /users/': { ...OK, stdout: '4242\n' }, 'gh api /repos/acme/groundwork/environments/admin/deployment-branch-policies': { ...OK, stdout: 'branch:main\n' } } });
+  const rerun = fakeIo({ answers: ['y'], replies: { ...SIGNED_IN, [POLICIES]: { ...OK, stdout: 'branch:main\n' } } });
   assert.equal(await STEP_HANDLERS['admin-environment'](rerun, context()), true);
   assert.ok(!rerun.calls.some((call) => call.includes('-X POST')));
 });
 
+test('admin-environment refuses another signed-in user, stops on extra policies and shows gh errors', async () => {
+  const stranger = fakeIo({ answers: ['y'], replies: { 'gh api user': { ...OK, stdout: 'someone 7\n' } } });
+  await assert.rejects(STEP_HANDLERS['admin-environment'](stranger, context()), /gh is signed in as someone, but .* accounts\.owner is wianvdm/);
+  assert.deepEqual(stranger.piped, []);
+  const wide = fakeIo({ answers: ['y'], replies: { ...SIGNED_IN, [POLICIES]: { ...OK, stdout: 'branch:main\ntag:v*\n' } } });
+  assert.equal(await STEP_HANDLERS['admin-environment'](wide, context()), false);
+  assert.match(wide.output.at(-1), /admin allows branch:main, tag:v\*; spec 10\.1 allows only branch:main/);
+  const rejected = fakeIo({ answers: ['y'], replies: { ...SIGNED_IN, 'gh api -X PUT': { status: 1, stdout: '', stderr: 'HTTP 422: Validation Failed\n' } } });
+  await assert.rejects(STEP_HANDLERS['admin-environment'](rejected, context()), /gh api -X PUT failed with exit 1: HTTP 422: Validation Failed$/);
+});
+
 test('AC5 elsewhere the key goes to a 0600 PEM and the wizard prints the variables to set', async () => {
   const files = { '/keys/agent.pem': KEY('AGENT-SECRET-MATERIAL') };
-  const io = fakeIo({ answers: ['Iv23liAgent', '/keys/agent.pem', 'y'], files, env: { HOME: '/home/owner' } });
+  const home = '/home/o w';
+  const typed = path.join(home, 'keys', 'agent.pem');
+  const io = fakeIo({ answers: ['Iv23liAgent', '~/keys/agent.pem', 'y'], files: { [typed]: files['/keys/agent.pem'] }, env: { HOME: home } });
   assert.equal(await STEP_HANDLERS['agent-key-store'](io, context()), true);
-  const target = path.join('/home/owner', '.config', 'groundwork', 'acme-agent.pem');
+  const target = path.join(home, '.config', 'groundwork', 'acme-agent.pem');
   assert.deepEqual([...io.privateFiles], [[target, files['/keys/agent.pem']]]);
-  assert.match(io.output.join('\n'), new RegExp(`export GROUNDWORK_AGENT_KEY_FILE=${target.replaceAll('\\', '\\\\')}\n {2}export GROUNDWORK_AGENT_CLIENT_ID=Iv23liAgent`));
+  assert.ok(io.output.join('\n').includes(`export GROUNDWORK_AGENT_KEY_FILE='${target}'\n  export GROUNDWORK_AGENT_CLIENT_ID=Iv23liAgent`));
+  assert.equal(io.output.at(-1), `Then delete the downloaded key ${typed} once token.mjs works.`);
   assert.doesNotMatch(everything(io), /SECRET-MATERIAL/);
   const chosen = fakeIo({ answers: ['Iv23liAgent', '/keys/agent.pem', 'y'], files, env: { GROUNDWORK_AGENT_KEY_FILE: '/secure/agent.pem' } });
   await STEP_HANDLERS['agent-key-store'](chosen, context());
   assert.deepEqual([...chosen.privateFiles.keys()], ['/secure/agent.pem']);
+});
+
+test('AC5 writePrivateFile replaces a wider existing file with a 0600 one and refuses a symlink on POSIX (Linux CI)', (t) => {
+  // Windows has no POSIX modes, and symlinks need a privilege there.
+  if (process.platform === 'win32') return;
   const directory = mkdtempSync(path.join(tmpdir(), 'groundwork-key-'));
-  const file = path.join(directory, 'nested', 'agent.pem');
-  writePrivateFile(file, 'x');
-  if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600);
-  rmSync(directory, { recursive: true, force: true });
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const fresh = path.join(directory, 'nested', 'agent.pem');
+  writePrivateFile(fresh, 'x');
+  assert.equal(statSync(fresh).mode & 0o777, 0o600);
+  const wide = path.join(directory, 'wide.pem');
+  writeFileSync(wide, 'old', { mode: 0o644 });
+  writePrivateFile(wide, 'key');
+  assert.deepEqual([statSync(wide).mode & 0o777, readFileSync(wide, 'utf8')], [0o600, 'key']);
+  const link = path.join(directory, 'link.pem');
+  symlinkSync(wide, link);
+  assert.throws(() => writePrivateFile(link, 'other'), /link\.pem is a symlink/);
+  assert.equal(readFileSync(wide, 'utf8'), 'key');
 });
 
 test('AC5 on Windows the key goes through DPAPI to the files token.mjs reads, then the PEM may be deleted', async () => {
@@ -290,6 +388,10 @@ test('AC5 on Windows the key goes through DPAPI to the files token.mjs reads, th
   assert.deepEqual(JSON.parse(io.files.get(`${appData}\\groundwork\\acme-agent.json`)), { appId: 5853598, slug: 'acme-agent', clientId: 'Iv23liAgent' });
   assert.deepEqual(io.removed, ['/keys/agent.pem']);
   assert.doesNotMatch(everything(io), /SECRET-MATERIAL/);
+  const failed = fakeIo({ answers: ['Iv23liAgent', '/keys/agent.pem', '5853598', 'y'], files, platform: 'win32', env: { APPDATA: appData }, replies: { 'powershell.exe': { status: 1, stdout: '', stderr: 'AGENT-SECRET-MATERIAL' } } });
+  await assert.rejects(STEP_HANDLERS['agent-key-store'](failed, context()), /DPAPI encryption failed with exit 1; .* nothing was written$/);
+  assert.ok(![...failed.files.keys()].some((name) => name.startsWith(appData)));
+  assert.doesNotMatch(everything(failed), /SECRET-MATERIAL/);
 });
 
 test('gh drops colour variables in any case; the start refusal names the manual removal command', async () => {
