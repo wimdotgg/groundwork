@@ -4,6 +4,7 @@ import { GitHubError, apiPath } from '../lib/github.mjs';
 import { validateIssueBody } from '../lib/issue-model.mjs';
 import { SettingsError } from '../lib/settings.mjs';
 import { normalizeLabel, sameLogin } from '../lib/trust.mjs';
+import { ADOPT_KEPT_PATHS, CODEOWNERS_PATH } from './bootstrap-tree.mjs';
 
 // Same value as bootstrap-tree.mjs (#144); the integration task (#149) may share one export.
 const KIT_VERSION_PATH = '.github/groundwork/kit-version.txt';
@@ -200,23 +201,77 @@ async function createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep 
  * @returns {Promise<{ sha: string, created: boolean }>} `created` is false when the kit-version file is already on main
  */
 export async function commitBootstrapTree({ client, org, repo, tag, treeEntries, blobs, sleep = delay }) {
-  const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${DEFAULT_BRANCH}`));
-  const head = ref.object.sha;
+  const head = await readMainHead({ client, org, repo });
   if (await hasKitVersion({ client, org, repo, ref: DEFAULT_BRANCH })) return { sha: head, created: false };
   const tree = await createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep });
-  const { data: createdTree } = await client.request('POST', repoPath(org, repo, '/git/trees'), { body: { tree } });
+  return { sha: await pushCommit({ client, org, repo, tag, head, tree: { tree } }), created: true };
+}
+
+/**
+ * The kit merge of spec 14.4: `treeEntries` (`adoptTreeEntries` output) written over the tree the preflight read,
+ * as one commit whose parent is that head. A `main` that moved since the preflight refuses before any git write.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string, tag: string,
+ *   pin: { headSha: string, treeSha: string }, treeEntries: Array<{ path: string, mode: string, sha?: string, content?: string }>,
+ *   blobs: Map<string, string>, sleep?: (ms: number) => Promise<unknown> }} options `pin` is `readAdoptionGaps` output
+ * @returns {Promise<{ sha: string, created: boolean }>}
+ */
+export async function commitAdoptTree({ client, org, repo, tag, pin, treeEntries, blobs, sleep = delay }) {
+  const head = await requireMainHead({ client, org, repo, headSha: pin.headSha });
+  const tree = await createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep });
+  return { sha: await pushCommit({ client, org, repo, tag, head, tree: { base_tree: pin.treeSha, tree } }), created: true };
+}
+
+/**
+ * Spec 14.4: an adopt run checks `main` against the head its preflight read before its first write and again before
+ * the commit, so a moved target refuses.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string, headSha: string }} options
+ * @returns {Promise<string>} the head, equal to `headSha`
+ */
+export async function requireMainHead({ client, org, repo, headSha }) {
+  const head = await readMainHead({ client, org, repo });
+  if (head !== headSha) throw new SettingsError(`${org}/${repo} main moved from ${headSha} to ${head} after the adopt preflight; no commit was made, rerun bootstrap`);
+  return head;
+}
+
+/**
+ * Spec 14.4: before the kit merge an adopted repository only gains the kit labels it lacks (Dependabot needs
+ * `dependencies`), so a refused commit leaves no project label changed or deleted.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string,
+ *   labels: Array<{ name: string, color: string, description: string }> }} options the kit labels
+ * @returns {Promise<number>} how many were created
+ */
+export async function createMissingLabels({ client, org, repo, labels }) {
+  const live = new Set((await client.paginate(repoPath(org, repo, '/labels'))).map((label) => normalizeLabel(label.name)));
+  const missing = labels.filter((label) => !live.has(normalizeLabel(label.name)));
+  for (const { name, color, description } of missing) {
+    await client.request('POST', repoPath(org, repo, '/labels'), { body: { name, color, description } });
+  }
+  return missing.length;
+}
+
+async function readMainHead({ client, org, repo }) {
+  const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${DEFAULT_BRANCH}`));
+  return ref.object.sha;
+}
+
+async function pushCommit({ client, org, repo, tag, head, tree }) {
+  const { data: createdTree } = await client.request('POST', repoPath(org, repo, '/git/trees'), { body: tree });
   const message = `chore: bootstrap from groundwork ${tag}`;
   const { data: commit } = await client.request('POST', repoPath(org, repo, '/git/commits'), {
     body: { message, tree: createdTree.sha, parents: [head] },
   });
-  await client.request('PATCH', repoPath(org, repo, `/git/refs/heads/${DEFAULT_BRANCH}`), {
+  // 422: main is no longer the parent, so the update is not a fast forward.
+  const { status } = await client.request('PATCH', repoPath(org, repo, `/git/refs/heads/${DEFAULT_BRANCH}`), {
     body: { sha: commit.sha, force: false },
+    okStatuses: [422],
   });
-  return { sha: commit.sha, created: true };
+  if (status === 422) throw new SettingsError(`${org}/${repo} main moved during the commit; no ref update was made, rerun bootstrap`);
+  return commit.sha;
 }
 
-// Spec 14.4: the project's README and LICENSE are kept and kit lines are appended to its CODEOWNERS.
-const ADOPT_KEPT_PATHS = new Set(['README.md', 'LICENSE', '.github/CODEOWNERS']);
+// GitHub reads the first of these after .github/CODEOWNERS, so the kit file would shadow them.
+const SHADOWED_CODEOWNERS = ['CODEOWNERS', 'docs/CODEOWNERS'];
+const ROOT_LICENSE = /^(licen[cs]e|copying|unlicense)([.-][^/]*)?$/i;
 // admin-run cuts a plan fact at 200 characters; this budget leaves room for the row name and the count.
 const LIST_BUDGET = 120;
 const NOT_CHECKED_EMPTY = 'not checked: empty repository';
@@ -231,6 +286,9 @@ function listNames(names) {
   if (shown === names.length) return listed;
   return `${listed}${shown > 0 ? ' ' : ''}and ${names.length - shown} more`;
 }
+
+/** One target-chosen name, cut to the list budget like a list. */
+const capName = (name) => (name.length <= LIST_BUDGET ? name : `${name.slice(0, LIST_BUDGET)}...`);
 
 const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
 
@@ -255,40 +313,64 @@ function collisionsOf(kitEntries, targetByPath) {
     if (target.type !== 'blob') collisions.add(`${entry.path} is a ${target.type}`);
     else if (!ADOPT_KEPT_PATHS.has(entry.path) && target.sha !== (entry.content === undefined ? entry.sha : gitBlobSha(entry.content))) collisions.add(entry.path);
   }
+  // Refused rather than appended in place: check and kit-update read .github/CODEOWNERS, and moving the file keeps its rules.
+  if (kitEntries.some((entry) => entry.path === CODEOWNERS_PATH) && !targetByPath.has(CODEOWNERS_PATH)) {
+    for (const path of SHADOWED_CODEOWNERS.filter((candidate) => targetByPath.has(candidate))) collisions.add(`${path} would be shadowed by ${CODEOWNERS_PATH}, move it there`);
+  }
   return [...collisions];
 }
 
-/** Reads the tree by the head commit SHA, so a tag named like the branch cannot answer and the kit merge can reuse the SHA. */
+/**
+ * Reads the tree of the head commit, so a tag named like the branch cannot answer and the kit merge reuses the head and
+ * tree. The tree SHA comes from the commit: `git/trees/<commit SHA>` echoes the commit SHA as its `sha`.
+ */
 async function readCollisions({ client, org, repo, branch, kitEntries }) {
   const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${encodeURIComponent(branch)}`));
   const headSha = ref?.object?.sha;
-  if (typeof headSha !== 'string') return { row: gapRow('collisions', true, `heads/${branch} has no commit SHA`) };
-  const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(headSha)}`), { query: { recursive: 1 } });
+  if (typeof headSha !== 'string') return { row: gapRow('collisions', true, `heads/${capName(branch)} has no commit SHA`) };
+  const { data: commit } = await client.request('GET', repoPath(org, repo, `/git/commits/${encodeURIComponent(headSha)}`));
+  const treeSha = commit?.tree?.sha;
+  // Without it the merge would post no base_tree and drop every project file.
+  if (typeof treeSha !== 'string') return { row: gapRow('collisions', true, `head commit ${headSha} has no tree SHA`), headSha };
+  const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(treeSha)}`), { query: { recursive: 1 } });
   if (data?.truncated) return { row: gapRow('collisions', true, 'target tree is truncated, so it cannot be compared'), headSha };
   if (!Array.isArray(data?.tree)) return { row: gapRow('collisions', true, 'target tree response has no tree list'), headSha };
   const collisions = collisionsOf(kitEntries, new Map(data.tree.map((entry) => [entry.path, entry])));
-  return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha };
+  return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha, treeSha, tree: data.tree };
 }
 
-/** The failing rows of spec 14.4 against the built kit tree, from GET calls; `headSha` is the commit the tree was read at. */
+/**
+ * The failing rows of spec 14.4 against the built kit tree, from GET calls. `headSha` is the commit the tree was read
+ * at; `treeSha` and `tree` (the recursive entries) come only when the tree was read whole.
+ */
 export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
   const { data: repository } = await client.request('GET', repoPath(org, repo, ''));
   const branch = repository.default_branch;
   const { status } = await client.request('GET', repoPath(org, repo, '/commits'), { query: { per_page: 1 }, okStatuses: [409] });
   const empty = status === 409;
   const rows = [
-    gapRow('default branch', branch !== DEFAULT_BRANCH, branch === DEFAULT_BRANCH ? branch : `${branch}, must be ${DEFAULT_BRANCH}`),
+    gapRow('default branch', branch !== DEFAULT_BRANCH, branch === DEFAULT_BRANCH ? branch : `${capName(branch)}, must be ${DEFAULT_BRANCH}`),
     gapRow('empty repository', empty, empty ? 'yes' : 'no'),
     gapRow('archived', repository.archived === true, repository.archived === true ? 'yes' : 'no'),
   ];
   if (empty) return { rows: [...rows, gapRow('protected main', false, NOT_CHECKED_EMPTY), gapRow('collisions', false, NOT_CHECKED_EMPTY)], empty };
   rows.push(await readMainProtection({ client, org, repo }));
-  const { row, headSha } = await readCollisions({ client, org, repo, branch, kitEntries });
-  return { rows: [...rows, row], empty, headSha };
+  const { row, ...pin } = await readCollisions({ client, org, repo, branch, kitEntries });
+  return { rows: [...rows, row], empty, ...pin };
 }
 
-/** The reported rows of spec 14.4, which never fail; merge settings and secret names are not read. */
-export async function readAdoptionReport({ client, org, repo, kitLabels, empty }) {
+/** Owner decision (#258): adopt never adds a LICENSE, so the report names the project's or says none is there. */
+function licenseDetail(tree) {
+  if (tree === undefined) return 'not checked: no tree read';
+  const licenses = tree.filter((entry) => ROOT_LICENSE.test(entry.path)).map((entry) => entry.path);
+  return licenses.length > 0 ? listNames(licenses) : 'none; adopt adds none, the repository owner picks one';
+}
+
+/**
+ * The reported rows of spec 14.4, which never fail; merge settings and secret names are not read. `tree` is the
+ * `readAdoptionGaps` tree, absent when it was not read whole.
+ */
+export async function readAdoptionReport({ client, org, repo, kitLabels, empty, tree }) {
   const kept = new Set(kitLabels.map(normalizeLabel));
   const labels = (await client.paginate(repoPath(org, repo, '/labels'))).map((label) => label.name).filter((name) => !kept.has(normalizeLabel(name)));
   const tags = empty ? [] : (await client.paginate(repoPath(org, repo, '/git/matching-refs/tags/v'))).map((ref) => String(ref.ref).slice(TAG_REF_PREFIX.length));
@@ -300,6 +382,7 @@ export async function readAdoptionReport({ client, org, repo, kitLabels, empty }
     { name: 'v* tags', detail: listNames(tags) },
     { name: 'environments', detail: listNames(environments.map((environment) => environment.name)) },
     { name: 'open issues failing issue-format', detail: String(unformatted.length) },
+    { name: 'license', detail: licenseDetail(tree) },
     { name: 'secrets', detail: 'not read; check them in the browser' },
     { name: 'merge settings', detail: 'not read; pass 1 sets squash-only' },
   ];

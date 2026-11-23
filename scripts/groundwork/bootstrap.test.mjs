@@ -9,7 +9,7 @@ import { SettingsError } from '../lib/settings.mjs';
 import {
   CONTROL_READ_PERMISSIONS, CREATE_PERMISSIONS, DESCRIPTION_MAX_LENGTH, OP, PERMISSIONS, TOKEN_SCOPE, plan, run, validateArgs,
 } from './bootstrap.mjs';
-import { buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
+import { adoptTreeEntries, buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 
 test('bootstrap identity', () => {
   assert.equal(OP, 'bootstrap');
@@ -113,7 +113,7 @@ function expectedTree(files) {
 }
 
 /** Status of each kit-version read without a ref, in call order: one per `inspectRepo` (not when absent) and per `applySections` call. */
-const KIT_READS = { foreign: [404], absent: [404, 200, 200, 200, 200], fresh: [404, 404, 200, 200, 200, 200], ours: [200, 200, 200, 200, 200, 200] };
+const KIT_READS = { foreign: [404, 404, 200, 200, 200, 200], absent: [404, 200, 200, 200, 200], fresh: [404, 404, 200, 200, 200, 200], ours: [200, 200, 200, 200, 200, 200] };
 
 function targetRoutes(state, files) {
   const { treeEntries } = expectedTree(files);
@@ -458,9 +458,10 @@ const PROJECT_TREE = [
 ];
 
 /** A readable foreign target with no gap unless a field says otherwise. */
-function foreignRoutes({ repository = {}, empty = false, branch = { protected: false }, tree = { truncated: false, tree: PROJECT_TREE } } = {}) {
+function foreignRoutes({ repository = {}, empty = false, branch = { protected: false }, tree = { truncated: false, sha: 'tree-main', tree: PROJECT_TREE }, commit } = {}) {
   const defaultBranch = repository.default_branch ?? 'main';
   const head = `head-${defaultBranch}`;
+  const headCommit = commit ?? { sha: head, tree: { sha: 'tree-main' } };
   const commits = empty ? reply(409, { message: 'Git Repository is empty.' }) : reply(200, [{ sha: 'c0', author: { login: 'someone' } }]);
   return {
     [`GET ${TARGET_PATH}`]: reply(200, { default_branch: 'main', archived: false, ...repository }),
@@ -468,7 +469,8 @@ function foreignRoutes({ repository = {}, empty = false, branch = { protected: f
     [`GET ${TARGET_PATH}/commits?per_page=1`]: commits,
     [`GET ${TARGET_PATH}/branches/main`]: reply(200, branch),
     [`GET ${TARGET_PATH}/git/ref/heads/${defaultBranch}`]: reply(200, { object: { sha: head } }),
-    [`GET ${TARGET_PATH}/git/trees/${head}?recursive=1`]: reply(200, tree),
+    [`GET ${TARGET_PATH}/git/commits/${head}`]: reply(200, headCommit),
+    [`GET ${TARGET_PATH}/git/trees/${headCommit.tree?.sha}?recursive=1`]: reply(200, tree),
     [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, [{ name: 'bug' }, { name: 'Accepted' }]),
     [`GET ${TARGET_PATH}/git/matching-refs/tags/v?per_page=100`]: reply(200, [{ ref: 'refs/tags/v1.0.0' }]),
     [`GET ${TARGET_PATH}/environments?per_page=100`]: reply(200, { total_count: 1, environments: [{ name: 'production' }] }),
@@ -488,8 +490,8 @@ function planCall({ state = 'foreign', gaps, args = ADOPT_ARGS, files = ADOPT_FI
   return { calls, result: plan({ client, org: ORG, controlRepo: CONTROL, request, config: CONFIG }) };
 }
 
-const COLLIDING_TREE = { truncated: false, tree: [blob('.github/dependabot.yml', 'project-dependabot'), blob('version.txt', 'project-version')] };
-const projectTree = (...entries) => ({ truncated: false, tree: entries });
+const COLLIDING_TREE = { truncated: false, sha: 'tree-main', tree: [blob('.github/dependabot.yml', 'project-dependabot'), blob('version.txt', 'project-version')] };
+const projectTree = (...entries) => ({ truncated: false, sha: 'tree-main', tree: entries });
 /** [case, gaps, row name, row detail]: every case is one failing row. */
 const GAPS = [
   ['default branch', { repository: { default_branch: 'master' } }, 'default branch', /default branch: master/],
@@ -502,6 +504,9 @@ const GAPS = [
   ['submodule at a kit path', { tree: projectTree({ path: 'README.md', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: README\.md is a commit/],
   ['truncated target tree', { tree: { truncated: true, tree: [] } }, 'collisions', /collisions: target tree is truncated/],
   ['tree response without a tree list', { tree: { truncated: false } }, 'collisions', /collisions: target tree response has no tree list/],
+  ['head commit without a tree SHA', { commit: { sha: 'head-main', tree: {} } }, 'collisions', /collisions: head commit head-main has no tree SHA/],
+  ['root CODEOWNERS the kit file would shadow', { tree: projectTree(blob('CODEOWNERS', 'p1')) }, 'collisions', /collisions: CODEOWNERS would be shadowed by \.github\/CODEOWNERS, move it there/],
+  ['docs CODEOWNERS the kit file would shadow', { tree: projectTree(blob('docs/CODEOWNERS', 'p1')) }, 'collisions', /collisions: docs\/CODEOWNERS would be shadowed by \.github\/CODEOWNERS, move it there/],
 ];
 
 test('AC2 plan without the opt-in makes no call and adds nothing', async () => {
@@ -514,9 +519,9 @@ test('AC2 plan lists every failing and reported row of a foreign target from GET
   const { calls, result } = planCall();
   const { facts, problem } = await result;
   assert.equal(problem, undefined);
-  assert.deepEqual(facts.slice(0, 2), [`Adoption preflight against ${TAG}: 0 failing row(s)`, 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships']);
-  const rows = ['ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
-    'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1',
+  assert.deepEqual(facts.slice(0, 2), [`Adoption preflight against ${TAG}: 0 failing row(s)`, 'If the target is still foreign when apply runs, apply merges the kit into main at the target head']);
+  const rows = ['target head: head-main', 'ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
+    'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1', 'report license: LICENSE',
     'report secrets: not read; check them in the browser', 'report merge settings: not read; pass 1 sets squash-only'];
   assert.deepEqual(facts.slice(2), rows);
   assert.ok(calls.length > 0);
@@ -534,25 +539,135 @@ for (const [name, gaps, rowName, row] of GAPS) {
 
   test(`AC3 apply with a ${name} names the row and stops before any write call or target grant`, async () => {
     const world = adoptWorld(gaps);
-    await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && error.message === `adopt preflight failed: ${rowName}`);
+    await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && error.message.startsWith(`adopt preflight failed: ${rowName}`));
     assert.ok(world.logs.some((line) => line.startsWith('FAIL ') && row.test(line)), world.logs.join('\n'));
     assert.deepEqual(writesOf(world), []);
     assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
   });
 }
 
-test('AC4 apply with the opt-in and no failing row ends after the preflight with no write call', async () => {
-  const world = adoptWorld();
+const PROJECT_CODEOWNERS = '/src/ @project-team\n';
+const KIT_CODEOWNERS = ADOPT_FILES['.github/CODEOWNERS'];
+
+/** An apply world on a clean foreign target: the kit blobs the merge posts come back with their release SHAs. */
+/** A project label the kit does not ship: the full sync deletes it, so only after the ref update. */
+const PROJECT_LABEL = { name: 'bug', color: 'd73a4a', description: 'Something is wrong' };
+const LABEL_EDITS = new Set(['PATCH', 'DELETE']);
+const labelEditsOf = (world) => writesOf(world).filter((call) => LABEL_EDITS.has(call.method) && call.path.startsWith(`${TARGET_PATH}/labels/`));
+
+function adoptApplyWorld(overrides = {}, files = ADOPT_FILES) {
+  const { treeEntries, contents } = expectedTree(files);
+  const merged = adoptTreeEntries({ treeEntries, contents, target: { tree: PROJECT_TREE, codeowners: PROJECT_CODEOWNERS } });
+  return createWorld({
+    state: 'foreign',
+    files,
+    args: ADOPT_ARGS,
+    overrides: {
+      ...foreignRoutes(),
+      [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, [PROJECT_LABEL]), reply(200, [PROJECT_LABEL, ...LABELS]), reply(200, LABELS)],
+      [`DELETE ${TARGET_PATH}/labels/bug`]: reply(204),
+      [`GET ${TARGET_PATH}/git/blobs/p4`]: reply(200, { content: base64(PROJECT_CODEOWNERS), encoding: 'base64' }),
+      [`POST ${TARGET_PATH}/git/blobs`]: merged.filter((entry) => entry.sha).map((entry) => reply(201, { sha: entry.sha })),
+      ...overrides,
+    },
+  });
+}
+
+const bodyOf = (world, line) => world.bodies.find((call) => `${call.method} ${call.path}` === line)?.body;
+
+test('#274 AC1 AC2 AC4 apply merges the kit over the target tree at the pinned head, keeping project files', async () => {
+  const world = adoptApplyWorld();
   const result = await run(world.ctx, world.seams);
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true, result.summary);
   const lines = result.summary.split('\n');
-  for (const line of ['- inspect: foreign', '- target head: head-main', '- ok collisions: none', '- ok protected main: not set']) assert.ok(lines.includes(line), line);
-  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/head-main`), 'the tree is read at the head commit SHA');
-  assert.match(result.summary, /stopped after the preflight: the kit merge \(#274\) is not built, so no write was made/);
+  for (const line of ['- inspect: foreign', '- target head: head-main', '- ok collisions: none', '- adopt commit: pushed commit-1']) assert.ok(lines.includes(line), line);
+  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/commits/head-main`), 'the tree SHA comes from the head commit');
+  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/tree-main`), 'the tree is read by its own SHA');
+  const tree = bodyOf(world, `POST ${TARGET_PATH}/git/trees`);
+  assert.equal(tree.base_tree, 'tree-main', 'the kit is written over the existing tree');
+  const written = new Map(tree.tree.map((entry) => [entry.path, entry]));
+  for (const kept of ['src/app.js', 'README.md', 'LICENSE']) assert.equal(written.has(kept), false, `${kept} stays the project's`);
+  assert.equal(written.get('.github/CODEOWNERS').content, `${PROJECT_CODEOWNERS}${KIT_CODEOWNERS}`);
+  assert.deepEqual(bodyOf(world, `POST ${TARGET_PATH}/git/commits`).parents, ['head-main']);
+  assert.deepEqual(bodyOf(world, `PATCH ${TARGET_PATH}/git/refs/heads/main`), { sha: 'commit-1', force: false });
+  assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS, PERMISSIONS]);
+  assert.equal(world.calls.some((call) => call.path === `/orgs/${ORG}/repos`), false);
+});
+
+test('#274 adopt creates the missing kit labels before the commit and updates or deletes project labels only after the ref update', async () => {
+  const world = adoptApplyWorld();
+  const result = await run(world.ctx, world.seams);
+  assert.equal(result.ok, true, result.summary);
+  assert.ok(result.summary.split('\n').includes('- labels (missing kit labels): 2 created'), result.summary);
+  const order = [`POST ${TARGET_PATH}/labels`, `POST ${TARGET_PATH}/git/commits`, `PATCH ${TARGET_PATH}/git/refs/heads/main`, `DELETE ${TARGET_PATH}/labels/bug`].map((line) => indexOfLine(world, line));
+  assert.ok(order.every((index) => index >= 0), order.join(','));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  const commit = order[1];
+  assert.deepEqual(world.calls.filter((call, index) => index < commit && call.method === 'POST' && call.path === `${TARGET_PATH}/labels`).length, 2);
+  assert.deepEqual(labelEditsOf(world).map(lineOf), [`DELETE ${TARGET_PATH}/labels/bug`]);
+});
+
+test('#274 adopt creates only the kit labels the target lacks and changes a held one only after the ref update', async () => {
+  const heldKitLabel = { name: 'Dependencies', color: '000000', description: 'old' };
+  const live = [PROJECT_LABEL, heldKitLabel];
+  const world = adoptApplyWorld({
+    [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, live), reply(200, [...live, LABELS[1]]), reply(200, LABELS)],
+    [`PATCH ${TARGET_PATH}/labels/Dependencies`]: reply(200),
+  });
+  const result = await run(world.ctx, world.seams);
+  assert.equal(result.ok, true, result.summary);
+  assert.ok(result.summary.split('\n').includes('- labels (missing kit labels): 1 created'), result.summary);
+  const created = world.bodies.filter((call) => call.method === 'POST' && call.path === `${TARGET_PATH}/labels`).map((call) => call.body.name);
+  assert.deepEqual(created, ['accepted']);
+  const refUpdate = indexOfLine(world, `PATCH ${TARGET_PATH}/git/refs/heads/main`);
+  const edits = world.calls.map((call, index) => ({ ...call, index })).filter((call) => lineOf(call) === `PATCH ${TARGET_PATH}/labels/Dependencies`);
+  assert.equal(edits.length, 1);
+  assert.ok(edits[0].index > refUpdate, 'the held kit label changes only after the ref update');
+});
+
+test('#274 adopt with a release tree whose settings fail validation refuses before any write', async () => {
+  const brokenLabels = JSON.stringify({ schemaVersion: 1, labels: [{ name: 'dependencies', description: 'no color' }] });
+  const world = adoptApplyWorld({}, { ...ADOPT_FILES, '.github/groundwork/labels.json': brokenLabels });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /needs string color and description/.test(error.message));
   assert.deepEqual(writesOf(world), []);
-  assert.deepEqual(world.written, []);
+});
+
+test('#274 a main that moves after the label create refuses the commit and leaves every project label unchanged', async () => {
+  const head = (sha) => reply(200, { object: { sha } });
+  const world = adoptApplyWorld({ [`GET ${TARGET_PATH}/git/ref/heads/main`]: [head('head-main'), head('head-main'), head('head-moved')] });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /main moved from head-main to head-moved after the adopt preflight; no commit was made/.test(error.message));
+  assert.ok(indexOfLine(world, `POST ${TARGET_PATH}/labels`) >= 0, 'the missing kit labels were created');
+  assert.deepEqual(labelEditsOf(world), []);
+  assert.deepEqual(writesOf(world).filter((call) => call.path.includes('/git/')), []);
+});
+
+test('#274 AC4 apply refuses before any write, label sync included, when main moved after the preflight read', async () => {
+  const moved = [reply(200, { object: { sha: 'head-main' } }), reply(200, { object: { sha: 'head-moved' } })];
+  const world = adoptApplyWorld({ [`GET ${TARGET_PATH}/git/ref/heads/main`]: moved });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /main moved from head-main to head-moved/.test(error.message));
+  assert.deepEqual(writesOf(world), []);
+});
+
+test('#274 a main that moves during the blob posts refuses the ref update with the same rerun advice', async () => {
+  const world = adoptApplyWorld({ [`PATCH ${TARGET_PATH}/git/refs/heads/main`]: reply(422, { message: 'Update is not a fast forward' }) });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /main moved during the commit; no ref update was made, rerun bootstrap/.test(error.message));
+  assert.deepEqual(labelEditsOf(world), []);
+});
+
+test('#274 the plan reports a license-like file as kept and a missing one as left to the repository owner', async () => {
+  const withLicenseMd = projectTree(blob('src/app.js', 'p1'), blob('LICENSE.md', 'p2'));
+  const { facts } = await planCall({ gaps: { tree: withLicenseMd } }).result;
+  assert.ok(facts.includes('report license: LICENSE.md'), facts.join('\n'));
+  const { facts: none } = await planCall({ gaps: { tree: projectTree(blob('src/app.js', 'p1')) } }).result;
+  assert.ok(none.includes('report license: none; adopt adds none, the repository owner picks one'), none.join('\n'));
+});
+
+test('#274 AC3 a colliding workflow path makes apply refuse before any write, naming the path', async () => {
+  const tree = projectTree(blob('.github/workflows/ci.yml', 'project-ci'), blob('src/app.js', 'p1'));
+  const world = adoptApplyWorld(foreignRoutes({ tree }));
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && error.message.includes('.github/workflows/ci.yml'));
+  assert.deepEqual(writesOf(world), []);
   assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
-  assert.equal(world.calls.some((call) => /\/(labels|issues|environments)$/.test(call.path)), false);
 });
 
 test('adopt on an absent or fresh target is refused in plan and in apply before any write', async () => {
@@ -584,7 +699,7 @@ test('AC2 a long row keeps its count within the rendered fact length', async () 
 test('plan turns a missing or malformed labels.json into a problem instead of a crash', async () => {
   const missing = { ...ADOPT_FILES };
   delete missing['.github/groundwork/labels.json'];
-  for (const files of [missing, ...['{not json', '{"labels":[null]}', 'null'].map((text) => ({ ...ADOPT_FILES, '.github/groundwork/labels.json': text }))]) {
+  for (const files of [missing, ...['{not json', '{"labels":[null]}', 'null', '{"labels":["x"]}', '{"labels":[{}]}', '{"labels":[{"name":5}]}'].map((text) => ({ ...ADOPT_FILES, '.github/groundwork/labels.json': text }))]) {
     const { problem } = await planCall({ files }).result;
     assert.match(problem, /labels\.json in the release tree is missing or not a label list/);
   }
@@ -598,5 +713,14 @@ test('AC2 every plan fact fits the 200-character render limit for a 100-characte
   assert.equal(facts[1], 'Apply stops before any write');
   const { facts: clean } = await planCall({ repo }).result;
   for (const fact of clean) assert.ok(fact.length <= 200, fact);
-  assert.equal(clean[1], 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships');
+  assert.equal(clean[1], 'If the target is still foreign when apply runs, apply merges the kit into main at the target head');
+});
+
+test('#274 a long default branch name is capped so its fact keeps ", must be main"', async () => {
+  const branch = 'b'.repeat(240);
+  const overrides = { [`GET ${TARGET_PATH}/git/ref/heads/${branch}`]: reply(200, { object: { sha: 'head-long' } }), [`GET ${TARGET_PATH}/git/commits/head-long`]: reply(200, { sha: 'head-long', tree: { sha: 'tree-long' } }), [`GET ${TARGET_PATH}/git/trees/tree-long?recursive=1`]: reply(200, { truncated: false, sha: 'tree-long', tree: [] }) };
+  const { facts } = await planCall({ gaps: { repository: { default_branch: branch } }, overrides }).result;
+  const row = facts.find((fact) => fact.startsWith('FAIL default branch: '));
+  assert.ok(row.length <= 200, row);
+  assert.match(row, /, must be main$/);
 });

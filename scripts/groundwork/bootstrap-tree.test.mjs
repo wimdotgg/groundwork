@@ -8,6 +8,7 @@ import { KIT_EXCLUDED_PATHS, isKitPath } from '../kit-update.mjs';
 import {
   CONTROL_PATHS,
   KIT_VERSION_PATH,
+  adoptTreeEntries,
   buildBootstrapTree,
   contentPaths,
   settingsFiles,
@@ -310,6 +311,76 @@ test('#268 AC4: CONTROL_PATHS lists the org-setup skill and the tree carries no 
   const withSkill = [...entries, { path: '.claude/skills/groundwork-setup/SKILL.md', mode: '100644', sha: 'sha-setup-skill' }];
   const tree = buildBootstrapTree({ entries: withSkill, contents, ...OPTIONS });
   assert.deepEqual(tree.filter(({ path }) => path.startsWith('.claude/skills/groundwork-setup/')), []);
+});
+
+// --- adopt (#274, spec 14.4) ------------------------------------------------------------------------------------
+
+const PROJECT_CODEOWNERS = '/src/ @project-team';
+/** A fake existing tree: project-only paths, the kept README and LICENSE, and a kit path with the kit's own blob. */
+const EXISTING_TREE = [
+  { path: 'src/app.js', mode: '100644', type: 'blob', sha: 'project-app' },
+  { path: 'src/bin/run', mode: '100755', type: 'blob', sha: 'project-run' },
+  { path: 'vendor/lib', mode: '160000', type: 'commit', sha: 'project-submodule' },
+  { path: 'docs/handbook.md', mode: '100644', type: 'blob', sha: 'project-handbook' },
+  { path: 'README.md', mode: '100644', type: 'blob', sha: 'project-readme' },
+  { path: 'LICENSE', mode: '100644', type: 'blob', sha: 'project-license' },
+  { path: '.github/CODEOWNERS', mode: '100644', type: 'blob', sha: 'project-codeowners' },
+];
+
+function adoptFixture() {
+  const { entries, contents } = ownerFixture(JSON.stringify(FIXTURE_CONFIG));
+  const withLicense = [...entries, { path: 'LICENSE', mode: '100644', sha: 'sha-LICENSE' }];
+  const treeEntries = buildBootstrapTree({ entries: withLicense, contents, ...OPTIONS });
+  return { treeEntries, contents };
+}
+
+/** What POST git/trees with base_tree does: the overlay replaces or adds paths, every other path stays. */
+const overlay = (existing, entries) => new Map([...existing.map((entry) => [entry.path, entry]), ...entries.map((entry) => [entry.path, entry])]);
+
+test('#274 AC1: in adopt mode every existing path the kit does not ship stays byte for byte', () => {
+  const { treeEntries, contents } = adoptFixture();
+  const entries = adoptTreeEntries({ treeEntries, contents, target: { tree: EXISTING_TREE, codeowners: PROJECT_CODEOWNERS } });
+  const kitPaths = new Set(treeEntries.map((entry) => entry.path));
+  assert.deepEqual(entries.filter((entry) => !kitPaths.has(entry.path)), [], 'the overlay writes kit paths only');
+  const merged = overlay(EXISTING_TREE, entries);
+  for (const existing of EXISTING_TREE.filter((entry) => !kitPaths.has(entry.path))) assert.deepEqual(merged.get(existing.path), existing, existing.path);
+  for (const kitEntry of treeEntries.filter((entry) => !EXISTING_TREE.some((existing) => existing.path === entry.path))) {
+    assert.deepEqual(merged.get(kitEntry.path), kitEntry, kitEntry.path);
+  }
+});
+
+test('#274 AC2: README.md and LICENSE keep the project content; CODEOWNERS ends with the kit lines naming accounts.owner', () => {
+  const { treeEntries, contents } = adoptFixture();
+  const entries = adoptTreeEntries({ treeEntries, contents, target: { tree: EXISTING_TREE, codeowners: PROJECT_CODEOWNERS } });
+  const merged = overlay(EXISTING_TREE, entries);
+  assert.equal(merged.get('README.md').sha, 'project-readme');
+  assert.equal(merged.get('LICENSE').sha, 'project-license');
+  const kitLines = buildBootstrapTree({ ...ownerFixture(JSON.stringify(FIXTURE_CONFIG)), ...OPTIONS }).find((entry) => entry.path === '.github/CODEOWNERS').content ?? LIVE_CODEOWNERS;
+  const codeowners = merged.get('.github/CODEOWNERS').content;
+  assert.equal(codeowners, `${PROJECT_CODEOWNERS}\n${kitLines}`, 'a missing final newline is added before the kit lines');
+  for (const line of ruleLines(kitLines)) assert.deepEqual(ownersOf(line), [`@${FIXTURE_CONFIG.accounts.owner}`], line);
+  assert.ok(codeowners.endsWith(kitLines));
+});
+
+test('#274 AC2: a target without README.md or CODEOWNERS gets the kit files; adopt never adds a LICENSE (owner decision, #258)', () => {
+  const { treeEntries, contents } = adoptFixture();
+  const tree = EXISTING_TREE.filter((entry) => !['README.md', 'LICENSE', '.github/CODEOWNERS'].includes(entry.path));
+  const entries = adoptTreeEntries({ treeEntries, contents, target: { tree } });
+  for (const path of ['README.md', '.github/CODEOWNERS']) assert.deepEqual(find(entries, path), find(treeEntries, path), path);
+  assert.equal(find(entries, 'LICENSE'), undefined);
+});
+
+test('#274 AC2: a readme in another case or extension keeps the kit README.md out', () => {
+  const { treeEntries, contents } = adoptFixture();
+  for (const readme of ['Readme.md', 'README.rst', 'readme']) {
+    const tree = [{ path: readme, mode: '100644', type: 'blob', sha: 'project-readme' }];
+    assert.equal(find(adoptTreeEntries({ treeEntries, contents, target: { tree } }), 'README.md'), undefined, readme);
+  }
+});
+
+test('#274 AC2: a target CODEOWNERS without its text is a SettingsError, not a silent replace', () => {
+  const { treeEntries, contents } = adoptFixture();
+  assert.throws(() => adoptTreeEntries({ treeEntries, contents, target: { tree: EXISTING_TREE } }), (error) => error instanceof SettingsError && /\.github\/CODEOWNERS/.test(error.message));
 });
 
 // Lives here, not in kit-update.test.mjs: scripts/groundwork/ never ships to projects, and that test does.
