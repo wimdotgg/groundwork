@@ -32,6 +32,13 @@ export const KIT_PATHS = [
   '.claude/skills/groundwork-*/',
 ];
 
+/**
+ * Paths under a `KIT_PATHS` pattern that stay in the control repo (`[control]`, spec 13.1). Listed here, not imported
+ * from `CONTROL_PATHS`, because `scripts/groundwork/` never reaches a project; a test there keeps them in step. A copy a
+ * project already holds is removed on update.
+ */
+export const KIT_EXCLUDED_PATHS = ['.claude/skills/groundwork-setup/'];
+
 /** Copied only while the project's file equals the old tag's; else reported in `skipped`. */
 export const UNMODIFIED_ONLY_PATHS = ['.github/dependabot.yml', '.claude/settings.json', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -58,8 +65,13 @@ function toMatcher(pattern) {
   return new RegExp(pattern.endsWith('/') ? `^${source}` : `^${source}$`);
 }
 
+function isExcludedPath(filePath) {
+  return KIT_EXCLUDED_PATHS.some((excluded) => filePath.startsWith(excluded));
+}
+
 /** @param {string} filePath */
 export function isKitPath(filePath) {
+  if (isExcludedPath(filePath)) return false;
   return KIT_PATH_MATCHERS.some((matcher) => matcher.test(filePath));
 }
 
@@ -204,8 +216,9 @@ async function planFileWrites({ client, control, root, oldTree, newTree }) {
     writes.set(entry.path, { content: await readBlob(client, control, entry), executable: entry.mode === EXECUTABLE_MODE });
   }
   const removals = [];
-  for (const filePath of oldTree.keys()) {
-    if (isKitPath(filePath) && !newTree.has(filePath) && (await readLocal(root, filePath)) !== null) removals.push(filePath);
+  for (const filePath of new Set([...oldTree.keys(), ...newTree.keys()])) {
+    const stale = isKitPath(filePath) ? oldTree.has(filePath) && !newTree.has(filePath) : isExcludedPath(filePath);
+    if (stale && (await readLocal(root, filePath)) !== null) removals.push(filePath);
   }
   return { writes, removals, skipped };
 }
