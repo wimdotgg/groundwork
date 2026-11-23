@@ -19,6 +19,7 @@ const CONFIG = {
 
 const ok = (data) => ({ status: 200, data });
 const failure = (status) => ({ status, data: { message: `status ${status}` } });
+const CODEOWNERS_SECTION = 'codeowners';
 const CODEOWNERS_ROUTE = `GET ${R}/contents/.github/CODEOWNERS`;
 const codeownersFile = (text) => ok({ encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64') });
 const ownedBy = (owner) => `# gate\n/.github/  @${owner}\n/scripts/lib/  @${owner}\n`;
@@ -293,7 +294,6 @@ test('runCheck: a null repo throws SettingsError before any reading', async () =
   });
 });
 
-const CODEOWNERS_SECTION = 'codeowners';
 const CODEOWNERS_KEY = '.github/CODEOWNERS';
 const LIVE_CONFIG = JSON.parse(readFileSync(new URL('../../.github/groundwork/config.json', import.meta.url), 'utf8'));
 const OWNER_CONFIGS = [

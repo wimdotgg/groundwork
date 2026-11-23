@@ -8,6 +8,7 @@ export const CONTROL_PATHS = [
   'admin-ops/',
   'scripts/groundwork/',
   'scripts/owner/',
+  '.claude/skills/groundwork-setup/',
   '.github/workflows/reusable-verify.yml',
   '.github/workflows/reusable-security.yml',
   '.github/workflows/admin-run.yml',
@@ -35,8 +36,9 @@ const PROJECT_DOCS_DIR = 'docs/';
 
 const CODEOWNERS_PATH = '.github/CODEOWNERS';
 const CONFIG_PATH = `${SETTINGS_DIR}config.json`;
-// A GitHub login: letters, digits and single hyphens. Anything else could add a CODEOWNERS rule.
-const LOGIN_PATTERN = /^[A-Za-z0-9](?:-?[A-Za-z0-9])*$/;
+// A GitHub login: letters, digits, hyphens, and underscores for enterprise managed users (<handle>_<shortcode>).
+// It must exclude whitespace, "#", "@" and "/", which could add a CODEOWNERS rule or a team.
+const LOGIN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 // A rule line: path pattern, its owners, an optional trailing comment.
 const CODEOWNERS_RULE = /^(\s*[^\s#]+\s+)([^#]*?)(\s*(?:#[^\n]*)?)$/;
 
@@ -105,6 +107,8 @@ function fillCodeowners(text, owner) {
   return text.split('\n').map((line) => {
     const rule = CODEOWNERS_RULE.exec(line);
     if (!rule || rule[2] === '') return line;
+    // The pattern ends at the first space, so an escaped space would cut it and leave a rule with no owner.
+    if (rule[1].trimEnd().endsWith('\\')) throw new SettingsError(`${CODEOWNERS_PATH} has a pattern with an escaped space: ${line.trim()}`, CODEOWNERS_PATH);
     return `${rule[1]}@${owner}${rule[3]}`;
   }).join('\n');
 }

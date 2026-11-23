@@ -1,4 +1,4 @@
-import { GitHubError } from '../lib/github.mjs';
+import { GitHubError, apiPath } from '../lib/github.mjs';
 import { sameLogin } from '../lib/trust.mjs';
 import {
   appliesToKind, compareStates, loadDesiredState, readLiveState, readSignals, repoKind, resolvePlaceholders, SettingsError,
@@ -29,6 +29,7 @@ const TABLE_DIVIDER = '|---|---|---|---|---|';
 
 const CODEOWNERS_SECTION = 'codeowners';
 const CODEOWNERS_PATH = '.github/CODEOWNERS';
+const CODEOWNERS_URL = `/repos/{owner}/{repo}/contents/${CODEOWNERS_PATH}`;
 const UNREADABLE_STATUS = 403;
 const NOT_FOUND_STATUS = 404;
 
@@ -105,6 +106,7 @@ function codeownersOwners(text) {
 /**
  * A CODEOWNERS owner that is not the configured one leaves protected paths without a valid reviewer, and `main`
  * needs no other approval, so the gate fails open (spec 9.4). Read from the default branch, like GitHub does.
+ * The row proves who the owners are, not what they cover: it cannot see a later unowned line unset an owner.
  * @returns {Promise<import('../lib/settings.mjs').ComparisonRow>}
  */
 async function compareCodeowners(client, { owner, repo }, accountOwner) {
@@ -112,7 +114,7 @@ async function compareCodeowners(client, { owner, repo }, accountOwner) {
   const row = (live, result) => ({ section: CODEOWNERS_SECTION, key: CODEOWNERS_PATH, desired, live, result });
   let response;
   try {
-    response = await client.request('GET', `/repos/${owner}/${repo}/contents/${CODEOWNERS_PATH}`, { okStatuses: [NOT_FOUND_STATUS] });
+    response = await client.request('GET', apiPath(CODEOWNERS_URL, { owner, repo }), { okStatuses: [NOT_FOUND_STATUS] });
   } catch (error) {
     if (error instanceof GitHubError && error.status === UNREADABLE_STATUS) return row(null, 'unreadable');
     throw error;

@@ -283,3 +283,27 @@ test('#268 AC4: CONTROL_PATHS lists scripts/owner/ and the tree carries no scrip
   assert.ok(fixture().entries.some(({ path }) => path.startsWith('scripts/owner/')), 'the fixture holds the wizard');
   assert.deepEqual(build().filter(({ path }) => path.startsWith('scripts/owner/')), []);
 });
+
+test('#268 AC1: an owner login with an underscore (enterprise managed user) is accepted; a path or comment character is not', () => {
+  const build268 = (owner) => buildBootstrapTree({ ...ownerFixture(JSON.stringify({ accounts: { owner } })), ...OPTIONS });
+  assert.equal(find(build268('octo_acme'), '.github/CODEOWNERS').content.includes('@octo_acme'), true);
+  for (const owner of ['octo/team', 'octo#1', 'octo@x', '-octo', 'octo ']) {
+    assert.throws(() => build268(owner), (error) => error instanceof SettingsError, owner);
+  }
+});
+
+test('#268 AC1: a CODEOWNERS path pattern with an escaped space throws instead of producing a rule with no owner', () => {
+  const config = JSON.stringify({ accounts: { owner: 'new-owner' } });
+  assert.throws(
+    () => buildBootstrapTree({ ...ownerFixture(config, String.raw`/my\ dir/ @old` + '\n'), ...OPTIONS }),
+    (error) => error instanceof SettingsError && error.file === '.github/CODEOWNERS' && !error.message.includes('\n'),
+  );
+});
+
+test('#268 AC4: CONTROL_PATHS lists the org-setup skill and the tree carries no groundwork-setup entry', () => {
+  assert.ok(CONTROL_PATHS.includes('.claude/skills/groundwork-setup/'));
+  const { entries, contents } = fixture();
+  const withSkill = [...entries, { path: '.claude/skills/groundwork-setup/SKILL.md', mode: '100644', sha: 'sha-setup-skill' }];
+  const tree = buildBootstrapTree({ entries: withSkill, contents, ...OPTIONS });
+  assert.deepEqual(tree.filter(({ path }) => path.startsWith('.claude/skills/groundwork-setup/')), []);
+});
