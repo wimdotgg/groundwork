@@ -31,8 +31,9 @@ Pace: at most 5 issue creations and 10 comments per minute, a pause between bulk
 1. Read the goal and the repo: `docs/spec.md`, `.github/groundwork/hotspots.json`, open epics (`node scripts/agent/token.mjs exec -- gh issue list --state open --search "type:Epic"`).
 2. Read `GLOSSARY.md` and `docs/decisions/` when present; when absent, proceed without comment (3, 4.1):
    - use glossary terms in the epic and the sub-issues;
-   - a plan that contradicts a decision record raises `needs-decision` on the epic with the record linked (6.6, Escalation);
-   - when the goal decides something that meets the decision-record bar (4.1), name the record in the owning task's `## Scope`. Planners open no PR: the first task PR that relies on it adds the record.
+   - a record replaced by a newer one that names it no longer counts;
+   - a plan that contradicts a record raises `needs-decision` on the epic with the record linked (6.6, Escalation). The epic does not exist yet: create the proposed epic (step 4), raise it there and create no sub-issues until the owner answers;
+   - when the plan makes a decision that meets the decision-record bar (4.1), pick the earliest sub-issue that relies on it and write `docs/decisions/<epic>-<slug>.md` into that task's `## Scope` and `## Touches`. Planners open no PR: that task's PR adds the record.
 3. Design the width plan before creating anything (6.2):
    - one contract task first (types, schema, API shape);
    - then lane tasks that can run concurrently;
