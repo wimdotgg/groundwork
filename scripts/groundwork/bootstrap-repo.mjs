@@ -200,11 +200,34 @@ async function createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep 
  * @returns {Promise<{ sha: string, created: boolean }>} `created` is false when the kit-version file is already on main
  */
 export async function commitBootstrapTree({ client, org, repo, tag, treeEntries, blobs, sleep = delay }) {
-  const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${DEFAULT_BRANCH}`));
-  const head = ref.object.sha;
+  const head = await readMainHead({ client, org, repo });
   if (await hasKitVersion({ client, org, repo, ref: DEFAULT_BRANCH })) return { sha: head, created: false };
   const tree = await createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep });
-  const { data: createdTree } = await client.request('POST', repoPath(org, repo, '/git/trees'), { body: { tree } });
+  return { sha: await pushCommit({ client, org, repo, tag, head, tree: { tree } }), created: true };
+}
+
+/**
+ * The kit merge of spec 14.4: `treeEntries` (`adoptTreeEntries` output) written over the tree the preflight read,
+ * as one commit whose parent is that head. A `main` that moved since the preflight refuses before any git write.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string, tag: string,
+ *   pin: { headSha: string, treeSha: string }, treeEntries: Array<{ path: string, mode: string, sha?: string, content?: string }>,
+ *   blobs: Map<string, string>, sleep?: (ms: number) => Promise<unknown> }} options `pin` is `readAdoptionGaps` output
+ * @returns {Promise<{ sha: string, created: boolean }>}
+ */
+export async function commitAdoptTree({ client, org, repo, tag, pin, treeEntries, blobs, sleep = delay }) {
+  const head = await readMainHead({ client, org, repo });
+  if (head !== pin.headSha) throw new SettingsError(`${org}/${repo} main moved from ${pin.headSha} to ${head} after the adopt preflight; no commit was made, rerun bootstrap`);
+  const tree = await createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep });
+  return { sha: await pushCommit({ client, org, repo, tag, head, tree: { base_tree: pin.treeSha, tree } }), created: true };
+}
+
+async function readMainHead({ client, org, repo }) {
+  const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${DEFAULT_BRANCH}`));
+  return ref.object.sha;
+}
+
+async function pushCommit({ client, org, repo, tag, head, tree }) {
+  const { data: createdTree } = await client.request('POST', repoPath(org, repo, '/git/trees'), { body: tree });
   const message = `chore: bootstrap from groundwork ${tag}`;
   const { data: commit } = await client.request('POST', repoPath(org, repo, '/git/commits'), {
     body: { message, tree: createdTree.sha, parents: [head] },
@@ -212,7 +235,7 @@ export async function commitBootstrapTree({ client, org, repo, tag, treeEntries,
   await client.request('PATCH', repoPath(org, repo, `/git/refs/heads/${DEFAULT_BRANCH}`), {
     body: { sha: commit.sha, force: false },
   });
-  return { sha: commit.sha, created: true };
+  return commit.sha;
 }
 
 // Spec 14.4: the project's README and LICENSE are kept and kit lines are appended to its CODEOWNERS.
@@ -231,6 +254,9 @@ function listNames(names) {
   if (shown === names.length) return listed;
   return `${listed}${shown > 0 ? ' ' : ''}and ${names.length - shown} more`;
 }
+
+/** One target-chosen name, cut to the list budget like a list. */
+const capName = (name) => (name.length <= LIST_BUDGET ? name : `${name.slice(0, LIST_BUDGET)}...`);
 
 const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
 
@@ -258,33 +284,37 @@ function collisionsOf(kitEntries, targetByPath) {
   return [...collisions];
 }
 
-/** Reads the tree by the head commit SHA, so a tag named like the branch cannot answer and the kit merge can reuse the SHA. */
+/** Reads the tree by the head commit SHA, so a tag named like the branch cannot answer and the kit merge reuses the SHA and tree. */
 async function readCollisions({ client, org, repo, branch, kitEntries }) {
   const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${encodeURIComponent(branch)}`));
   const headSha = ref?.object?.sha;
-  if (typeof headSha !== 'string') return { row: gapRow('collisions', true, `heads/${branch} has no commit SHA`) };
+  if (typeof headSha !== 'string') return { row: gapRow('collisions', true, `heads/${capName(branch)} has no commit SHA`) };
   const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(headSha)}`), { query: { recursive: 1 } });
   if (data?.truncated) return { row: gapRow('collisions', true, 'target tree is truncated, so it cannot be compared'), headSha };
-  if (!Array.isArray(data?.tree)) return { row: gapRow('collisions', true, 'target tree response has no tree list'), headSha };
+  // Without its SHA the merge would post no base_tree and drop every project file.
+  if (!Array.isArray(data?.tree) || typeof data.sha !== 'string') return { row: gapRow('collisions', true, 'target tree response has no tree list or tree SHA'), headSha };
   const collisions = collisionsOf(kitEntries, new Map(data.tree.map((entry) => [entry.path, entry])));
-  return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha };
+  return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha, treeSha: data.sha, tree: data.tree };
 }
 
-/** The failing rows of spec 14.4 against the built kit tree, from GET calls; `headSha` is the commit the tree was read at. */
+/**
+ * The failing rows of spec 14.4 against the built kit tree, from GET calls. `headSha` is the commit the tree was read
+ * at; `treeSha` and `tree` (the recursive entries) come only when the tree was read whole.
+ */
 export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
   const { data: repository } = await client.request('GET', repoPath(org, repo, ''));
   const branch = repository.default_branch;
   const { status } = await client.request('GET', repoPath(org, repo, '/commits'), { query: { per_page: 1 }, okStatuses: [409] });
   const empty = status === 409;
   const rows = [
-    gapRow('default branch', branch !== DEFAULT_BRANCH, branch === DEFAULT_BRANCH ? branch : `${branch}, must be ${DEFAULT_BRANCH}`),
+    gapRow('default branch', branch !== DEFAULT_BRANCH, branch === DEFAULT_BRANCH ? branch : `${capName(branch)}, must be ${DEFAULT_BRANCH}`),
     gapRow('empty repository', empty, empty ? 'yes' : 'no'),
     gapRow('archived', repository.archived === true, repository.archived === true ? 'yes' : 'no'),
   ];
   if (empty) return { rows: [...rows, gapRow('protected main', false, NOT_CHECKED_EMPTY), gapRow('collisions', false, NOT_CHECKED_EMPTY)], empty };
   rows.push(await readMainProtection({ client, org, repo }));
-  const { row, headSha } = await readCollisions({ client, org, repo, branch, kitEntries });
-  return { rows: [...rows, row], empty, headSha };
+  const { row, ...pin } = await readCollisions({ client, org, repo, branch, kitEntries });
+  return { rows: [...rows, row], empty, ...pin };
 }
 
 /** The reported rows of spec 14.4, which never fail; merge settings and secret names are not read. */

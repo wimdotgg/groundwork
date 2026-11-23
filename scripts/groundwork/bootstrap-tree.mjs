@@ -180,6 +180,31 @@ export function buildBootstrapTree({ entries, contents, org, controlRepo, repo, 
   return [...kept, ...stubEntries, ...generated].sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
+// Spec 14.4: an adopted repository keeps its own copy of these when it has one.
+const ADOPT_KEPT_PATHS = new Set(['README.md', 'LICENSE']);
+
+function appendedCodeowners(entry, contents, projectText) {
+  if (typeof projectText !== 'string') throw new SettingsError(`the target's ${CODEOWNERS_PATH} text is needed to append the kit lines`, CODEOWNERS_PATH);
+  const kitText = entry.content ?? requireContent(contents, entry.path);
+  const separator = projectText === '' || projectText.endsWith('\n') ? '' : '\n';
+  return { path: entry.path, mode: entry.mode, content: `${projectText}${separator}${kitText}` };
+}
+
+/**
+ * The kit entries to write over an existing tree with `base_tree` (spec 14.4). The target keeps its README.md and
+ * LICENSE; its CODEOWNERS keeps its own lines and gets the kit lines appended, so the kit rules match last and win.
+ * @param {{ treeEntries: TreeEntry[], contents: Record<string, string>,
+ *   target: { tree: Array<{ path: string }>, codeowners?: string } }} options `target.codeowners` is the text of the
+ *   target's CODEOWNERS, required when its tree holds one
+ * @returns {TreeEntry[]} a subset of `treeEntries`, CODEOWNERS replaced by the appended text
+ */
+export function adoptTreeEntries({ treeEntries, contents, target }) {
+  const targetPaths = new Set(target.tree.map((entry) => entry.path));
+  return treeEntries
+    .filter((entry) => !(ADOPT_KEPT_PATHS.has(entry.path) && targetPaths.has(entry.path)))
+    .map((entry) => (entry.path === CODEOWNERS_PATH && targetPaths.has(entry.path) ? appendedCodeowners(entry, contents, target.codeowners) : entry));
+}
+
 /**
  * @param {TreeEntry[]} treeEntries output of buildBootstrapTree
  * @param {Record<string, string>} contents the release contents the tree was built from

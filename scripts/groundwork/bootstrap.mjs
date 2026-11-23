@@ -2,14 +2,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { SettingsError, repoKind } from '../lib/settings.mjs';
 import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
-  commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
+  commitAdoptTree, commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
   readBlobTexts, readKitVersion, readReleaseTree, resolveTagCommit,
 } from './bootstrap-repo.mjs';
-import { buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
+import { adoptTreeEntries, buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 import { findSetupEpic, openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
 
 const SETUP_TEMPLATES_DIR = 'scripts/groundwork/stubs/setup/';
 const LABELS_PATH = '.github/groundwork/labels.json';
+const CODEOWNERS_PATH = '.github/CODEOWNERS';
 
 /** Op identity, read by admin-run (12.1). */
 export const OP = 'bootstrap';
@@ -41,7 +42,6 @@ const ACCEPTED_LABEL = 'accepted';
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 const ALLOWED_KEYS = new Set(['description', 'adopt']);
 const NOTHING_TO_ADOPT = new Set(['absent', 'fresh']);
-const STOPPED_AFTER_PREFLIGHT = 'adopt: stopped after the preflight: the kit merge (#274) is not built, so no write was made';
 
 /**
  * @param {object} args parsed JSON object from the dispatch input
@@ -95,8 +95,27 @@ async function readKit({ client, org, controlRepo, repo, description, tag }) {
   return { treeEntries, contents };
 }
 
+const gapLine = ({ name, fail, detail }) => `${fail ? 'FAIL' : 'ok'} ${name}: ${detail}`;
+
+async function readTargetCodeowners({ client, org, repo, tree }) {
+  if (!tree.some((entry) => entry.path === CODEOWNERS_PATH)) return undefined;
+  const texts = await readBlobTexts({ client, org, controlRepo: repo, entries: tree, paths: [CODEOWNERS_PATH] });
+  return texts[CODEOWNERS_PATH];
+}
+
+/** Spec 14.4: apply repeats the failing rows and stops on any; otherwise the kit entries to merge over the tree it read. */
+async function readAdoption({ client, org, repo, kit, log }) {
+  const { rows, headSha, treeSha, tree } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
+  for (const row of rows) log(gapLine(row));
+  const failing = rows.filter((row) => row.fail);
+  if (failing.length > 0) throw new SettingsError(`adopt preflight failed: ${failing.map(({ name, detail }) => `${name}: ${detail}`).join('; ')}`);
+  const codeowners = await readTargetCodeowners({ client, org, repo, tree });
+  const treeEntries = adoptTreeEntries({ treeEntries: kit.treeEntries, contents: kit.contents, target: { tree, codeowners } });
+  return { treeEntries, pin: { headSha, treeSha }, gaps: rows };
+}
+
 /** Steps 1 and 2 of 14.2 plus everything derived from the release tree, so a bad template fails before any write. */
-async function readSource({ client, org, controlRepo, repo, args, adminBot }) {
+async function readSource({ client, org, controlRepo, repo, args, adminBot, log }) {
   const { description } = args;
   const state = await inspectRepo({ client, org, repo, adminBot });
   const refused = refusal(state, { org, repo, adopt: args.adopt === true });
@@ -105,28 +124,14 @@ async function readSource({ client, org, controlRepo, repo, args, adminBot }) {
   const tag = state === 'ours'
     ? await readKitVersion({ client, org, repo })
     : await latestReleaseTag({ client, org, controlRepo });
-  const { treeEntries, contents } = await readKit({ client, org, controlRepo, repo, description, tag });
-  // Spec 14.4: apply repeats the failing rows before any write; an adopted repository never gets the full-tree commit.
-  if (state === 'foreign') {
-    const { rows, headSha } = await readAdoptionGaps({ client, org, repo, kitEntries: treeEntries });
-    return { state, tag, gaps: rows, headSha };
-  }
-  const templates = parseSetupTemplates(setupTemplateFiles(contents), { org, repo, description });
+  const kit = await readKit({ client, org, controlRepo, repo, description, tag });
+  const templates = parseSetupTemplates(setupTemplateFiles(kit.contents), { org, repo, description });
+  // An adopted repository never gets the full-tree commit: its kit entries are merged over the tree the preflight read.
+  const adoption = state === 'foreign' ? await readAdoption({ client, org, repo, kit, log }) : undefined;
+  const treeEntries = adoption?.treeEntries ?? kit.treeEntries;
   // An `ours` repository already holds the commit, which reads no blob.
   const blobs = state === 'ours' ? new Map() : await readBlobContents({ client, org, controlRepo, entries: treeEntries });
-  return { state, tag, treeEntries, contents, templates, blobs };
-}
-
-const gapLine = ({ name, fail, detail }) => `${fail ? 'FAIL' : 'ok'} ${name}: ${detail}`;
-
-/** Until the kit merge ships, an adopt run ends here: it refuses on a failing row and otherwise stops without a write. */
-function stopAfterPreflight({ heading, source, log }) {
-  for (const row of source.gaps) log(gapLine(row));
-  const failing = source.gaps.filter((row) => row.fail);
-  if (failing.length > 0) throw new SettingsError(`adopt preflight failed: ${failing.map((row) => row.name).join(', ')}`);
-  const rows = source.gaps.map((row) => `- ${gapLine(row)}`);
-  const lines = ['- inspect: foreign', `- release tag: ${source.tag}`, `- target head: ${source.headSha}`, ...rows, `- ${STOPPED_AFTER_PREFLIGHT}`];
-  return { ok: false, summary: [heading, '', ...lines].join('\n') };
+  return { state, tag, treeEntries, contents: kit.contents, templates, blobs, pin: adoption?.pin, gaps: adoption?.gaps };
 }
 
 /**
@@ -143,13 +148,17 @@ export async function plan({ client, org, controlRepo, request, config }) {
   }
 }
 
-/** Any shape but a list of label objects, unparsable JSON included, is one SettingsError, so `plan` reports a problem. */
+/** Any shape but a list of objects with a string name, unparsable JSON included, is one SettingsError, so `plan` reports a problem. */
 function kitLabelNames(kit) {
+  const problem = new SettingsError(`${LABELS_PATH} in the release tree is missing or not a label list`);
+  let labels;
   try {
-    return JSON.parse(settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH]).labels.map((label) => label.name);
+    labels = JSON.parse(settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH]).labels;
   } catch {
-    throw new SettingsError(`${LABELS_PATH} in the release tree is missing or not a label list`);
+    throw problem;
   }
+  if (!Array.isArray(labels) || !labels.every((label) => typeof label?.name === 'string')) throw problem;
+  return labels.map((label) => label.name);
 }
 
 async function adoptionPlan({ client, org, controlRepo, request, config }) {
@@ -160,13 +169,15 @@ async function adoptionPlan({ client, org, controlRepo, request, config }) {
   if (refused !== undefined) return { problem: refused };
   const tag = await latestReleaseTag({ client, org, controlRepo });
   const kit = await readKit({ client, org, controlRepo, repo, description: args.description, tag });
-  const { rows, empty } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
+  const { rows, empty, headSha } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
   const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabelNames(kit), empty });
   const failing = rows.filter((row) => row.fail).length;
   // admin-run cuts each fact at 200 characters, so the outcome is its own fact and neither carries the target name.
-  const outcome = failing > 0 ? 'Apply stops before any write' : 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships';
+  const outcome = failing > 0 ? 'Apply stops before any write' : 'If the target is still foreign when apply runs, apply merges the kit into main at the target head';
   const heading = `Adoption preflight against ${tag}: ${failing} failing row(s)`;
-  return { facts: [heading, outcome, ...rows.map(gapLine), ...report.map(({ name, detail }) => `report ${name}: ${detail}`)] };
+  // Apply reads the head again and prints it, so the owner can compare the two.
+  const head = `target head: ${headSha ?? 'none'}`;
+  return { facts: [heading, outcome, head, ...rows.map(gapLine), ...report.map(({ name, detail }) => `report ${name}: ${detail}`)] };
 }
 
 /** @returns {string[]} the `- step: result` lines of an `applySections` summary */
@@ -191,10 +202,9 @@ async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
   const lines = [];
 
   lines.push(...stepLines(await sections(['labels'])));
-  const commit = await commitBootstrapTree({
-    client, org, repo, tag: source.tag, treeEntries: source.treeEntries, blobs: source.blobs, sleep,
-  });
-  lines.push(`- bootstrap commit: ${commit.created ? `pushed ${commit.sha}` : 'already on main'}`);
+  const kit = { client, org, repo, tag: source.tag, treeEntries: source.treeEntries, blobs: source.blobs, sleep };
+  const commit = source.pin === undefined ? await commitBootstrapTree(kit) : await commitAdoptTree({ ...kit, pin: source.pin });
+  lines.push(`- ${source.pin === undefined ? 'bootstrap' : 'adopt'} commit: ${commit.created ? `pushed ${commit.sha}` : 'already on main'}`);
   for (const groups of [['settings'], ['rulesets'], ['variables']]) lines.push(...stepLines(await sections(groups)));
   const epic = await openSetupEpic({ client, org, repo, templates: source.templates, adminBot, sleep });
   lines.push(`- setup epic: #${epic.epic}, ${epic.created.length} issue(s) created`);
@@ -224,10 +234,10 @@ export async function run(ctx, { sleep = delay, settingsDependencies } = {}) {
   ctx.log('reading the release tree');
   const source = await ctx.withToken(
     { repositories: [controlRepo], permissions: CONTROL_READ_PERMISSIONS },
-    ({ client }) => readSource({ client, org, controlRepo, repo, args, adminBot }),
+    ({ client }) => readSource({ client, org, controlRepo, repo, args, adminBot, log: ctx.log }),
   );
-  if (source.state === 'foreign') return stopAfterPreflight({ heading: `### ${OP} ${org}/${repo}`, source, log: ctx.log });
   const lines = [`- inspect: ${source.state}`, `- release tag: ${source.tag}`];
+  if (source.pin !== undefined) lines.push(`- target head: ${source.pin.headSha}`, ...source.gaps.map((row) => `- ${gapLine(row)}`));
   if (source.state === 'absent') {
     ctx.log('creating the repository');
     await createRepo({ withToken: ctx.withToken, org, controlRepo, repo, description, permissions: CREATE_PERMISSIONS });

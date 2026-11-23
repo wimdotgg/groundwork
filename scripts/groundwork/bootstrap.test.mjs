@@ -9,7 +9,7 @@ import { SettingsError } from '../lib/settings.mjs';
 import {
   CONTROL_READ_PERMISSIONS, CREATE_PERMISSIONS, DESCRIPTION_MAX_LENGTH, OP, PERMISSIONS, TOKEN_SCOPE, plan, run, validateArgs,
 } from './bootstrap.mjs';
-import { buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
+import { adoptTreeEntries, buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 
 test('bootstrap identity', () => {
   assert.equal(OP, 'bootstrap');
@@ -113,7 +113,7 @@ function expectedTree(files) {
 }
 
 /** Status of each kit-version read without a ref, in call order: one per `inspectRepo` (not when absent) and per `applySections` call. */
-const KIT_READS = { foreign: [404], absent: [404, 200, 200, 200, 200], fresh: [404, 404, 200, 200, 200, 200], ours: [200, 200, 200, 200, 200, 200] };
+const KIT_READS = { foreign: [404, 404, 200, 200, 200, 200], absent: [404, 200, 200, 200, 200], fresh: [404, 404, 200, 200, 200, 200], ours: [200, 200, 200, 200, 200, 200] };
 
 function targetRoutes(state, files) {
   const { treeEntries } = expectedTree(files);
@@ -458,7 +458,7 @@ const PROJECT_TREE = [
 ];
 
 /** A readable foreign target with no gap unless a field says otherwise. */
-function foreignRoutes({ repository = {}, empty = false, branch = { protected: false }, tree = { truncated: false, tree: PROJECT_TREE } } = {}) {
+function foreignRoutes({ repository = {}, empty = false, branch = { protected: false }, tree = { truncated: false, sha: 'tree-main', tree: PROJECT_TREE } } = {}) {
   const defaultBranch = repository.default_branch ?? 'main';
   const head = `head-${defaultBranch}`;
   const commits = empty ? reply(409, { message: 'Git Repository is empty.' }) : reply(200, [{ sha: 'c0', author: { login: 'someone' } }]);
@@ -488,8 +488,8 @@ function planCall({ state = 'foreign', gaps, args = ADOPT_ARGS, files = ADOPT_FI
   return { calls, result: plan({ client, org: ORG, controlRepo: CONTROL, request, config: CONFIG }) };
 }
 
-const COLLIDING_TREE = { truncated: false, tree: [blob('.github/dependabot.yml', 'project-dependabot'), blob('version.txt', 'project-version')] };
-const projectTree = (...entries) => ({ truncated: false, tree: entries });
+const COLLIDING_TREE = { truncated: false, sha: 'tree-main', tree: [blob('.github/dependabot.yml', 'project-dependabot'), blob('version.txt', 'project-version')] };
+const projectTree = (...entries) => ({ truncated: false, sha: 'tree-main', tree: entries });
 /** [case, gaps, row name, row detail]: every case is one failing row. */
 const GAPS = [
   ['default branch', { repository: { default_branch: 'master' } }, 'default branch', /default branch: master/],
@@ -502,6 +502,7 @@ const GAPS = [
   ['submodule at a kit path', { tree: projectTree({ path: 'README.md', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: README\.md is a commit/],
   ['truncated target tree', { tree: { truncated: true, tree: [] } }, 'collisions', /collisions: target tree is truncated/],
   ['tree response without a tree list', { tree: { truncated: false } }, 'collisions', /collisions: target tree response has no tree list/],
+  ['tree response without a tree SHA', { tree: { truncated: false, tree: PROJECT_TREE } }, 'collisions', /collisions: target tree response has no tree list or tree SHA/],
 ];
 
 test('AC2 plan without the opt-in makes no call and adds nothing', async () => {
@@ -514,8 +515,8 @@ test('AC2 plan lists every failing and reported row of a foreign target from GET
   const { calls, result } = planCall();
   const { facts, problem } = await result;
   assert.equal(problem, undefined);
-  assert.deepEqual(facts.slice(0, 2), [`Adoption preflight against ${TAG}: 0 failing row(s)`, 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships']);
-  const rows = ['ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
+  assert.deepEqual(facts.slice(0, 2), [`Adoption preflight against ${TAG}: 0 failing row(s)`, 'If the target is still foreign when apply runs, apply merges the kit into main at the target head']);
+  const rows = ['target head: head-main', 'ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
     'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1',
     'report secrets: not read; check them in the browser', 'report merge settings: not read; pass 1 sets squash-only'];
   assert.deepEqual(facts.slice(2), rows);
@@ -534,25 +535,68 @@ for (const [name, gaps, rowName, row] of GAPS) {
 
   test(`AC3 apply with a ${name} names the row and stops before any write call or target grant`, async () => {
     const world = adoptWorld(gaps);
-    await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && error.message === `adopt preflight failed: ${rowName}`);
+    await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && error.message.startsWith(`adopt preflight failed: ${rowName}`));
     assert.ok(world.logs.some((line) => line.startsWith('FAIL ') && row.test(line)), world.logs.join('\n'));
     assert.deepEqual(writesOf(world), []);
     assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
   });
 }
 
-test('AC4 apply with the opt-in and no failing row ends after the preflight with no write call', async () => {
-  const world = adoptWorld();
+const PROJECT_CODEOWNERS = '/src/ @project-team\n';
+const KIT_CODEOWNERS = ADOPT_FILES['.github/CODEOWNERS'];
+
+/** An apply world on a clean foreign target: the kit blobs the merge posts come back with their release SHAs. */
+function adoptApplyWorld(overrides = {}) {
+  const { treeEntries, contents } = expectedTree(ADOPT_FILES);
+  const merged = adoptTreeEntries({ treeEntries, contents, target: { tree: PROJECT_TREE, codeowners: PROJECT_CODEOWNERS } });
+  return createWorld({
+    state: 'foreign',
+    files: ADOPT_FILES,
+    args: ADOPT_ARGS,
+    overrides: {
+      ...foreignRoutes(),
+      [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, []), reply(200, LABELS)],
+      [`GET ${TARGET_PATH}/git/blobs/p4`]: reply(200, { content: base64(PROJECT_CODEOWNERS), encoding: 'base64' }),
+      [`POST ${TARGET_PATH}/git/blobs`]: merged.filter((entry) => entry.sha).map((entry) => reply(201, { sha: entry.sha })),
+      ...overrides,
+    },
+  });
+}
+
+const bodyOf = (world, line) => world.bodies.find((call) => `${call.method} ${call.path}` === line)?.body;
+
+test('#274 AC1 AC2 AC4 apply merges the kit over the target tree at the pinned head, keeping project files', async () => {
+  const world = adoptApplyWorld();
   const result = await run(world.ctx, world.seams);
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true, result.summary);
   const lines = result.summary.split('\n');
-  for (const line of ['- inspect: foreign', '- target head: head-main', '- ok collisions: none', '- ok protected main: not set']) assert.ok(lines.includes(line), line);
+  for (const line of ['- inspect: foreign', '- target head: head-main', '- ok collisions: none', '- adopt commit: pushed commit-1']) assert.ok(lines.includes(line), line);
   assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/head-main`), 'the tree is read at the head commit SHA');
-  assert.match(result.summary, /stopped after the preflight: the kit merge \(#274\) is not built, so no write was made/);
+  const tree = bodyOf(world, `POST ${TARGET_PATH}/git/trees`);
+  assert.equal(tree.base_tree, 'tree-main', 'the kit is written over the existing tree');
+  const written = new Map(tree.tree.map((entry) => [entry.path, entry]));
+  for (const kept of ['src/app.js', 'README.md', 'LICENSE']) assert.equal(written.has(kept), false, `${kept} stays the project's`);
+  assert.equal(written.get('.github/CODEOWNERS').content, `${PROJECT_CODEOWNERS}${KIT_CODEOWNERS}`);
+  assert.deepEqual(bodyOf(world, `POST ${TARGET_PATH}/git/commits`).parents, ['head-main']);
+  assert.deepEqual(bodyOf(world, `PATCH ${TARGET_PATH}/git/refs/heads/main`), { sha: 'commit-1', force: false });
+  assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS, PERMISSIONS]);
+  assert.equal(world.calls.some((call) => call.path === `/orgs/${ORG}/repos`), false);
+});
+
+test('#274 AC4 apply refuses the kit merge when main moved after the preflight read', async () => {
+  const moved = [reply(200, { object: { sha: 'head-main' } }), reply(200, { object: { sha: 'head-moved' } })];
+  const world = adoptApplyWorld({ [`GET ${TARGET_PATH}/git/ref/heads/main`]: moved });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /main moved from head-main to head-moved/.test(error.message));
+  const gitWrites = writesOf(world).filter((call) => call.path.includes('/git/'));
+  assert.deepEqual(gitWrites, []);
+});
+
+test('#274 AC3 a colliding workflow path makes apply refuse before any write, naming the path', async () => {
+  const tree = projectTree(blob('.github/workflows/ci.yml', 'project-ci'), blob('src/app.js', 'p1'));
+  const world = adoptApplyWorld(foreignRoutes({ tree }));
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && error.message.includes('.github/workflows/ci.yml'));
   assert.deepEqual(writesOf(world), []);
-  assert.deepEqual(world.written, []);
   assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
-  assert.equal(world.calls.some((call) => /\/(labels|issues|environments)$/.test(call.path)), false);
 });
 
 test('adopt on an absent or fresh target is refused in plan and in apply before any write', async () => {
@@ -584,7 +628,7 @@ test('AC2 a long row keeps its count within the rendered fact length', async () 
 test('plan turns a missing or malformed labels.json into a problem instead of a crash', async () => {
   const missing = { ...ADOPT_FILES };
   delete missing['.github/groundwork/labels.json'];
-  for (const files of [missing, ...['{not json', '{"labels":[null]}', 'null'].map((text) => ({ ...ADOPT_FILES, '.github/groundwork/labels.json': text }))]) {
+  for (const files of [missing, ...['{not json', '{"labels":[null]}', 'null', '{"labels":["x"]}', '{"labels":[{}]}', '{"labels":[{"name":5}]}'].map((text) => ({ ...ADOPT_FILES, '.github/groundwork/labels.json': text }))]) {
     const { problem } = await planCall({ files }).result;
     assert.match(problem, /labels\.json in the release tree is missing or not a label list/);
   }
@@ -598,5 +642,14 @@ test('AC2 every plan fact fits the 200-character render limit for a 100-characte
   assert.equal(facts[1], 'Apply stops before any write');
   const { facts: clean } = await planCall({ repo }).result;
   for (const fact of clean) assert.ok(fact.length <= 200, fact);
-  assert.equal(clean[1], 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships');
+  assert.equal(clean[1], 'If the target is still foreign when apply runs, apply merges the kit into main at the target head');
+});
+
+test('#274 a long default branch name is capped so its fact keeps ", must be main"', async () => {
+  const branch = 'b'.repeat(240);
+  const overrides = { [`GET ${TARGET_PATH}/git/ref/heads/${branch}`]: reply(200, { object: { sha: 'head-long' } }), [`GET ${TARGET_PATH}/git/trees/head-long?recursive=1`]: reply(200, { truncated: false, sha: 'tree-long', tree: [] }) };
+  const { facts } = await planCall({ gaps: { repository: { default_branch: branch } }, overrides }).result;
+  const row = facts.find((fact) => fact.startsWith('FAIL default branch: '));
+  assert.ok(row.length <= 200, row);
+  assert.match(row, /, must be main$/);
 });
