@@ -1,11 +1,14 @@
 // Owner wizard (spec 14.3). The owner runs it in their own terminal under their own login; agents never do.
 // Imports stay inside Node built-ins, scripts/owner/ and scripts/lib/ (all CODEOWNERS paths).
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { STEP_HANDLERS, baselineRemote, clean } from './steps.mjs';
+
+export { clean };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const AGENT_GH_CONFIG = '.claude/gh-agent';
@@ -13,7 +16,6 @@ const STATE_ENV = 'GROUNDWORK_SETUP_STATE_FILE';
 const SCHEMA_VERSION = 1;
 const ORG_LOGIN = /^[A-Za-z0-9-]+$/;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
-const CONTROL_CHARACTERS = /\p{Cc}/gu;
 const STATUSES = ['pending', 'done', 'skipped'];
 const REVIEWED_PATHS = ['scripts/owner', 'scripts/lib'];
 const ADMIN_ORG = 'admin:org';
@@ -26,6 +28,10 @@ const QUOTED_SCOPE = /'([^']+)'/g;
 // Windows reports a console Ctrl+C as this exit code (STATUS_CONTROL_C_EXIT) instead of a signal.
 const WINDOWS_CTRL_C_EXIT = 0xc000013a;
 const INTERRUPTED = 'interrupted';
+// gh colours the scope list when CLICOLOR_FORCE or GH_FORCE_TTY is set, even on a pipe.
+const GH_COLOUR_VARIABLES = ['CLICOLOR_FORCE', 'GH_FORCE_TTY', 'NO_COLOR'];
+const PRIVATE_FILE_MODE = 0o600;
+const PRIVATE_DIRECTORY_MODE = 0o700;
 
 export const STEPS = [
   ['org-create', 'browser'], ['org-2fa', 'browser'], ['org-base-permission', 'wizard'], ['org-pat-policy', 'browser'],
@@ -55,7 +61,6 @@ const WIZARD_COMMANDS = {
 };
 
 const refuse = (reason) => { throw new Error(reason); };
-export const clean = (text) => String(text).replace(CONTROL_CHARACTERS, '');
 const messageOf = (error) => clean(error?.message ?? error);
 
 export function environmentRefusal({ env, stdinTTY, stdoutTTY }) {
@@ -131,12 +136,24 @@ export function stepsToRun(state, stepArgument) {
 
 export const gitArguments = (hooksDir, args) => ['-c', `core.hooksPath=${hooksDir}`, '-c', 'core.fsmonitor=false', ...args];
 
+// The same settings for the git a child runs itself (gh repo create runs git remote add), through Git's environment config.
+export const gitConfigEnvironment = (env, hooksDir) => ({
+  ...env, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: hooksDir,
+  GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
+});
+
+/** The environment of every child the wizard spawns: hook-free git settings, and for gh no forced colour. */
+export function childEnvironment({ command, env, hooksDir }) {
+  const withGitConfig = gitConfigEnvironment(env, hooksDir);
+  return command === 'gh' ? ghEnvironment(withGitConfig) : withGitConfig;
+}
+
 export function checkReviewedCode(io) {
   const git = (...args) => {
     const result = io.capture('git', args);
     return result.status === 0 ? result.stdout.trim() : refuse(`git ${args[0]} failed with exit ${result.status}`);
   };
-  const remote = git('remote').split(/\r?\n/).includes('origin') ? 'origin' : 'upstream';
+  const remote = baselineRemote(io);
   // The full ref, so a local branch or tag named origin/main cannot stand in for the remote-tracking ref.
   const baseline = `refs/remotes/${remote}/main`;
   const baseSha = git('rev-parse', '--verify', `${baseline}^{commit}`);
@@ -147,12 +164,10 @@ export function checkReviewedCode(io) {
   if (diff.status !== 0) refuse(`git diff failed with exit ${diff.status}`);
 }
 
-// gh colours the scope list when CLICOLOR_FORCE or GH_FORCE_TTY is set, even on a pipe.
+// Windows environment names ignore case, so a variant such as clicolor_force must go too.
 export function ghEnvironment(env) {
-  const childEnv = { ...env, NO_COLOR: '1' };
-  delete childEnv.CLICOLOR_FORCE;
-  delete childEnv.GH_FORCE_TTY;
-  return childEnv;
+  const kept = Object.entries(env).filter(([name]) => !GH_COLOUR_VARIABLES.includes(name.toUpperCase()));
+  return { ...Object.fromEntries(kept), NO_COLOR: '1' };
 }
 
 export function parseScopes(text) {
@@ -217,8 +232,7 @@ async function browserStep(io, context, step) {
 }
 
 async function wizardStep(io, context, step) {
-  const { consent, org } = context.state;
-  if (!consent.classes.includes('wizard')) refuse(`consent ${consent.answer} keeps ${step.id} in the browser; do it there, rerun and skip it with a note`);
+  const { org } = context.state;
   if (!context.scopeAdded) {
     context.scopeAdded = true;
     const added = io.attach('gh', ADD_ADMIN_ORG);
@@ -243,16 +257,21 @@ async function skipStep(io, context, step) {
   return mark(io, context, { id: step.id, status: 'skipped', note });
 }
 
-const HANDLERS = { browser: [BROWSER_PAGES, browserStep], wizard: [WIZARD_COMMANDS, wizardStep] };
+const handlerFor = (id) => STEP_HANDLERS[id] ?? (BROWSER_PAGES[id] && browserStep) ?? (WIZARD_COMMANDS[id] && wizardStep);
+
+function requireWizardConsent({ consent }, step) {
+  if (step.kind === 'wizard' && !consent.classes.includes('wizard')) refuse(`consent ${consent.answer} keeps ${step.id} in the browser; do it there, rerun and skip it with a note`);
+}
 
 // Returns true to continue the walk, false to end it with the step pending.
 async function runStep(io, context, step) {
   if (step.kind === 'app') return stop(io, `${step.id} is the agent's: ${step.request}`);
-  const [built, handler] = HANDLERS[step.kind];
-  if (!built[step.id]) return stop(io, `${step.id} is not in this wizard version; see docs/setup.md`);
+  const handler = handlerFor(step.id);
+  if (!handler) return stop(io, `${step.id} is not in this wizard version; see docs/setup.md`);
   if (step.id !== 'org-create' && context.state.org === null) refuse(`${step.id} needs the org: finish org-create first`);
   io.print(`\n${step.id} (${step.kind})`);
   if ((await io.ask('Already done before setup? y/N ')) === 'y') return skipStep(io, context, step);
+  requireWizardConsent(context.state, step);
   if (!(await handler(io, context, step))) return stop(io, `${step.id} stays pending; rerun to resume here`);
   return mark(io, context, { id: step.id, status: 'done', note: '' });
 }
@@ -287,7 +306,7 @@ async function run(io, argv, context) {
   context.state = loadState(io, context.statePath);
   const steps = stepsToRun(context.state, stepArgument);
   const leftover = readAdminOrg(io);
-  if (leftover.granted === null) refuse(`${unreadableScopes(leftover)}: check gh auth status --active --hostname github.com, then rerun`);
+  if (leftover.granted === null) refuse(`${unreadableScopes(leftover)}: check gh auth status --active --hostname github.com; if admin:org may be granted, run: gh ${REMOVE_ADMIN_ORG.join(' ')}`);
   if (leftover.granted && !dropAdminOrg(io)) return 1;
   await walk(io, context, steps);
   return 0;
@@ -348,6 +367,23 @@ export function askHidden({ input, output }, question) {
   });
 }
 
+/**
+ * Writes a key only the owner can read. The key goes to a new file created 0600 (wx never follows or reuses one),
+ * which then replaces the target, so an existing wider file never holds it; a symlink target is refused.
+ */
+export function writePrivateFile(file, text) {
+  if (lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) refuse(`${clean(file)} is a symlink: remove it or choose another path`);
+  mkdirSync(path.dirname(file), { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  const fresh = `${file}.${process.pid}.new`;
+  writeFileSync(fresh, text, { mode: PRIVATE_FILE_MODE, flag: 'wx' });
+  try {
+    renameSync(fresh, file);
+  } catch (error) {
+    rmSync(fresh, { force: true });
+    throw error;
+  }
+}
+
 const OPENERS = { win32: ['rundll32', 'url.dll,FileProtocolHandler'], darwin: ['open'] };
 export const openCommand = (platform, url) => { const [command, ...args] = OPENERS[platform] ?? ['xdg-open']; return [command, [...args, url]]; };
 
@@ -361,25 +397,27 @@ function terminalIo() {
     hooksDir ??= mkdtempSync(path.join(tmpdir(), 'groundwork-no-hooks-'));
     return hooksDir;
   };
-  const run = (command, args, stdio) => {
+  const run = (command, args, { stdio, input }) => {
     if (!watching) {
       watching = true;
       process.on('SIGINT', () => { interrupted = true; });
       process.once('exit', () => { if (hooksDir) rmSync(hooksDir, { recursive: true, force: true }); });
     }
     const fullArgs = command === 'git' ? gitArguments(noHooksDir(), args) : args;
-    const env = command === 'gh' ? ghEnvironment(process.env) : process.env;
-    const result = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', stdio, env });
+    const env = childEnvironment({ command, env: process.env, hooksDir: noHooksDir() });
+    const result = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', stdio, env, input });
     if (interrupted || wasInterrupted(result)) throw new Error(INTERRUPTED);
     if (result.error) throw result.error;
     return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
   };
   return {
-    env: process.env, platform: process.platform,
+    env: process.env, platform: process.platform, root: ROOT,
     stdinTTY: Boolean(process.stdin.isTTY), stdoutTTY: Boolean(process.stdout.isTTY),
     print: (line) => console.log(line), now: () => new Date().toISOString(),
-    capture: (command, args) => run(command, args, ['ignore', 'pipe', 'pipe']),
-    attach: (command, args) => run(command, args, 'inherit'),
+    capture: (command, args) => run(command, args, { stdio: ['ignore', 'pipe', 'pipe'] }),
+    attach: (command, args) => run(command, args, { stdio: 'inherit' }),
+    // A secret reaches the child on stdin only; its output is captured, never printed.
+    pipe: (command, args, input) => run(command, args, { stdio: ['pipe', 'pipe', 'pipe'], input }),
     // A blocked event loop cannot run the SIGINT handler; one turn of the loop lets a pending Ctrl+C land.
     checkInterrupt: async () => {
       await new Promise((resolve) => setImmediate(resolve));
@@ -394,6 +432,7 @@ function terminalIo() {
     },
     readText: (file) => { try { return readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } },
     writeText: (file, text) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, text); },
+    writePrivateFile, removeFile: (file) => rmSync(file),
     ask: (question) => askLine({ input: process.stdin, output: process.stdout }, question),
   };
 }
