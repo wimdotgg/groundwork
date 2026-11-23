@@ -82,7 +82,7 @@ Post the questions as a second comment on the report, written in your own words,
 
 ### Close as not planned
 
-1. Write the reason, in your words, to a file and post it with `node scripts/agent/token.mjs exec -- gh issue comment <report> --body-file <file>`. Then close: `node scripts/agent/token.mjs exec -- gh issue close <report> --reason "not planned"`. A failed close leaves the reason comment on an open report: stop and report. A rerun retries the close without a second reason comment, then does step 2 (Loop step 2).
+1. Write the reason, in your words, to a file and post it with `node scripts/agent/token.mjs exec -- gh issue comment <report> --body-file <file>`. Then close: `node scripts/agent/token.mjs exec -- gh issue close <report> --reason "not planned"`. A failed close leaves the reason comment on an open report: stop and report. A rerun finds it in Loop step 2, retries the close without a second reason comment, then does step 2 below.
 2. When the rejected scope falls under an epic, append one dated line to that epic's `## Decisions`: read the body with `node scripts/agent/token.mjs exec -- gh issue view <epic> --json body`, add `- <YYYY-MM-DD>: #<report> declined, <reason>` under `## Decisions`, and write it back with `node scripts/agent/token.mjs exec -- gh issue edit <epic> --body-file <file>`. Otherwise the close comment is the record. No out-of-scope directory.
 
 ## Escalation
