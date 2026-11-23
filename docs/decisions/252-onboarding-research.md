@@ -88,7 +88,7 @@ Measured: with `wimdotgg` and `wianvdm` replaced in `.github/groundwork/config.j
 | `.github/CODEOWNERS:2-17` | `@wianvdm` on every line | Setup prompt rewrites it. Optionally a check that the CODEOWNERS owner equals `accounts.owner`. Bootstrap fills only `__ORG__`, `__REPO__` and `__DESCRIPTION__` (`scripts/groundwork/bootstrap-tree.mjs:57-63`), so projects inherit the control repo's file |
 | `scripts/ci/fixtures/*.json`, the ten tests above | logins tied to the live config | Tests read a fixture config, not the repo's own. Contract task: the clone stays green after the config edit |
 | `AGENTS.md:13` | `wimdotgg-agent[bot]` | Generic wording: "the agent App bot (`accounts.agent`)" |
-| `docs/setup.md:5,12-15,21,27,30,33,37,41,46,53,63,65,67,71,73,78-79,95,99,104,106` | org URLs, App IDs, client ID values, owner login | Rewrite with `<org>`, `<owner>` and `<app>` placeholders that the setup skill fills |
+| `docs/setup.md:5,12-15,21,27,30,33,37,41,46,53,63,65,67,71,73,80-81,95,99,104,106` | org URLs, App IDs, client ID values, owner login | Rewrite with `<org>`, `<owner>` and `<app>` placeholders that the setup skill fills |
 | `docs/spec.md:46-56,320,419,665,723-724,1181-1184` | this instance's App IDs, logins and slugs | Doc note: spec values describe the `wimdotgg` instance, and config wins |
 | `LICENSE:3` | `Copyright 2026 wimdotgg` (MIT No Attribution) | Doc note. Bootstrap copies it unchanged to projects (`docs/spec.md:1196`) |
 | `.release-please-manifest.json`, `version.txt`, `CHANGELOG.md` | groundwork's own release history (0.10.1) | Setup step or doc note: a clone's first release continues from 0.10.1 unless reset |
