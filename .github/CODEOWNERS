@@ -4,6 +4,7 @@
 /scripts/ci/                    @wianvdm
 /scripts/lib/                   @wianvdm
 /scripts/groundwork/            @wianvdm
+/scripts/owner/                 @wianvdm
 /admin-ops/                     @wianvdm
 /AGENTS.md                      @wianvdm
 /CLAUDE.md                      @wianvdm
