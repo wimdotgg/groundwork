@@ -282,6 +282,41 @@ test('KIT_PATHS match the kit and never the project, stub or deploy paths', () =
   assert.ok(KIT_PATHS.length > 0 && UNMODIFIED_ONLY_PATHS.every((file) => !isKitPath(file)));
 });
 
+test('#290 AC1 run writes the worker skill and no path under the control-only groundwork-setup skill', async () => {
+  const skills = {
+    '.claude/skills/groundwork-setup/SKILL.md': 'setup\n',
+    '.claude/skills/groundwork-worker/SKILL.md': 'worker\n',
+  };
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    const result = await execute(project, releasesClient(OLD_TREE, { ...NEW_TREE, ...skills }));
+    assert.equal(await readProject(project, '.claude/skills/groundwork-worker/SKILL.md'), 'worker\n');
+    await assert.rejects(readProject(project, '.claude/skills/groundwork-setup/SKILL.md'), { code: 'ENOENT' });
+    assert.ok(result.changed.includes('.claude/skills/groundwork-worker/SKILL.md'));
+    assert.ok(!result.changed.some((file) => file.startsWith('.claude/skills/groundwork-setup/')));
+  });
+});
+
+test('#290 isKitPath is false for the control-only groundwork-setup skill', () => {
+  assert.ok(!isKitPath('.claude/skills/groundwork-setup/SKILL.md'));
+  assert.ok(isKitPath('.claude/skills/groundwork-worker/SKILL.md'));
+});
+
+test('#290 run removes a groundwork-setup copy a project already holds, whether or not the tags carry it', async () => {
+  const setup = { '.claude/skills/groundwork-setup/SKILL.md': 'setup\n', '.claude/skills/groundwork-setup/notes.md': 'notes\n' };
+  const projectFiles = { ...PROJECT_FILES, ...setup, '.claude/skills/mine/SKILL.md': 'mine\n' };
+  await withProject(projectFiles, {}, async (project) => {
+    // A project's .gitignore re-includes groundwork-* skills; force-add them so a global ignore of .claude/skills/ cannot hide them.
+    await project.git(['add', '-f', '--', '.claude/skills']);
+    await project.git(['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'skills']);
+    const result = await execute(project, releasesClient({ ...OLD_TREE, ...setup }, { ...NEW_TREE, ...setup }));
+    for (const filePath of Object.keys(setup)) {
+      await assert.rejects(readProject(project, filePath), { code: 'ENOENT' });
+      assert.ok(result.changed.includes(filePath));
+    }
+    assert.equal(await readProject(project, '.claude/skills/mine/SKILL.md'), 'mine\n');
+  });
+});
+
 test('mergeConfig recurses into an object key that both sides added', () => {
   assert.deepEqual(mergeConfig({ base: {}, ours: { x: { a: 1 } }, theirs: { x: { b: 2 } } }), { x: { a: 1, b: 2 } });
 });
