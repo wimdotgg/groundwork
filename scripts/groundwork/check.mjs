@@ -1,3 +1,5 @@
+import { GitHubError } from '../lib/github.mjs';
+import { sameLogin } from '../lib/trust.mjs';
 import {
   appliesToKind, compareStates, loadDesiredState, readLiveState, readSignals, repoKind, resolvePlaceholders, SettingsError,
 } from '../lib/settings.mjs';
@@ -24,6 +26,11 @@ const RESULT_ORDER = ['match', 'differ', 'missing', 'extra', 'unreadable', 'defe
 const VALUE_MAX_LENGTH = 120;
 const TABLE_HEADER = '| Section | Key | Result | Desired | Live |';
 const TABLE_DIVIDER = '|---|---|---|---|---|';
+
+const CODEOWNERS_SECTION = 'codeowners';
+const CODEOWNERS_PATH = '.github/CODEOWNERS';
+const UNREADABLE_STATUS = 403;
+const NOT_FOUND_STATUS = 404;
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -85,6 +92,38 @@ function renderSummary({ org, repo }, rows, ok) {
   return lines.join('\n');
 }
 
+/** @returns {string[]} the distinct owner tokens of every rule line, sorted */
+function codeownersOwners(text) {
+  const owners = new Set();
+  for (const line of text.split('\n')) {
+    const code = line.split('#')[0].trim();
+    for (const token of code.split(/\s+/).slice(1)) owners.add(token);
+  }
+  return [...owners].sort();
+}
+
+/**
+ * A CODEOWNERS owner that is not the configured one leaves protected paths without a valid reviewer, and `main`
+ * needs no other approval, so the gate fails open (spec 9.4). Read from the default branch, like GitHub does.
+ * @returns {Promise<import('../lib/settings.mjs').ComparisonRow>}
+ */
+async function compareCodeowners(client, { owner, repo }, accountOwner) {
+  const desired = `@${accountOwner}`;
+  const row = (live, result) => ({ section: CODEOWNERS_SECTION, key: CODEOWNERS_PATH, desired, live, result });
+  let response;
+  try {
+    response = await client.request('GET', `/repos/${owner}/${repo}/contents/${CODEOWNERS_PATH}`, { okStatuses: [NOT_FOUND_STATUS] });
+  } catch (error) {
+    if (error instanceof GitHubError && error.status === UNREADABLE_STATUS) return row(null, 'unreadable');
+    throw error;
+  }
+  if (response.status === NOT_FOUND_STATUS) return row(null, 'missing');
+  const text = Buffer.from(String(response.data?.content ?? ''), 'base64').toString('utf8');
+  const owners = codeownersOwners(text);
+  const matches = owners.length > 0 && owners.every((token) => sameLogin(token, desired));
+  return row(owners, matches ? 'match' : 'differ');
+}
+
 /**
  * Read-only comparison of the target repo against the desired state in settingsRoot.
  * Content mismatches come back as ok:false; API failures throw GitHubError from the client.
@@ -106,7 +145,10 @@ export async function runCheck({ client, org, repo, settingsRoot, config }) {
     if (section?.readable === true || rows.some((row) => row.section === name)) continue;
     rows.push({ section: name, key: '(section)', desired: null, live: null, result: 'unreadable' });
   }
-  return { ok: rows.length > 0 && rows.every(isPassing), rows };
+  // The vacuity guard counts the settings rows only: the CODEOWNERS row always exists.
+  const settingsRows = rows.length;
+  rows.push(await compareCodeowners(client, repoRef, config.accounts.owner));
+  return { ok: settingsRows > 0 && rows.every(isPassing), rows };
 }
 
 /**

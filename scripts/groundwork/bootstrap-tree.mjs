@@ -7,6 +7,7 @@ import { SettingsError } from '../lib/settings.mjs';
 export const CONTROL_PATHS = [
   'admin-ops/',
   'scripts/groundwork/',
+  'scripts/owner/',
   '.github/workflows/reusable-verify.yml',
   '.github/workflows/reusable-security.yml',
   '.github/workflows/admin-run.yml',
@@ -31,6 +32,13 @@ const FIXED_STUBS = [
 ];
 const STUB_DOCS_DIR = `${STUBS_DIR}docs/`;
 const PROJECT_DOCS_DIR = 'docs/';
+
+const CODEOWNERS_PATH = '.github/CODEOWNERS';
+const CONFIG_PATH = `${SETTINGS_DIR}config.json`;
+// A GitHub login: letters, digits and single hyphens. Anything else could add a CODEOWNERS rule.
+const LOGIN_PATTERN = /^[A-Za-z0-9](?:-?[A-Za-z0-9])*$/;
+// A rule line: path pattern, its owners, an optional trailing comment.
+const CODEOWNERS_RULE = /^(\s*[^\s#]+\s+)([^#]*?)(\s*(?:#[^\n]*)?)$/;
 
 const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
@@ -77,6 +85,30 @@ function requireContent(contents, path) {
   return text;
 }
 
+// The project's CODEOWNERS owner is the one its own config.json names, so `check` finds them equal.
+function configuredOwner(contents) {
+  let owner;
+  try {
+    owner = JSON.parse(requireContent(contents, CONFIG_PATH)).accounts?.owner;
+  } catch (error) {
+    if (error instanceof SettingsError) throw error;
+    throw new SettingsError(`${CONFIG_PATH} is not valid JSON`, CONFIG_PATH);
+  }
+  if (typeof owner !== 'string' || !LOGIN_PATTERN.test(owner)) {
+    throw new SettingsError(`${CONFIG_PATH} needs accounts.owner to be a GitHub login to fill ${CODEOWNERS_PATH}`, CONFIG_PATH);
+  }
+  return owner;
+}
+
+/** Every owner on every rule line becomes the one configured owner; comments, blank lines and unowned rules stay. */
+function fillCodeowners(text, owner) {
+  return text.split('\n').map((line) => {
+    const rule = CODEOWNERS_RULE.exec(line);
+    if (!rule || rule[2] === '') return line;
+    return `${rule[1]}@${owner}${rule[3]}`;
+  }).join('\n');
+}
+
 // A file whose text did not change keeps its blob sha; the caller then uploads nothing.
 function textEntry(source, path, { text, original }) {
   if (text === original && source.sha) return { path, mode: source.mode, sha: source.sha };
@@ -115,7 +147,8 @@ function isReplacedByStub(path, stubs, generated) {
 function keptEntry(entry, contents, names) {
   if (isUnder(entry.path, SETTINGS_DIR) || !isUnder(entry.path, '.github/')) return entry;
   const original = requireContent(contents, entry.path);
-  const text = fillPlaceholders(rewriteReusableReferences(original, names), entry.path, names);
+  const filled = fillPlaceholders(rewriteReusableReferences(original, names), entry.path, names);
+  const text = entry.path === CODEOWNERS_PATH ? fillCodeowners(filled, configuredOwner(contents)) : filled;
   return textEntry(entry, entry.path, { text, original });
 }
 

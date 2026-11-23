@@ -51,6 +51,7 @@ function fixture({ omit = [] } = {}) {
       blob(`scripts/groundwork/stubs/deploy/${name}.cmd`, '@echo off\n'),
     ]),
     blob('admin-ops/op.json', '{}'),
+    blob('scripts/owner/setup.mjs', 'owner wizard'),
     blob('scripts/verify', 'groundwork own verify', '100755'),
     blob('scripts/verify.cmd', 'groundwork own verify'),
     blob('README.md', 'groundwork readme'),
@@ -216,4 +217,69 @@ test('output is sorted by path and each entry has exactly one of sha and content
   const paths = tree.map(({ path }) => path);
   assert.deepEqual(paths, [...paths].sort());
   for (const entry of tree) assert.equal(Number('sha' in entry) + Number('content' in entry), 1, entry.path);
+});
+
+const LIVE_CONFIG_URL = new URL('../../.github/groundwork/config.json', import.meta.url);
+const LIVE_CODEOWNERS_URL = new URL('../../.github/CODEOWNERS', import.meta.url);
+const LIVE_CONFIG = JSON.parse(readFileSync(LIVE_CONFIG_URL, 'utf8'));
+const LIVE_CODEOWNERS = readFileSync(LIVE_CODEOWNERS_URL, 'utf8');
+const SWAPPED_OWNER = 'octo-owner';
+// The live config and a copy with another owner: the owner always comes from the config the tree carries.
+const OWNER_CONFIGS = [
+  ['live config', LIVE_CONFIG],
+  ['swapped config', { ...LIVE_CONFIG, accounts: { ...LIVE_CONFIG.accounts, owner: SWAPPED_OWNER } }],
+];
+
+function ownerFixture(configText, codeowners = LIVE_CODEOWNERS) {
+  const { entries, contents } = fixture();
+  const withOwners = [...entries, { path: '.github/CODEOWNERS', mode: '100644', sha: 'sha-codeowners' }];
+  return {
+    entries: withOwners,
+    contents: { ...contents, '.github/CODEOWNERS': codeowners, '.github/groundwork/config.json': configText },
+  };
+}
+
+const ruleLines = (text) => text.split('\n').filter((line) => line.trim() !== '' && !line.trimStart().startsWith('#'));
+const ownersOf = (line) => line.trim().split(/\s+/).slice(1);
+
+for (const [name, config] of OWNER_CONFIGS) {
+  test(`#268 AC1: every CODEOWNERS line carries the configured owner (${name})`, () => {
+    const owner = `@${config.accounts.owner}`;
+    const tree = buildBootstrapTree({ ...ownerFixture(JSON.stringify(config)), ...OPTIONS });
+    // An unchanged file keeps its blob sha and carries no content.
+    const text = find(tree, '.github/CODEOWNERS').content ?? LIVE_CODEOWNERS;
+    const lines = ruleLines(text);
+    assert.equal(lines.length, ruleLines(LIVE_CODEOWNERS).length);
+    for (const line of lines) assert.deepEqual(ownersOf(line), [owner], line);
+    assert.deepEqual(lines.map((line) => line.trim().split(/\s+/)[0]), ruleLines(LIVE_CODEOWNERS).map((line) => line.trim().split(/\s+/)[0]));
+    if (config.accounts.owner !== 'wianvdm') assert.ok(!text.includes('wianvdm'), 'the control repo owner is gone');
+  });
+}
+
+test('#268 AC1: comments and blank lines stay; teams, emails and every owner of a line become the one owner', () => {
+  const source = '# gate\n\n/a/ @old @acme/team\n/b/  dev@example.com # note\n/c/\n';
+  const config = JSON.stringify({ accounts: { owner: 'new-owner' } });
+  const tree = buildBootstrapTree({ ...ownerFixture(config, source), ...OPTIONS });
+  assert.equal(find(tree, '.github/CODEOWNERS').content, '# gate\n\n/a/ @new-owner\n/b/  @new-owner # note\n/c/\n');
+});
+
+test('#268 AC1: a tree without CODEOWNERS needs no accounts.owner', () => {
+  assert.doesNotThrow(() => build());
+});
+
+test('#268 AC1: CODEOWNERS with a config that has no usable accounts.owner throws SettingsError naming the config', () => {
+  const unusable = ['{}', '{"accounts":{}}', '{"accounts":{"owner":""}}', '{"accounts":{"owner":"a b"}}', '{"accounts":{"owner":"x\n/.github/ @evil"}}', 'not json'];
+  for (const config of unusable) {
+    assert.throws(
+      () => buildBootstrapTree({ ...ownerFixture(config), ...OPTIONS }),
+      (error) => error instanceof SettingsError && error.file === '.github/groundwork/config.json' && !error.message.includes('\n'),
+      config,
+    );
+  }
+});
+
+test('#268 AC4: CONTROL_PATHS lists scripts/owner/ and the tree carries no scripts/owner/ entry', () => {
+  assert.ok(CONTROL_PATHS.includes('scripts/owner/'));
+  assert.ok(fixture().entries.some(({ path }) => path.startsWith('scripts/owner/')), 'the fixture holds the wizard');
+  assert.deepEqual(build().filter(({ path }) => path.startsWith('scripts/owner/')), []);
 });
