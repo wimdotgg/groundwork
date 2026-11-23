@@ -27,7 +27,7 @@ Pace: at most 5 issue creations and 10 comments per minute. No polling loops.
 3. Build on `issue/N`. Bugs start with a failing test. Push early through the wrapper. Update from `main` with `git merge origin/main`.
 4. Checkpoint before ending a session, raising `needs-decision`, marking ready and finishing a takeover: write `.artifacts/checkpoint.json` (`fields` with all eight State fields, plus `journal`, 10 lines max), then `node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --session <id>`. A rerun after a failed journal post bumps the number again and keeps the input file. A non-auto checkpoint on a ready PR is allowed. The `Stop` and `PreCompact` hooks run `node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --auto`, which push a draft PR and, when `.artifacts/checkpoint.json` exists, also rewrite State and post the journal. Export `GROUNDWORK_SESSION`, else the hook reads `session_id` from stdin.
 5. Mark ready when Definition of Done holds: `node scripts/agent/token.mjs exec -- gh pr ready N`.
-6. Fix review findings, resolve each thread and log it in `## Review log`. After 3 rounds raise `needs-decision`.
+6. Fix review findings, resolve each thread with `node scripts/agent/token.mjs exec -- node scripts/agent/resolve-thread.mjs N <thread id> --session <id>` (`--list` prints the unresolved thread ids) and log it in `## Review log`. After 3 rounds raise `needs-decision`.
 7. Enqueue: `node scripts/agent/token.mjs exec -- gh pr merge N --auto --squash`.
 8. Ejected from the queue or new findings: return to that PR before new work.
 9. After merge: `node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --merged --session <id>`.

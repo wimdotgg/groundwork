@@ -58,7 +58,7 @@ Enforcers, one row per bullet above, in order. The `.claude/settings.json` deny 
 - Worker: loops next, claim, build, checks, enqueue. Never merges release PRs.
 - Reviewer: reviews PRs from another session with comment reviews. Never approves or requests changes.
 - All roles act as the agent App (see Identity); the session id separates them. Skills live in `.claude/skills/groundwork-*`.
-- Worker resolves each review thread after fixing or answering and logs it in `## Review log`.
+- Worker resolves each review thread after fixing or answering, with `resolve-thread` (never a `gh api` write), and logs it in `## Review log`.
 - Reviewer starts each review with `Reviewer: <model>/<harness> · session <id>` as the first line (the last also counts). Without it, or after a later push, the PR stays in `review-queue`. Only reviews from the agent App count, so a separate reviewer App needs a `review-queue` change first.
 - Reviewer also enqueues Dependabot PRs with green checks (minor and patch only; majors need a Chore issue). `review-queue` lists them with the PRs awaiting review (10.2). It does not exclude your own session: drop your own entries.
 
@@ -110,7 +110,7 @@ Run every script as `node scripts/agent/token.mjs exec -- node scripts/agent/<na
 4. Build on `issue/N`; push early through the wrapper; merge main in, never rebase.
 5. `node scripts/agent/token.mjs exec -- node scripts/agent/checkpoint.mjs --session <id>` at the required moments (6.5), from `.artifacts/checkpoint.json`.
 6. Mark ready when Definition of Done is met: `node scripts/agent/token.mjs exec -- gh pr ready N`.
-7. Fix review findings. After 3 rounds raise `needs-decision` (`node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --decision --session <id>`).
+7. Fix review findings. Resolve each thread: `node scripts/agent/token.mjs exec -- node scripts/agent/resolve-thread.mjs <PR> <thread id> --session <id>`; `--list` prints the unresolved thread ids. It refuses a PR whose footer names another session (exit 3). After 3 rounds raise `needs-decision` (`node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --decision --session <id>`).
 8. Enqueue: `node scripts/agent/token.mjs exec -- gh pr merge N --auto --squash`.
 9. If ejected from the queue or new findings arrive, return to that PR before new work.
 10. After merge: `node scripts/agent/token.mjs exec -- node scripts/agent/release.mjs N --merged --session <id>` posts the handover comment on the issue.
