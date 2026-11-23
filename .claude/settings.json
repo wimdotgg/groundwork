@@ -6,10 +6,13 @@
   "permissions": {
     "allow": [
       "Bash(node scripts/agent/*)",
-      "Bash(node scripts/human/*)",
+      "Bash(node scripts/human/inbox.mjs)",
+      "Bash(node scripts/human/inbox.mjs *)",
       "Bash(node --test *)"
     ],
     "deny": [
+      "Bash(*node*scripts/owner/setup.mjs*)",
+      "Bash(*node*scripts\\\\owner\\\\setup.mjs*)",
       "Bash(gh)",
       "Bash(gh *)",
       "Bash(gh.exe)",
