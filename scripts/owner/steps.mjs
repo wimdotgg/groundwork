@@ -21,7 +21,7 @@ const BOT_IDENTITY = /\[bot\]/i;
 const UNTRACKED = '??';
 const MAIN_ONLY = 'branch:main';
 // .git/config is agent-writable and Git runs programs it names (gpg.program, credential helpers, core.sshCommand,
-// filters, includes), so repo-copy accepts only keys that run nothing. Listing every executable key to override cannot be complete.
+// filters, diff.external, includes), so the wizard accepts only keys that run nothing. Listing every executable key to override cannot be complete.
 const SAFE_LOCAL_CONFIG = [
   /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|symlinks|ignorecase|autocrlf|precomposeunicode)$/,
   /^remote\.[^.]+\.(url|fetch)$/, /^branch\..+\.(remote|merge|rebase)$/, /^user\.(name|email)$/,
@@ -154,11 +154,13 @@ function refuseWithRecovery(io, { reason, remote, note, untracked = [] }) {
   refuse(reason);
 }
 
-// Accepts a fresh clone plus the consent note, or the state a declined y/N or a failed push left behind.
-function requireSafeLocalConfig(io) {
+/** Reading the config runs nothing it names, so the wizard runs this before any other git command. */
+export function requireSafeLocalConfig(io) {
   const unsafe = lines(git(io, 'config', '--local', '--name-only', '--list')).find((key) => !SAFE_LOCAL_CONFIG.some((safe) => safe.test(key)));
-  if (unsafe !== undefined) refuse(`.git/config sets ${clean(unsafe)}, which repo-copy does not run with: remove it (git config --local --unset-all ${clean(unsafe)}), then rerun`);
+  if (unsafe !== undefined) refuse(`.git/config sets ${clean(unsafe)}, which the wizard does not run with: remove it (git config --local --unset-all '${clean(unsafe)}'), then rerun`);
 }
+
+// Accepts a fresh clone plus the consent note, or the state a declined y/N or a failed push left behind.
 
 function inspectClone(io, note) {
   if (io.readText(fromRoot(io, note)) === null) refuse(`consent note ${note} is missing: copy it from docs/setup.md, then rerun`);
