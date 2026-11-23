@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { STEP_HANDLERS } from './steps.mjs';
-import { ghEnvironment, gitConfigEnvironment, main, writePrivateFile } from './setup.mjs';
+import { childEnvironment, ghEnvironment, gitConfigEnvironment, main, writePrivateFile } from './setup.mjs';
 
 const NOW = '2026-11-23T09:00:00Z';
 const NOTE = 'docs/runs/2026-11-23-setup-consent.md';
@@ -141,7 +141,7 @@ test('AC1 repo-copy renames, writes, resets, stages by name, shows diff, note an
   assert.equal(await repoCopy(io), true);
   const at = (call) => io.calls.indexOf(call);
   assert.ok(at('git remote rename origin upstream') < at(COPY_ADD) && at(COPY_ADD) < at(COMMIT) && at(COMMIT) < at(REPO_CREATE));
-  assert.ok(at(REPO_CREATE) < at('git remote get-url --push origin'));
+  assert.ok(at(REPO_CREATE) < at('git remote get-url --push --all origin'));
   assert.equal(io.calls.at(-1), PUSH);
   assert.ok(!io.calls.some((call) => / add (-A|--all|\.)/.test(call) || call.includes('commit -a') || (call.startsWith('gh ') && call.includes('--push'))));
   const shown = io.output.indexOf(COMMIT);
@@ -259,10 +259,41 @@ test('consent A refuses repo-copy after the skip prompt, before any write', asyn
 });
 
 test('every child gets the hook-free git config in its environment, so the git gh runs skips hooks too', () => {
-  assert.deepEqual(gitConfigEnvironment({ PATH: '/bin' }, '/empty'), {
-    PATH: '/bin', GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/empty',
-    GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
-  });
+  const hookFree = {
+    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/empty', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
+  };
+  assert.deepEqual(gitConfigEnvironment({ PATH: '/bin' }, '/empty'), { PATH: '/bin', ...hookFree });
+  // The wiring terminalIo uses for every spawn: gh keeps the git settings and loses forced colour.
+  assert.deepEqual(childEnvironment({ command: 'gh', env: { PATH: '/bin', GH_FORCE_TTY: '1' }, hooksDir: '/empty' }), { PATH: '/bin', ...hookFree, NO_COLOR: '1' });
+  for (const command of ['git', 'powershell.exe']) {
+    assert.deepEqual(childEnvironment({ command, env: { PATH: '/bin' }, hooksDir: '/empty' }), { PATH: '/bin', ...hookFree });
+  }
+});
+
+test('repo-copy refuses a clone whose .git/config sets a key outside the allowlist, naming it', async (t) => {
+  const { clone } = cloneFixture(t);
+  for (const [key, value] of [['gpg.program', 'evil'], ['credential.helper', '!evil'], ['core.sshCommand', 'evil'], ['filter.x.clean', 'evil'], ['remote.origin.pushurl', ORG_URL]]) {
+    git(clone, 'config', '--local', key, value);
+    const io = cloneIo(clone, { answers: [...COPY_ANSWERS] });
+    await assert.rejects(repoCopy(io), new RegExp(`\\.git/config sets ${key.toLowerCase().replaceAll('.', '\\.')}`));
+    assert.ok(!io.calls.some((call) => /^git (remote rename|add|commit|push)/.test(call)));
+    git(clone, 'config', '--local', '--unset', key);
+  }
+  git(clone, 'config', '--local', 'branch.main.rebase', 'false');
+  assert.equal(await repoCopy(cloneIo(clone, { answers: [...COPY_ANSWERS] })), true);
+});
+
+test('repo-copy refuses an origin with a second push URL', async (t) => {
+  const { clone } = cloneFixture(t);
+  const twoUrls = () => {
+    git(clone, 'remote', 'add', 'origin', ORG_URL);
+    git(clone, 'remote', 'set-url', '--add', '--push', 'origin', ORG_URL);
+    git(clone, 'remote', 'set-url', '--add', '--push', 'origin', 'https://github.com/other/groundwork.git');
+    return OK;
+  };
+  const io = cloneIo(clone, { answers: [...COPY_ANSWERS], gh: twoUrls });
+  await assert.rejects(repoCopy(io), /origin pushes to 2 URLs/);
+  assert.ok(!io.calls.includes(PUSH));
 });
 
 // Spec 2.2 to 2.4, copied here so a change to the step's list fails this test.
@@ -357,22 +388,30 @@ test('AC5 elsewhere the key goes to a 0600 PEM and the wizard prints the variabl
   assert.deepEqual([...chosen.privateFiles.keys()], ['/secure/agent.pem']);
 });
 
-test('AC5 writePrivateFile replaces a wider existing file with a 0600 one and refuses a symlink on POSIX (Linux CI)', (t) => {
-  // Windows has no POSIX modes, and symlinks need a privilege there.
-  if (process.platform === 'win32') return;
+// Windows has no POSIX modes and needs a privilege for symlinks, so those assertions run on Linux CI only.
+const POSIX = process.platform !== 'win32';
+
+test('AC5 writePrivateFile replaces an existing file with a fresh 0600 one, cleans up a failed rename, refuses a symlink', (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), 'groundwork-key-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const fresh = path.join(directory, 'nested', 'agent.pem');
   writePrivateFile(fresh, 'x');
-  assert.equal(statSync(fresh).mode & 0o777, 0o600);
+  assert.equal(readFileSync(fresh, 'utf8'), 'x');
   const wide = path.join(directory, 'wide.pem');
   writeFileSync(wide, 'old', { mode: 0o644 });
   writePrivateFile(wide, 'key');
-  assert.deepEqual([statSync(wide).mode & 0o777, readFileSync(wide, 'utf8')], [0o600, 'key']);
-  const link = path.join(directory, 'link.pem');
-  symlinkSync(wide, link);
-  assert.throws(() => writePrivateFile(link, 'other'), /link\.pem is a symlink/);
   assert.equal(readFileSync(wide, 'utf8'), 'key');
+  const blocked = path.join(directory, 'blocked.pem');
+  mkdirSync(path.join(blocked, 'inside'), { recursive: true });
+  assert.throws(() => writePrivateFile(blocked, 'key'));
+  assert.deepEqual(readdirSync(directory).filter((name) => name.endsWith('.new')), []);
+  if (POSIX) {
+    assert.deepEqual([statSync(fresh).mode & 0o777, statSync(wide).mode & 0o777], [0o600, 0o600]);
+    const link = path.join(directory, 'link.pem');
+    symlinkSync(wide, link);
+    assert.throws(() => writePrivateFile(link, 'other'), /link\.pem is a symlink/);
+    assert.equal(readFileSync(wide, 'utf8'), 'key');
+  }
 });
 
 test('AC5 on Windows the key goes through DPAPI to the files token.mjs reads, then the PEM may be deleted', async () => {

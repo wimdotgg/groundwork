@@ -142,6 +142,12 @@ export const gitConfigEnvironment = (env, hooksDir) => ({
   GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
 });
 
+/** The environment of every child the wizard spawns: hook-free git settings, and for gh no forced colour. */
+export function childEnvironment({ command, env, hooksDir }) {
+  const withGitConfig = gitConfigEnvironment(env, hooksDir);
+  return command === 'gh' ? ghEnvironment(withGitConfig) : withGitConfig;
+}
+
 export function checkReviewedCode(io) {
   const git = (...args) => {
     const result = io.capture('git', args);
@@ -370,7 +376,12 @@ export function writePrivateFile(file, text) {
   mkdirSync(path.dirname(file), { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   const fresh = `${file}.${process.pid}.new`;
   writeFileSync(fresh, text, { mode: PRIVATE_FILE_MODE, flag: 'wx' });
-  renameSync(fresh, file);
+  try {
+    renameSync(fresh, file);
+  } catch (error) {
+    rmSync(fresh, { force: true });
+    throw error;
+  }
 }
 
 const OPENERS = { win32: ['rundll32', 'url.dll,FileProtocolHandler'], darwin: ['open'] };
@@ -393,8 +404,7 @@ function terminalIo() {
       process.once('exit', () => { if (hooksDir) rmSync(hooksDir, { recursive: true, force: true }); });
     }
     const fullArgs = command === 'git' ? gitArguments(noHooksDir(), args) : args;
-    const childEnv = gitConfigEnvironment(process.env, noHooksDir());
-    const env = command === 'gh' ? ghEnvironment(childEnv) : childEnv;
+    const env = childEnvironment({ command, env: process.env, hooksDir: noHooksDir() });
     const result = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', stdio, env, input });
     if (interrupted || wasInterrupted(result)) throw new Error(INTERRUPTED);
     if (result.error) throw result.error;

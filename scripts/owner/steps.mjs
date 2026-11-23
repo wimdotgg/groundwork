@@ -20,6 +20,12 @@ const IDENT_TIMESTAMP = /\s+\d+\s+[+-]\d{4}$/;
 const BOT_IDENTITY = /\[bot\]/i;
 const UNTRACKED = '??';
 const MAIN_ONLY = 'branch:main';
+// .git/config is agent-writable and Git runs programs it names (gpg.program, credential helpers, core.sshCommand,
+// filters, includes), so repo-copy accepts only keys that run nothing. Listing every executable key to override cannot be complete.
+const SAFE_LOCAL_CONFIG = [
+  /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|symlinks|ignorecase|autocrlf|precomposeunicode)$/,
+  /^remote\.[^.]+\.(url|fetch)$/, /^branch\..+\.(remote|merge|rebase)$/, /^user\.(name|email)$/,
+];
 // Same rule shape as bootstrap's CODEOWNERS fill: pattern, owners, optional trailing comment.
 const CODEOWNERS_RULE = /^(\s*[^\s#]+\s+)([^#]*?)(\s*(?:#[^\n]*)?)$/;
 // Reads the PEM from stdin and prints the DPAPI string token.mjs decrypts with ConvertTo-SecureString.
@@ -149,8 +155,14 @@ function refuseWithRecovery(io, { reason, remote, note, untracked = [] }) {
 }
 
 // Accepts a fresh clone plus the consent note, or the state a declined y/N or a failed push left behind.
+function requireSafeLocalConfig(io) {
+  const unsafe = lines(git(io, 'config', '--local', '--name-only', '--list')).find((key) => !SAFE_LOCAL_CONFIG.some((safe) => safe.test(key)));
+  if (unsafe !== undefined) refuse(`.git/config sets ${clean(unsafe)}, which repo-copy does not run with: remove it (git config --local --unset-all ${clean(unsafe)}), then rerun`);
+}
+
 function inspectClone(io, note) {
   if (io.readText(fromRoot(io, note)) === null) refuse(`consent note ${note} is missing: copy it from docs/setup.md, then rerun`);
+  requireSafeLocalConfig(io);
   const branch = git(io, 'branch', '--show-current');
   if (branch !== 'main') refuse(`repo-copy runs on branch main, not ${clean(branch) || 'a detached HEAD'}`);
   const remote = baselineRemote(io);
@@ -250,7 +262,9 @@ async function pushCopy(io, org) {
   if (!remotes.includes('upstream')) refuse('remote upstream is missing: repo-copy renames origin to upstream before it pushes');
   const create = { command: 'gh', args: ['repo', 'create', `${org}/${CONTROL_REPO}`, '--public', '--source', '.', '--remote', 'origin'] };
   if (!remotes.includes('origin') && !(await confirmRun(io, create))) return false;
-  const url = clean(git(io, 'remote', 'get-url', '--push', 'origin'));
+  const urls = lines(git(io, 'remote', 'get-url', '--push', '--all', 'origin')).map(clean);
+  if (urls.length !== 1) refuse(`origin pushes to ${urls.length} URLs (${urls.join(', ')}): keep only github.com/${org}/${CONTROL_REPO}, then rerun`);
+  const [url] = urls;
   if (!isOrgRepositoryUrl(url, org)) refuse(`origin pushes to ${url}, not github.com/${org}/${CONTROL_REPO}: fix it with git remote set-url origin, then rerun`);
   io.print(`push to ${url}`);
   return confirmRun(io, { command: 'git', args: ['push', '--set-upstream', 'origin', 'main'] });
