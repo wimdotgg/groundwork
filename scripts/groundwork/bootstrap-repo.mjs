@@ -316,25 +316,26 @@ export async function readRepositoryRulesets({ client, org, repo }) {
  */
 export async function requireReplacedRulesets({ client, org, repo, names }) {
   const live = (await readRepositoryRulesets({ client, org, repo })).map((ruleset) => ruleset.name);
-  const advice = 'no write was made; copy the names from the plan rows "rulesets the sync deletes"';
+  const advice = 'no write was made, copy the names from the plan rows rulesets the sync deletes';
   const literals = (list) => list.map(rulesetNameLiteral).join(', ');
   if (names === undefined) {
     if (live.length === 0) return live;
-    throw new SettingsError(`${org}/${repo} has repository rulesets the sync deletes or replaces (${literals(live)}) and replaceRulesets is missing; ${advice}`);
+    throw new SettingsError(`${org}/${repo} has repository rulesets and replaceRulesets is missing; ${advice}: ${literals(live)}`);
   }
   const unnamed = live.filter((name) => !names.includes(name));
   const absent = names.filter((name) => !live.includes(name));
   if (unnamed.length === 0 && absent.length === 0) return live;
-  const differences = [unnamed.length > 0 && `not named: ${literals(unnamed)}`, absent.length > 0 && `named but absent: ${literals(absent)}`].filter(Boolean);
-  throw new SettingsError(`${org}/${repo} repository rulesets differ from replaceRulesets (${differences.join('; ')}); ${advice}`);
+  const differences = [absent.length > 0 && `named but absent: ${literals(absent)}`, unnamed.length > 0 && `not named: ${literals(unnamed)}`].filter(Boolean);
+  throw new SettingsError(`${org}/${repo} repository rulesets differ from replaceRulesets; ${advice}; ${differences.join('; ')}`);
 }
 
 /** `protection.enabled` is the classic rule; a protected branch without it is held by an enforced ruleset. */
 function protectionSource(branch, rulesets) {
   if (branch?.protection?.enabled === true) return 'set by a classic branch protection rule: delete it in settings/branches';
-  const names = rulesets.filter((ruleset) => ruleset.target === 'branch' && ruleset.enforcement !== 'disabled').map((ruleset) => ruleset.name);
-  if (names.length === 0) return 'set by a ruleset outside this repository: exclude the repository from it';
-  return `set by a ruleset: ${names.length === 1 ? capName(names[0]) : listNames(names)}; disable it and name it in replaceRulesets`;
+  const literals = rulesets.filter((ruleset) => ruleset.target === 'branch' && ruleset.enforcement !== 'disabled').map((ruleset) => rulesetNameLiteral(ruleset.name));
+  if (literals.length === 0) return 'set by a ruleset outside this repository: exclude the repository from it';
+  if (literals.join(', ').length <= LIST_BUDGET) return `set by a ruleset: ${literals.join(', ')}; disable it and name it in replaceRulesets`;
+  return `set by ${literals.length} repository ruleset(s), see the rulesets the sync deletes rows; disable and name each in replaceRulesets`;
 }
 
 /**
@@ -342,12 +343,13 @@ function protectionSource(branch, rulesets) {
  * fact continues on `ruleset name part i/n` rows, bracketed so no part loses an edge space; joined, they parse as JSON.
  * @param {Array<{ name: string, enforcement: string, target: string }>} rulesets
  * @param {string} rowName
+ * @param {Set<string>} [kitNames] rulesets the kit declares, marked as kept: the sync updates them in place
  * @returns {Array<{ name: string, detail: string }>}
  */
-export function rulesetRows(rulesets, rowName) {
+export function rulesetRows(rulesets, rowName, kitNames = new Set()) {
   if (rulesets.length === 0) return [{ name: rowName, detail: 'none' }];
   return rulesets.flatMap(({ name, enforcement, target }) => {
-    const meta = `enforcement ${enforcement}, target ${target}, name`;
+    const meta = `${kitNames.has(name) ? 'kit ruleset, kept, ' : ''}enforcement ${enforcement}, target ${target}, name`;
     const literal = rulesetNameLiteral(name);
     if (meta.length + literal.length < RULESET_DETAIL_BUDGET) return [{ name: rowName, detail: `${meta} ${literal}` }];
     const parts = literal.match(new RegExp(`.{1,${RULESET_NAME_PART_LENGTH}}`, 'g'));

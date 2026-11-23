@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { SettingsError, loadDesiredState, repoKind } from '../lib/settings.mjs';
-import { applySections, requireReleaseValues } from './apply-settings.mjs';
+import { applySections, requireReleaseValues, rulesetNameLiteral } from './apply-settings.mjs';
 import {
   commitAdoptTree, commitBootstrapTree, createMissingLabels, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
   readBlobTexts, readKitVersion, readReleaseTree, readRepositoryRulesets, requireMainHead, requireReplacedRulesets, resolveTagCommit, rulesetRows,
@@ -10,6 +10,7 @@ import { findSetupEpic, openSetupEpic, parseSetupTemplates } from './setup-epic.
 
 const SETUP_TEMPLATES_DIR = 'scripts/groundwork/stubs/setup/';
 const LABELS_PATH = '.github/groundwork/labels.json';
+const RULESETS_PREFIX = '.github/groundwork/rulesets/';
 
 /** Op identity, read by admin-run (12.1). */
 export const OP = 'bootstrap';
@@ -169,11 +170,23 @@ function kitLabels(kit) {
 
 const reportFacts = (rows) => rows.map(({ name, detail }) => `report ${name}: ${detail}`);
 
+/** Ruleset names the kit declares: each `rulesets/<name>.json` file holds the ruleset of that name. */
+function kitRulesetNames(kit) {
+  const files = Object.keys(settingsFiles(kit.treeEntries, kit.contents)).filter((path) => path.startsWith(RULESETS_PREFIX));
+  return new Set(files.map((path) => path.slice(RULESETS_PREFIX.length, -'.json'.length)));
+}
+
+/** A rerun deletes an undeclared ruleset only when replaceRulesets names it, so the owner approves it against this list. */
+async function oursPlan({ client, org, controlRepo, repo, description }) {
+  const kit = await readKit({ client, org, controlRepo, repo, description, tag: await readKitVersion({ client, org, repo }) });
+  const rows = rulesetRows(await readRepositoryRulesets({ client, org, repo }), 'repository rulesets', kitRulesetNames(kit));
+  return { facts: ['Adopt: the target is a groundwork project, so bootstrap resumes as usual', ...reportFacts(rows)] };
+}
+
 async function adoptionPlan({ client, org, controlRepo, request, config }) {
   const { targetRepo: repo, args } = request;
   const state = await inspectRepo({ client, org, repo, adminBot: `${config.apps.admin}[bot]` });
-  // A rerun deletes an undeclared ruleset only when replaceRulesets names it, so the owner approves it against this list.
-  if (state === 'ours') return { facts: ['Adopt: the target is a groundwork project, so bootstrap resumes as usual', ...reportFacts(rulesetRows(await readRepositoryRulesets({ client, org, repo }), 'repository rulesets'))] };
+  if (state === 'ours') return oursPlan({ client, org, controlRepo, repo, description: args.description });
   const refused = refusal(state, { org, repo, adopt: true });
   if (refused !== undefined) return { problem: refused };
   const tag = await latestReleaseTag({ client, org, controlRepo });
@@ -210,7 +223,9 @@ async function labelsAndCommit({ client, org, repo, source, sleep, sections, set
   const replaced = await requireReplacedRulesets({ client, org, repo, names: source.replaceRulesets });
   const created = await createMissingLabels({ client, org, repo, labels });
   const commit = await commitAdoptTree({ ...kit, pin: source.pin });
-  return [`- rulesets named for replacement: ${replaced.length > 0 ? replaced.join(', ') : 'none'}`, `- labels (missing kit labels): ${created} created`, commitLine('adopt', commit), ...stepLines(await sections(['labels']))];
+  // Target-chosen names go into the markdown summary as escaped literals inside one code span, so they stay inert.
+  const named = replaced.length > 0 ? `\`${replaced.map(rulesetNameLiteral).join(', ')}\`` : 'none';
+  return [`- rulesets named for replacement: ${named}`, `- labels (missing kit labels): ${created} created`, commitLine('adopt', commit), ...stepLines(await sections(['labels']))];
 }
 
 /** Owner decision on #167 (Q4): once the setup epic is accepted or closed, `apply-settings` is the repair path. */

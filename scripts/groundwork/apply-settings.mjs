@@ -323,7 +323,9 @@ function assertNamedForDeletion(undeclared, replaceRulesets) {
   if (replaceRulesets === undefined) return;
   const unnamed = undeclared.filter((candidate) => !replaceRulesets.includes(candidate.name));
   if (unnamed.length === 0) return;
-  throw new SettingsError(`undeclared repository rulesets not named in replaceRulesets: ${unnamed.map((candidate) => rulesetNameLiteral(candidate.name)).join(', ')}; no ruleset was changed`);
+  // Names last: admin-run cuts a refusal at 200 characters, and a cut then costs only names the plan rows carry.
+  const reason = 'undeclared repository rulesets not named in replaceRulesets, no ruleset was changed; rerun with adopt: true and replaceRulesets, or delete them in settings/rules';
+  throw new SettingsError(`${reason}: ${unnamed.map((candidate) => rulesetNameLiteral(candidate.name)).join(', ')}`);
 }
 
 async function applyRulesets(context) {
