@@ -9,8 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createFixtureClient } from './lib/github.mjs';
 import { repoRoot } from './lib/config.mjs';
-import { CONTROL_PATHS } from './groundwork/bootstrap-tree.mjs';
-import { KIT_EXCLUDED_PATHS, KIT_PATHS, UNMODIFIED_ONLY_PATHS, isKitPath, main, mergeConfig, rewritePins, run } from './kit-update.mjs';
+import { KIT_PATHS, UNMODIFIED_ONLY_PATHS, isKitPath, main, mergeConfig, rewritePins, run } from './kit-update.mjs';
 
 const execFileAsync = promisify(execFile);
 const realConfigText = await readFile(path.join(repoRoot(import.meta.url), '.github/groundwork/config.json'), 'utf8');
@@ -297,9 +296,25 @@ test('#290 AC1 run writes the worker skill and no path under the control-only gr
   });
 });
 
-test('#290 the kit leaves out the control-only skill that bootstrap drops', () => {
-  assert.ok(KIT_EXCLUDED_PATHS.every((excluded) => CONTROL_PATHS.includes(excluded)));
+test('#290 isKitPath is false for the control-only groundwork-setup skill', () => {
   assert.ok(!isKitPath('.claude/skills/groundwork-setup/SKILL.md'));
+  assert.ok(isKitPath('.claude/skills/groundwork-worker/SKILL.md'));
+});
+
+test('#290 run removes a groundwork-setup copy a project already holds, whether or not the tags carry it', async () => {
+  const setup = { '.claude/skills/groundwork-setup/SKILL.md': 'setup\n', '.claude/skills/groundwork-setup/notes.md': 'notes\n' };
+  const projectFiles = { ...PROJECT_FILES, ...setup, '.claude/skills/mine/SKILL.md': 'mine\n' };
+  await withProject(projectFiles, {}, async (project) => {
+    // A project's .gitignore re-includes groundwork-* skills; force-add them so a global ignore of .claude/skills/ cannot hide them.
+    await project.git(['add', '-f', '--', '.claude/skills']);
+    await project.git(['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'skills']);
+    const result = await execute(project, releasesClient({ ...OLD_TREE, ...setup }, { ...NEW_TREE, ...setup }));
+    for (const filePath of Object.keys(setup)) {
+      await assert.rejects(readProject(project, filePath), { code: 'ENOENT' });
+      assert.ok(result.changed.includes(filePath));
+    }
+    assert.equal(await readProject(project, '.claude/skills/mine/SKILL.md'), 'mine\n');
+  });
 });
 
 test('mergeConfig recurses into an object key that both sides added', () => {

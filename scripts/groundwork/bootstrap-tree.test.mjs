@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { SettingsError } from '../lib/settings.mjs';
+import { KIT_EXCLUDED_PATHS, isKitPath } from '../kit-update.mjs';
 import {
   CONTROL_PATHS,
   KIT_VERSION_PATH,
@@ -309,4 +310,11 @@ test('#268 AC4: CONTROL_PATHS lists the org-setup skill and the tree carries no 
   const withSkill = [...entries, { path: '.claude/skills/groundwork-setup/SKILL.md', mode: '100644', sha: 'sha-setup-skill' }];
   const tree = buildBootstrapTree({ entries: withSkill, contents, ...OPTIONS });
   assert.deepEqual(tree.filter(({ path }) => path.startsWith('.claude/skills/groundwork-setup/')), []);
+});
+
+// Lives here, not in kit-update.test.mjs: scripts/groundwork/ never ships to projects, and that test does.
+test('#290: no CONTROL_PATHS entry is a kit path, and every KIT_EXCLUDED_PATHS entry is a control path', () => {
+  assert.ok(KIT_EXCLUDED_PATHS.every((excluded) => CONTROL_PATHS.includes(excluded)));
+  const leaking = CONTROL_PATHS.filter((entry) => isKitPath(entry.endsWith('/') ? `${entry}probe` : entry));
+  assert.deepEqual(leaking, []);
 });
