@@ -1,6 +1,8 @@
 import { parseArgs } from 'node:util';
 import { GitHubError, createClient, currentRepo, repoFromEnv } from '../lib/github.mjs';
+import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { isValidSessionId, parseFooter } from '../lib/issue-model.mjs';
+import { isTrustedAuthor } from '../lib/trust.mjs';
 import './token.mjs'; // exits on an unsupported Node before the script runs
 
 const EXIT_ERROR = 1;
@@ -11,11 +13,27 @@ const USAGE = 'usage: resolve-thread.mjs <PR number> (<thread id> | --list) [--s
 const PULL_QUERY = 'query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) '
   + '{ pullRequest(number: $number) { state headRefName isCrossRepository headRepository { nameWithOwner } body '
   + `reviewThreads(first: ${MAX_REVIEW_THREADS}) { pageInfo { hasNextPage } nodes { id isResolved path line originalLine `
-  + 'comments(first: 1) { nodes { body } } } } } } }';
+  + 'comments(first: 1) { nodes { author { __typename login } body } } } } } } }';
 const RESOLVE_MUTATION = 'mutation($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } } }';
 
+const MAX_TEXT_CHARS = 120;
+const ELLIPSIS = '...';
+
 const refusal = (exitCode, reason) => ({ exitCode, result: { ok: false, reason } });
-const firstLine = (text) => String(text ?? '').split(/\r?\n/)[0].replace(/\p{Cc}+/gu, ' ').trim();
+// GraphQL omits the [bot] suffix that REST logins and config.accounts carry.
+const graphqlLogin = (author) => (author?.__typename === 'Bot' ? `${author.login}[bot]` : author?.login ?? '');
+
+function firstLine(text) {
+  const line = String(text ?? '').split(/\r?\n/)[0].replace(/\p{Cc}+/gu, ' ').trim();
+  return line.length <= MAX_TEXT_CHARS ? line : `${line.slice(0, MAX_TEXT_CHARS - ELLIPSIS.length)}${ELLIPSIS}`;
+}
+
+/** First comment line from a trusted author; text from anyone else is withheld (6.7), `resume` shows it fenced. */
+function commentSummary(comment, config) {
+  const login = graphqlLogin(comment?.author);
+  if (!isTrustedAuthor({ login, kind: 'comment' }, config)) return `untrusted ${firstLine(login) || 'unknown'}`;
+  return firstLine(comment.body);
+}
 
 /** Refusal for a PR this session may not touch, or null when it holds the PR (the footer rule `resume` uses). */
 function holdRefusal(pull, { owner, repo, number, session }) {
@@ -40,14 +58,15 @@ async function loadHeldPull(client, target) {
 /**
  * @param {import('../lib/github.mjs').GitHubClient} client
  * @param {{ owner: string, repo: string, number: number, session: string }} target
- * @returns {Promise<{ exitCode: number, result: object }>}   lines: `<thread id> <path>:<line> <first comment line>`
+ * @param {{ config: object }} context
+ * @returns {Promise<{ exitCode: number, result: object }>}   lines: `<thread id> <path>:<line> <first comment line or "untrusted <login>">`
  */
-export async function listThreads(client, target) {
+export async function listThreads(client, target, { config }) {
   const { pull, refused } = await loadHeldPull(client, target);
   if (refused) return refused;
   const lines = pull.reviewThreads.nodes.filter((thread) => !thread.isResolved).map((thread) => {
     const location = `${thread.path}:${thread.line ?? thread.originalLine ?? '?'}`;
-    return `${thread.id} ${location} ${firstLine(thread.comments.nodes[0]?.body)}`;
+    return `${thread.id} ${location} ${commentSummary(thread.comments.nodes[0], config)}`;
   });
   if (pull.reviewThreads.pageInfo?.hasNextPage) lines.push(`more than ${MAX_REVIEW_THREADS} review threads: the rest are not shown`);
   return { exitCode: 0, result: { ok: true, number: target.number, lines } };
@@ -79,7 +98,7 @@ export function parseCliArguments(argv, env) {
   const list = values.list === true;
   if (positionals.length !== (list ? 1 : 2) || !/^\d+$/.test(positionals[0])) throw new GitHubError(USAGE);
   const session = values.session || env.GROUNDWORK_SESSION || '';
-  if (!session) throw new GitHubError('no session: pass --session <id> or set GROUNDWORK_SESSION');
+  if (!session) throw new GitHubError('session id required');
   if (!isValidSessionId(session)) throw new GitHubError(`invalid session id: ${session}`);
   return { number: Number(positionals[0]), threadId: list ? null : positionals[1], session, list, json: values.json === true };
 }
@@ -97,8 +116,10 @@ async function main(argv) {
   const target = parseCliArguments(argv, process.env);
   const client = createClient({ env: process.env });
   const repoRef = process.env.GITHUB_REPOSITORY ? repoFromEnv(process.env) : await currentRepo();
-  const run = target.list ? listThreads : resolveThread;
-  return report(await run(client, { ...repoRef, ...target }), target.json);
+  const fullTarget = { ...repoRef, ...target };
+  if (!target.list) return report(await resolveThread(client, fullTarget), target.json);
+  const config = await loadConfig({ root: repoRoot(import.meta.url) });
+  return report(await listThreads(client, fullTarget, { config }), target.json);
 }
 
 if (import.meta.main) {
