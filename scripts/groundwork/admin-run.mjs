@@ -288,7 +288,8 @@ export async function plan(env, overrides = {}) {
   if (env.GITHUB_REF !== MAIN_REF) return failure(heading, `runs only from ${MAIN_REF}`);
   const { problems, request: dispatched } = validateRequest(readInputs(env), deps.registry);
   if (problems.length > 0) return failure(heading, problems.join('; '));
-  const { org, controlRepo } = await deps.loadConfig({ root: deps.controlRoot });
+  const config = await deps.loadConfig({ root: deps.controlRoot });
+  const { org, controlRepo } = config;
   const { request, problem } = resolveRequest(dispatched, { controlRepo, env });
   if (problem !== undefined) return failure(heading, problem);
   if (refusesControlRepo(request, controlRepo)) return failure(heading, CONTROL_TARGET_REASON);
@@ -298,7 +299,7 @@ export async function plan(env, overrides = {}) {
     if (checked.problem !== undefined) return failure(heading, checked.problem);
     ancestry = describeAncestry(checked.aheadBy);
   }
-  const details = await planDetails({ createClient: deps.createClient, env, org, controlRepo, request });
+  const details = await planDetails({ createClient: deps.createClient, env, config, request });
   if (details.problem !== undefined) return failure(heading, details.problem);
   const summary = [
     `## ${heading}`,
@@ -314,19 +315,22 @@ export async function plan(env, overrides = {}) {
 }
 
 /** An op that must show the owner more than its inputs (the `script` file) exports `plan`; a refusal is its `problem`. */
-async function planDetails({ createClient: makeClient, env, org, controlRepo, request }) {
+async function planDetails({ createClient: makeClient, env, config, request }) {
   if (typeof request.module.plan !== 'function') return {};
+  const { org, controlRepo } = config;
   try {
-    return await request.module.plan({ client: makeClient({ env }), org, controlRepo, request });
+    return await request.module.plan({ client: makeClient({ env }), org, controlRepo, request, config });
   } catch (error) {
     if (!(error instanceof GitHubError)) throw error;
     return { problem: error.message };
   }
 }
 
+/** Facts may carry target text (label, tag, path names), so each is an inert code span. */
 function renderPlanDetails({ facts = [], source }) {
-  if (source === undefined) return [];
-  return [...facts.map((fact) => `- ${safeText(fact)}`), '', fencedBlock(source, 'js'), ''];
+  const lines = facts.map((fact) => `- ${inCodeSpan(fact)}`);
+  if (source === undefined) return lines.length === 0 ? [] : [...lines, ''];
+  return [...lines, '', fencedBlock(source, 'js'), ''];
 }
 
 /**
