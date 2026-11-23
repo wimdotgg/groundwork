@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -6,8 +7,9 @@ import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { collect, evaluate } from './pr-size.mjs';
 
 const root = repoRoot(import.meta.url);
+const configRoot = fileURLToPath(new URL('../lib/fixtures/config-root/', import.meta.url));
 const cases = JSON.parse(await readFile(new URL('./fixtures/pr-size.json', import.meta.url), 'utf8'));
-const baseConfig = await loadConfig({ root });
+const baseConfig = await loadConfig({ root: configRoot });
 const REPO = { owner: 'wimdotgg', repo: 'groundwork' };
 // The repo config ships no generatedGlobs; cases run against it plus one glob so that rule is exercised.
 const config = { ...baseConfig, generatedGlobs: ['src/generated/**'] };
