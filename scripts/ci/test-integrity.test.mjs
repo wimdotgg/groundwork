@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -6,9 +7,10 @@ import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { collect, evaluate } from './test-integrity.mjs';
 
 const root = repoRoot(import.meta.url);
+const configRoot = fileURLToPath(new URL('../lib/fixtures/config-root/', import.meta.url));
 // Fixtures escape suppression tokens (- etc.) so the fixture file does not trip test-integrity on its own PRs.
 const cases = JSON.parse(await readFile(new URL('./fixtures/test-integrity.json', import.meta.url), 'utf8'));
-const config = await loadConfig({ root });
+const config = await loadConfig({ root: configRoot });
 const REPO = { owner: 'wimdotgg', repo: 'groundwork' };
 
 async function factsFor(testCase) {

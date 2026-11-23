@@ -1,11 +1,13 @@
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFixtureClient } from '../lib/github.mjs';
-import { loadConfig, repoRoot } from '../lib/config.mjs';
+import { loadConfig } from '../lib/config.mjs';
 import { loadIssueFacts } from '../lib/issue-model.mjs';
 import { chooseNext, findHeldHotspots, formatOutput, parseArgs, rankCandidates, unmetReadiness } from './next.mjs';
 
-const config = await loadConfig({ root: repoRoot(import.meta.url) });
+const configRoot = fileURLToPath(new URL('../lib/fixtures/config-root/', import.meta.url));
+const config = await loadConfig({ root: configRoot });
 const repoRef = { owner: 'wimdotgg', repo: 'groundwork' };
 const BASE = '/repos/wimdotgg/groundwork';
 const NOW = new Date('2026-01-01T12:00:00Z');

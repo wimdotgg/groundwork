@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -8,8 +9,9 @@ import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { collect, evaluate } from './settings-plan.mjs';
 
 const root = repoRoot(import.meta.url);
+const configRoot = fileURLToPath(new URL('../lib/fixtures/config-root/', import.meta.url));
 const cases = JSON.parse(await readFile(new URL('./fixtures/settings-plan.json', import.meta.url), 'utf8'));
-const config = await loadConfig({ root });
+const config = await loadConfig({ root: configRoot });
 const REPO = { owner: 'wimdotgg', repo: 'groundwork' };
 const TEMP_ROOT_TOKEN = '$TEMP_ROOT';
 
