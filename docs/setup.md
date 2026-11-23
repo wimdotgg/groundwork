@@ -6,11 +6,11 @@ From a fresh clone of upstream groundwork to `v0.1.0` in your own organization, 
 
 **You need:** a GitHub account with two-factor authentication; Node 24+, Git and the GitHub CLI (`gh auth login` as yourself) on the machine; a clone of upstream groundwork on `main` with no local changes; about an hour.
 
-Placeholders: `<org>` your organization, `<owner>` your login (lower-case), `<app>` the agent App slug, `<admin-app>` and `<release-app>` the admin and release App slugs. `repo-copy` writes all of them to `.github/groundwork/config.json`, so pick the App slugs before you create the Apps.
+Placeholders: `<org>` your organization, `<owner>` your login (lower-case), `<app>` the agent App slug, `<admin-app>` and `<release-app>` the admin and release App slugs. `repo-copy` writes all of them to `.github/groundwork/config.json`, so pick the App slugs before you create the Apps. App names are global on GitHub; if one is taken, follow the slug recovery under `app-agent`.
 
 ## Part 1: once per organization
 
-Each step has an ID and a class. **browser**: you, on a GitHub page; the skill or wizard only opens it. **wizard**: the owner wizard under answer B; under answer A you do it by hand as written. **app**: the agent requests an `admin` run and you approve it in the browser. `setup-state.json` (`%APPDATA%\groundwork\`, or the path in `GROUNDWORK_SETUP_STATE_FILE`) records the answer and each step's status; it is a record, not a control. Billing, org ownership, deletions, key rotation and `admin` approvals stay in the browser under either answer. Consent ends when the last step is done.
+Each step has an ID and a class. **browser**: you, on a GitHub page; the skill or wizard only opens it. **wizard**: the owner wizard under answer B; under answer A you do it by hand as written. **app**: the agent requests an `admin` run and you approve it in the browser. `setup-state.json` records the answer and each step's status; it is a record, not a control. On Windows it lives in `%APPDATA%\groundwork\`; on macOS and Linux set `GROUNDWORK_SETUP_STATE_FILE` to its path, or the skill and wizard stop (the variable also wins on Windows). Billing, org ownership, deletions, key rotation and `admin` approvals stay in the browser under either answer. Consent ends when the last step is done.
 
 ### Consent note
 
@@ -29,7 +29,7 @@ The skill writes it into your clone right after you answer. By hand, create `doc
 
 ### `org-create` · browser
 
-- Page: https://github.com/organizations/plan
+- Page: https://github.com/account/organizations/new?plan=free (the page the wizard opens; https://github.com/organizations/plan with Free leads there).
 - Field: plan. Value: Free. Field: Organization account name. Value: `<org>`. Field: "This organization belongs to". Value: "My personal account".
 - Verify: https://github.com/<org> opens and lists you under People as Owner.
 
@@ -67,13 +67,13 @@ Answer A, in the browser:
 
 A new organization has no `agents` team; skip with the note "no team".
 
-- Page: https://github.com/orgs/<org>/teams/agents/settings
+- Page: https://github.com/orgs/<org>/teams, open `agents`, then Settings.
 - Field: "Delete this team". Value: confirm.
 - Verify: https://github.com/orgs/<org>/teams lists no `agents` team.
 
 ### `repo-copy` · wizard
 
-Copies your clone into `<org>/groundwork` as one setup commit on top of upstream history. Answer A, in your clone, after writing the consent note:
+Copies your clone into `<org>/groundwork` as one setup commit on top of upstream history. Answer A, in your clone, after writing the consent note. Git commands work the same in Git Bash and PowerShell:
 
 ```sh
 git switch main
@@ -85,9 +85,22 @@ git remote rename origin upstream
 Edit `.github/groundwork/config.json`: `org` `<org>`, `accounts.owner` `<owner>`, `accounts.agent` `<app>[bot]`, `apps.agent` `<app>`, `apps.admin` `<admin-app>`, `apps.release` `<release-app>`. In `.github/CODEOWNERS`, replace every owner with `@<owner>`. Reset the release files so the first release is `v0.1.0`:
 
 ```sh
+# Git Bash, macOS, Linux
 printf '{}\n' > .release-please-manifest.json
 printf '0.0.0\n' > version.txt
 : > CHANGELOG.md
+```
+
+```powershell
+# PowerShell
+Set-Content .release-please-manifest.json '{}'
+Set-Content version.txt '0.0.0'
+Clear-Content CHANGELOG.md
+```
+
+Then, in either shell:
+
+```sh
 git add .github/groundwork/config.json .github/CODEOWNERS .release-please-manifest.json version.txt CHANGELOG.md docs/runs/<YYYY-MM-DD>-setup-consent.md
 git diff --cached                 # read it; nothing else may be staged
 git commit -m "chore: set up <org> from groundwork $(git describe --tags --abbrev=0 upstream/main)"
@@ -107,6 +120,8 @@ Never `git add -A` or `git commit -a`. Upstream tags are not pushed. Keep the `u
 - Field: Repository permissions. Value: Contents RW, Pull requests RW, Issues RW, Workflows RW, Actions RW, Commit statuses R, Metadata R. No organization permissions.
 - Then: "Generate a private key" (the browser downloads a `.pem`); note the App ID and client ID; Install App, choose `<org>`, "All repositories".
 - Verify: https://github.com/organizations/<org>/settings/installations lists `<app>` with "All repositories", and the App page URL ends in `/apps/<app>`.
+
+Slug recovery: if GitHub gives any App a slug other than the one `repo-copy` wrote (name taken, or slugified differently), correct `apps.*` and `accounts.agent` in `.github/groundwork/config.json`, commit that file by path and push to `main` before `apply-settings` (`main` is unprotected until then). On Windows, name the `agent-key-store` files after the corrected slug.
 
 ### `agent-key-store` · wizard
 
@@ -129,14 +144,14 @@ Your own `gh` and Git Credential Manager logins may stay on the machine. Agents 
 - Page: https://github.com/organizations/<org>/settings/apps/new, the common fields of `app-agent`, name `<admin-app>`.
 - Field: Repository permissions. Value: Administration RW, Contents RW, Environments RW, Secrets RW, Variables RW, Issues RW, Pull requests RW, Workflows RW, Actions RW, Metadata R. Field: Organization permissions. Value: Issue types RW, Members R.
 - Then: generate a private key and keep the `.pem` for `admin-secrets`; note the client ID; install on `<org>` with "All repositories".
-- Verify: the installations page lists `<admin-app>` with "All repositories".
+- Verify: the installations page lists `<admin-app>` with "All repositories", and the App page URL ends in `/apps/<admin-app>`, the `apps.admin` value in `config.json`.
 
 ### `app-release` · browser
 
 - Page: https://github.com/organizations/<org>/settings/apps/new, the common fields of `app-agent`, name `<release-app>`.
 - Field: Repository permissions. Value: Contents RW, Pull requests RW, Issues RW, Metadata R. No organization permissions.
 - Then: generate a private key and keep the `.pem` for `admin-secrets`; note the App ID; install on `<org>` with "All repositories".
-- Verify: the installations page lists `<release-app>` with "All repositories".
+- Verify: the installations page lists `<release-app>` with "All repositories", and the App page URL ends in `/apps/<release-app>`, the `apps.release` value in `config.json`.
 
 ### `admin-environment` · wizard
 
@@ -173,7 +188,7 @@ The agent requests `apply-settings --repo groundwork --ref <main sha>`; you appr
 
 ### `release-dispatch` · app
 
-The agent dispatches `release-please.yml` once (any merged PR also triggers it). `<release-app>[bot]` opens a release PR for `v0.1.0`.
+The agent runs `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml --ref main` once (any merged PR also triggers it). No `admin` run and no approval: the `release` environment has no reviewer. `<release-app>[bot]` opens a release PR for `v0.1.0`.
 
 ### `release-merge` · browser
 
