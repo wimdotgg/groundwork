@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { GitHubError, apiPath } from '../lib/github.mjs';
+import { validateIssueBody } from '../lib/issue-model.mjs';
 import { SettingsError } from '../lib/settings.mjs';
-import { sameLogin } from '../lib/trust.mjs';
+import { normalizeLabel, sameLogin } from '../lib/trust.mjs';
 
 // Same value as bootstrap-tree.mjs (#144); the integration task (#149) may share one export.
 const KIT_VERSION_PATH = '.github/groundwork/kit-version.txt';
@@ -211,4 +213,84 @@ export async function commitBootstrapTree({ client, org, repo, tag, treeEntries,
     body: { sha: commit.sha, force: false },
   });
   return { sha: commit.sha, created: true };
+}
+
+// Spec 14.4: the project's README and LICENSE are kept and kit lines are appended to its CODEOWNERS.
+const ADOPT_KEPT_PATHS = new Set(['README.md', 'LICENSE', '.github/CODEOWNERS']);
+const LIST_LIMIT = 10;
+const NOT_CHECKED_EMPTY = 'not checked: empty repository';
+
+/** @typedef {{ name: string, fail: boolean, detail: string }} GapRow */
+
+const gapRow = (name, fail, detail) => ({ name, fail, detail });
+
+function listNames(names) {
+  if (names.length === 0) return 'none';
+  const shown = names.slice(0, LIST_LIMIT).join(', ');
+  return names.length > LIST_LIMIT ? `${shown} and ${names.length - LIST_LIMIT} more` : shown;
+}
+
+function gitBlobSha(text) {
+  const bytes = Buffer.from(text, 'utf8');
+  return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+}
+
+async function readMainProtection({ client, org, repo }) {
+  const { status, data } = await client.request('GET', repoPath(org, repo, `/branches/${DEFAULT_BRANCH}`), { okStatuses: [404] });
+  const isProtected = status === 200 && data?.protected === true;
+  return gapRow('protected main', isProtected, isProtected ? 'set; rulesets replace it, delete the branch protection rule in the browser' : 'not set');
+}
+
+async function readCollisions({ client, org, repo, branch, kitEntries }) {
+  const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(branch)}`), { query: { recursive: 1 } });
+  if (data?.truncated) return gapRow('collisions', true, 'target tree is truncated, so it cannot be compared');
+  const targetShas = new Map((data?.tree ?? []).filter((entry) => entry.type === 'blob').map((entry) => [entry.path, entry.sha]));
+  const collisions = kitEntries
+    .filter((entry) => !ADOPT_KEPT_PATHS.has(entry.path) && targetShas.has(entry.path))
+    .filter((entry) => targetShas.get(entry.path) !== (entry.content === undefined ? entry.sha : gitBlobSha(entry.content)))
+    .map((entry) => entry.path);
+  return gapRow('collisions', collisions.length > 0, listNames(collisions));
+}
+
+/**
+ * The failing rows of spec 14.4, from GET calls only.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string,
+ *   kitEntries: Array<{ path: string, sha?: string, content?: string }> }} options `kitEntries` is the built kit tree
+ * @returns {Promise<{ rows: GapRow[], empty: boolean }>}
+ */
+export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
+  const { data: repository } = await client.request('GET', repoPath(org, repo, ''));
+  const branch = repository.default_branch;
+  const { status } = await client.request('GET', repoPath(org, repo, '/commits'), { query: { per_page: 1 }, okStatuses: [409] });
+  const empty = status === 409;
+  const rows = [
+    gapRow('default branch', branch !== DEFAULT_BRANCH, branch === DEFAULT_BRANCH ? branch : `${branch}, must be ${DEFAULT_BRANCH}`),
+    gapRow('empty repository', empty, empty ? 'yes' : 'no'),
+    gapRow('archived', repository.archived === true, repository.archived === true ? 'yes' : 'no'),
+  ];
+  if (empty) return { rows: [...rows, gapRow('protected main', false, NOT_CHECKED_EMPTY), gapRow('collisions', false, NOT_CHECKED_EMPTY)], empty };
+  rows.push(await readMainProtection({ client, org, repo }), await readCollisions({ client, org, repo, branch, kitEntries }));
+  return { rows, empty };
+}
+
+/**
+ * The reported rows of spec 14.4: they inform the owner and never fail. Merge settings and secret names are not read.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string, kitLabels: string[], empty: boolean }} options
+ * @returns {Promise<Array<{ name: string, detail: string }>>}
+ */
+export async function readAdoptionReport({ client, org, repo, kitLabels, empty }) {
+  const kept = new Set(kitLabels.map(normalizeLabel));
+  const labels = (await client.paginate(repoPath(org, repo, '/labels'))).map((label) => label.name).filter((name) => !kept.has(normalizeLabel(name)));
+  const tags = empty ? [] : (await client.paginate(repoPath(org, repo, '/git/matching-refs/tags/v'))).map((ref) => String(ref.ref).slice(TAG_REF_PREFIX.length));
+  const environments = await client.paginate(repoPath(org, repo, '/environments'), { itemsKey: 'environments' });
+  const issues = (await client.paginate(repoPath(org, repo, '/issues'), { query: { state: 'open' } })).filter((issue) => !issue.pull_request);
+  const unformatted = issues.filter((issue) => !validateIssueBody({ type: issue.type?.name ?? null, body: issue.body ?? '' }).ok);
+  return [
+    { name: 'labels the sync deletes', detail: listNames(labels) },
+    { name: 'v* tags', detail: listNames(tags) },
+    { name: 'environments', detail: listNames(environments.map((environment) => environment.name)) },
+    { name: 'open issues failing issue-format', detail: String(unformatted.length) },
+    { name: 'secrets', detail: 'not read; check them in the browser' },
+    { name: 'merge settings', detail: 'not read; pass 1 sets squash-only' },
+  ];
 }

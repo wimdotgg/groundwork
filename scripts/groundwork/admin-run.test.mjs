@@ -315,6 +315,20 @@ test('plan: args render in a fence longer than any backtick run inside', async (
   assert.ok(result.summary.includes('\n`````\n') || result.summary.includes('\n`````'));
 });
 
+test('plan: an op plan hook gets the config and its facts render without a source block', async () => {
+  const registry = stubRegistry();
+  const received = [];
+  registry.check.plan = async ({ config }) => {
+    received.push(config);
+    return { facts: ['FAIL archived: yes', 'report v* tags: `v1` <b>'] };
+  };
+  const result = await plan(dispatchEnv(), { ...planOverrides({}), registry });
+  assert.equal(result.exitCode, 0);
+  assert.equal(received[0].controlRepo, CONTROL_REPO);
+  assert.ok(result.summary.includes("\n- FAIL archived: yes\n- report v* tags: 'v1' 'b'\n"), result.summary);
+  assert.doesNotMatch(result.summary, /```js\n/);
+});
+
 test('plan: needs no admin secrets', async () => {
   const env = dispatchEnv();
   delete env.ADMIN_APP_KEY;

@@ -2,13 +2,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { SettingsError, repoKind } from '../lib/settings.mjs';
 import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
-  commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readBlobContents, readBlobTexts, readKitVersion,
-  readReleaseTree, resolveTagCommit,
+  commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
+  readBlobTexts, readKitVersion, readReleaseTree, resolveTagCommit,
 } from './bootstrap-repo.mjs';
 import { buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 import { findSetupEpic, openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
 
 const SETUP_TEMPLATES_DIR = 'scripts/groundwork/stubs/setup/';
+const LABELS_PATH = '.github/groundwork/labels.json';
 
 /** Op identity, read by admin-run (12.1). */
 export const OP = 'bootstrap';
@@ -38,7 +39,9 @@ export const DESCRIPTION_MAX_LENGTH = 350;
 
 const ACCEPTED_LABEL = 'accepted';
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
-const ALLOWED_KEYS = new Set(['description']);
+const ALLOWED_KEYS = new Set(['description', 'adopt']);
+const NOTHING_TO_ADOPT = new Set(['absent', 'fresh']);
+const STOPPED_AFTER_PREFLIGHT = 'adopt: stopped after the preflight: the kit merge (#274) is not built, so no write was made';
 
 /**
  * @param {object} args parsed JSON object from the dispatch input
@@ -46,16 +49,17 @@ const ALLOWED_KEYS = new Set(['description']);
  */
 export function validateArgs(args) {
   if (args === null || typeof args !== 'object' || Array.isArray(args)) return ['args must be a JSON object'];
-  const unknown = Object.keys(args).filter((key) => !ALLOWED_KEYS.has(key)).map((key) => `unknown argument "${key}"`);
+  const problems = Object.keys(args).filter((key) => !ALLOWED_KEYS.has(key)).map((key) => `unknown argument "${key}"`);
+  if (Object.hasOwn(args, 'adopt') && args.adopt !== true) problems.push('adopt must be true when given');
   const { description } = args;
-  if (typeof description !== 'string' || description === '') return [...unknown, 'description is required: a non-empty string'];
-  if (description.length > DESCRIPTION_MAX_LENGTH) return [...unknown, `description must be at most ${DESCRIPTION_MAX_LENGTH} characters`];
-  if (!PRINTABLE_ASCII.test(description)) return [...unknown, 'description must be printable ASCII'];
-  return unknown;
+  if (typeof description !== 'string' || description === '') return [...problems, 'description is required: a non-empty string'];
+  if (description.length > DESCRIPTION_MAX_LENGTH) return [...problems, `description must be at most ${DESCRIPTION_MAX_LENGTH} characters`];
+  if (!PRINTABLE_ASCII.test(description)) return [...problems, 'description must be printable ASCII'];
+  return problems;
 }
 
 /** @param {Record<string, string|undefined>} env the dispatch input, re-validated because `ctx` carries no args */
-function readDescription(env) {
+function readArgs(env) {
   let args;
   try {
     args = JSON.parse(env.INPUT_ARGS);
@@ -64,7 +68,7 @@ function readDescription(env) {
   }
   const problems = validateArgs(args);
   if (problems.length > 0) throw new SettingsError(`bootstrap: ${problems.join('; ')}`);
-  return args.description;
+  return args;
 }
 
 function setupTemplateFiles(contents) {
@@ -73,24 +77,79 @@ function setupTemplateFiles(contents) {
     .map(([path, text]) => [path.slice(SETUP_TEMPLATES_DIR.length), text]));
 }
 
-/** Steps 1 and 2 of 14.2 plus everything derived from the release tree, so a bad template fails before any write. */
-async function readSource({ client, org, controlRepo, repo, description, adminBot }) {
-  const state = await inspectRepo({ client, org, repo, adminBot });
-  if (state === 'foreign') {
-    throw new SettingsError(`${org}/${repo} exists and is neither a groundwork project nor a fresh auto_init repository`);
-  }
-  if (state === 'ours') await refuseAfterSetupAcceptance({ client, org, repo, adminBot });
-  const tag = state === 'ours'
-    ? await readKitVersion({ client, org, repo })
-    : await latestReleaseTag({ client, org, controlRepo });
+/** @returns {string|undefined} why the target state rules the run out */
+function refusal(state, { org, repo, adopt }) {
+  if (adopt && NOTHING_TO_ADOPT.has(state)) return `adopt: ${org}/${repo} is ${state}, nothing to adopt`;
+  if (state === 'foreign' && !adopt) return `${org}/${repo} exists and is neither a groundwork project nor a fresh auto_init repository`;
+  return undefined;
+}
+
+/** The built kit tree of 14.2 step 5 for `tag`. */
+async function readKit({ client, org, controlRepo, repo, description, tag }) {
   const tagSha = await resolveTagCommit({ client, org, controlRepo, tag });
   const entries = await readReleaseTree({ client, org, controlRepo, commitSha: tagSha });
   const contents = await readBlobTexts({ client, org, controlRepo, entries, paths: contentPaths(entries) });
   const treeEntries = buildBootstrapTree({ entries, contents, org, controlRepo, repo, description, tag, tagSha });
+  return { treeEntries, contents };
+}
+
+/** Steps 1 and 2 of 14.2 plus everything derived from the release tree, so a bad template fails before any write. */
+async function readSource({ client, org, controlRepo, repo, args, adminBot }) {
+  const { description } = args;
+  const state = await inspectRepo({ client, org, repo, adminBot });
+  const refused = refusal(state, { org, repo, adopt: args.adopt === true });
+  if (refused !== undefined) throw new SettingsError(refused);
+  if (state === 'ours') await refuseAfterSetupAcceptance({ client, org, repo, adminBot });
+  const tag = state === 'ours'
+    ? await readKitVersion({ client, org, repo })
+    : await latestReleaseTag({ client, org, controlRepo });
+  const { treeEntries, contents } = await readKit({ client, org, controlRepo, repo, description, tag });
+  // Spec 14.4: apply repeats the failing rows before any write; an adopted repository never gets the full-tree commit.
+  if (state === 'foreign') return { state, tag, gaps: (await readAdoptionGaps({ client, org, repo, kitEntries: treeEntries })).rows };
   const templates = parseSetupTemplates(setupTemplateFiles(contents), { org, repo, description });
   // An `ours` repository already holds the commit, which reads no blob.
   const blobs = state === 'ours' ? new Map() : await readBlobContents({ client, org, controlRepo, entries: treeEntries });
   return { state, tag, treeEntries, contents, templates, blobs };
+}
+
+const gapLine = ({ name, fail, detail }) => `${fail ? 'FAIL' : 'ok'} ${name}: ${detail}`;
+
+/** Until the kit merge ships, an adopt run ends here: it refuses on a failing row and otherwise stops without a write. */
+function stopAfterPreflight(heading, source) {
+  const failing = source.gaps.filter((row) => row.fail);
+  if (failing.length > 0) throw new SettingsError(`adopt preflight failed: ${failing.map(gapLine).join('; ')}`);
+  const lines = ['- inspect: foreign', `- release tag: ${source.tag}`, ...source.gaps.map((row) => `- ${gapLine(row)}`), `- ${STOPPED_AFTER_PREFLIGHT}`];
+  return { ok: false, summary: [heading, '', ...lines].join('\n') };
+}
+
+/**
+ * Spec 14.4 preflight, printed in admin-run `plan` so the owner reads it before approving. GET calls only, with the
+ * `plan` job's token; failing rows do not fail `plan`, because `apply` repeats them and stops.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, controlRepo: string,
+ *   request: { targetRepo: string, args: object }, config: object }} options
+ * @returns {Promise<{ facts?: string[], problem?: string }>}
+ */
+export async function plan({ client, org, controlRepo, request, config }) {
+  const { targetRepo: repo, args } = request;
+  if (args.adopt !== true) return {};
+  const state = await inspectRepo({ client, org, repo, adminBot: `${config.apps.admin}[bot]` });
+  if (state === 'ours') return { facts: ['Adopt: the target is a groundwork project, so bootstrap resumes as usual'] };
+  const refused = refusal(state, { org, repo, adopt: true });
+  if (refused !== undefined) return { problem: refused };
+  const tag = await latestReleaseTag({ client, org, controlRepo });
+  const kit = await readKit({ client, org, controlRepo, repo, description: args.description, tag });
+  const { rows, empty } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
+  const kitLabels = JSON.parse(settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH]).labels.map((label) => label.name);
+  const report = await readAdoptionReport({ client, org, repo, kitLabels, empty });
+  const failing = rows.filter((row) => row.fail).length;
+  const outcome = failing > 0 ? 'apply stops before any write' : 'apply stops after the preflight with no write until the kit merge (#274) ships';
+  return {
+    facts: [
+      `Adoption preflight of ${org}/${repo} against ${tag}: ${failing} failing row(s); ${outcome}`,
+      ...rows.map(gapLine),
+      ...report.map(({ name, detail }) => `report ${name}: ${detail}`),
+    ],
+  };
 }
 
 /** @returns {string[]} the `- step: result` lines of an `applySections` summary */
@@ -139,7 +198,8 @@ export async function run(ctx, { sleep = delay, settingsDependencies } = {}) {
   const { org, repo } = ctx;
   const { controlRepo, apps } = ctx.config;
   if (repoKind(repo, ctx.config) === 'control') throw new SettingsError(`bootstrap must not target the control repository ${controlRepo}`);
-  const description = readDescription(ctx.env);
+  const args = readArgs(ctx.env);
+  const { description } = args;
   // The settings group needs these after the repository and the commit exist; failing here leaves nothing half-made.
   requireReleaseValues(ctx.env);
   const adminBot = `${apps.admin}[bot]`;
@@ -147,8 +207,9 @@ export async function run(ctx, { sleep = delay, settingsDependencies } = {}) {
   ctx.log('reading the release tree');
   const source = await ctx.withToken(
     { repositories: [controlRepo], permissions: CONTROL_READ_PERMISSIONS },
-    ({ client }) => readSource({ client, org, controlRepo, repo, description, adminBot }),
+    ({ client }) => readSource({ client, org, controlRepo, repo, args, adminBot }),
   );
+  if (source.state === 'foreign') return stopAfterPreflight(`### ${OP} ${org}/${repo}`, source);
   const lines = [`- inspect: ${source.state}`, `- release tag: ${source.tag}`];
   if (source.state === 'absent') {
     ctx.log('creating the repository');
