@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,6 +19,10 @@ const CONFIG = {
 
 const ok = (data) => ({ status: 200, data });
 const failure = (status) => ({ status, data: { message: `status ${status}` } });
+const CODEOWNERS_SECTION = 'codeowners';
+const CODEOWNERS_ROUTE = `GET ${R}/contents/.github/CODEOWNERS`;
+const codeownersFile = (text) => ok({ encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64') });
+const ownedBy = (owner) => `# gate\n/.github/  @${owner}\n/scripts/lib/  @${owner}\n`;
 
 const MATCH_FILES = {
   'settings.json': { schemaVersion: 1, repository: { has_issues: true } },
@@ -48,6 +53,7 @@ const PASS_2_FILES = {
 function liveRoutes(overrides = {}) {
   return {
     [`GET ${R}`]: ok({ has_issues: true, name: 'groundwork' }),
+    [CODEOWNERS_ROUTE]: codeownersFile(ownedBy(CONFIG.accounts.owner)),
     [`GET ${R}/teams?per_page=100`]: ok([]),
     [`GET ${R}/private-vulnerability-reporting`]: ok({ enabled: true }),
     [`GET ${R}/vulnerability-alerts`]: { status: 204 },
@@ -83,8 +89,8 @@ async function withTempRoot(files, runTest) {
   }
 }
 
-const opContext = (client, settingsRoot) => ({
-  client, token: 'minted-token', org: OWNER, repo: REPO, settingsRoot, config: CONFIG, env: {}, log: () => {},
+const opContext = (client, settingsRoot, config = CONFIG) => ({
+  client, token: 'minted-token', org: OWNER, repo: REPO, settingsRoot, config, env: {}, log: () => {},
 });
 
 test('module contract: op name, target scope and permissions, administration write for the fields GitHub hides from read', () => {
@@ -204,7 +210,7 @@ test('runCheck: empty desired state against an empty repo fails instead of passi
       [`GET ${R}/rulesets?includes_parents=false&per_page=100`]: ok([]),
     }));
     const result = await runCheck(opContext(client, root));
-    assert.equal(result.rows.length, 0);
+    assert.deepEqual(result.rows.filter((row) => row.section !== CODEOWNERS_SECTION), []);
     assert.equal(result.ok, false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -286,4 +292,79 @@ test('runCheck: a null repo throws SettingsError before any reading', async () =
       /^SettingsError: check: repo is required$/,
     );
   });
+});
+
+const CODEOWNERS_KEY = '.github/CODEOWNERS';
+const FIXTURE_CONFIG = JSON.parse(readFileSync(new URL('../lib/fixtures/config-root/.github/groundwork/config.json', import.meta.url), 'utf8'));
+const OWNER_CONFIGS = [
+  ['fixture config', FIXTURE_CONFIG],
+  ['swapped config', { ...FIXTURE_CONFIG, accounts: { ...FIXTURE_CONFIG.accounts, owner: 'octo-owner' } }],
+];
+
+const codeownersRows = (rows) => rows.filter((row) => row.section === CODEOWNERS_SECTION);
+
+async function checkWithCodeowners(config, route) {
+  return withTempRoot(MATCH_FILES, async (root) => {
+    const client = createFixtureClient(liveRoutes({ [CODEOWNERS_ROUTE]: route }));
+    return { root, result: await runCheck(opContext(client, root, config)), run: await run(opContext(client, root, config)) };
+  });
+}
+
+for (const [name, config] of OWNER_CONFIGS) {
+  test(`#268 AC2/AC3: CODEOWNERS naming accounts.owner passes (${name})`, async () => {
+    const { result } = await checkWithCodeowners(config, codeownersFile(ownedBy(config.accounts.owner)));
+    assert.equal(result.ok, true);
+    assert.deepEqual(codeownersRows(result.rows), [{
+      section: CODEOWNERS_SECTION, key: CODEOWNERS_KEY, desired: `@${config.accounts.owner}`, live: [`@${config.accounts.owner}`], result: 'match',
+    }]);
+  });
+
+  test(`#268 AC2/AC3: CODEOWNERS naming another login fails and names the file and the expected owner (${name})`, async () => {
+    const { result, run: runResult } = await checkWithCodeowners(config, codeownersFile(ownedBy('someone-else')));
+    assert.equal(result.ok, false);
+    assert.deepEqual(codeownersRows(result.rows), [{
+      section: CODEOWNERS_SECTION, key: CODEOWNERS_KEY, desired: `@${config.accounts.owner}`, live: ['@someone-else'], result: 'differ',
+    }]);
+    assert.match(runResult.summary, /Result: \*\*fail\*\*/);
+    assert.ok(
+      runResult.summary.includes(`| \`codeowners\` | \`.github/CODEOWNERS\` | differ | \`"@${config.accounts.owner}"\` | \`["@someone-else"]\` |`),
+      runResult.summary,
+    );
+  });
+}
+
+test('#268 AC2: one differing owner among matching ones fails; the logins compare case-insensitively', async () => {
+  const mixed = '/a/ @WianVDM\n/b/ @wianvdm @intruder # two owners\n';
+  const { result } = await checkWithCodeowners(CONFIG, codeownersFile(mixed));
+  assert.deepEqual(codeownersRows(result.rows).map(({ result: outcome, live }) => ({ outcome, live })), [
+    { outcome: 'differ', live: ['@WianVDM', '@intruder', '@wianvdm'] },
+  ]);
+  const matching = await checkWithCodeowners(CONFIG, codeownersFile('/a/ @WianVDM\n/b/ @wianvdm\n'));
+  assert.equal(codeownersRows(matching.result.rows)[0].result, 'match');
+});
+
+test('#268 AC2: a CODEOWNERS with no owner at all, or a team or email owner, fails', async () => {
+  for (const text of ['# only a comment\n', '/a/\n', '/a/ @acme/team\n', '/a/ dev@example.com\n']) {
+    const { result } = await checkWithCodeowners(CONFIG, codeownersFile(text));
+    assert.equal(codeownersRows(result.rows)[0].result, 'differ', text);
+    assert.equal(result.ok, false, text);
+  }
+});
+
+test('#268 AC2: a missing CODEOWNERS is a missing row and an unreadable one an unreadable row, both failing', async () => {
+  const missing = await checkWithCodeowners(CONFIG, failure(404));
+  assert.deepEqual(codeownersRows(missing.result.rows), [
+    { section: CODEOWNERS_SECTION, key: CODEOWNERS_KEY, desired: '@wianvdm', live: null, result: 'missing' },
+  ]);
+  assert.equal(missing.result.ok, false);
+  const unreadable = await checkWithCodeowners(CONFIG, failure(403));
+  assert.equal(codeownersRows(unreadable.result.rows)[0].result, 'unreadable');
+  assert.equal(unreadable.result.ok, false);
+});
+
+test('#268 AC2: an owner that is not a login in accounts.owner fails the row instead of crashing', async () => {
+  const config = { ...CONFIG, accounts: { ...CONFIG.accounts, owner: '' } };
+  const { result } = await checkWithCodeowners(config, codeownersFile(ownedBy('wianvdm')));
+  assert.equal(codeownersRows(result.rows)[0].result, 'differ');
+  assert.equal(result.ok, false);
 });
