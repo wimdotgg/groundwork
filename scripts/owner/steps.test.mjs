@@ -24,6 +24,7 @@ const COPY_ADD = `git add -- ${CONFIG_PATH} .github/CODEOWNERS .release-please-m
 const REPO_CREATE = 'gh repo create acme/groundwork --public --source . --remote origin';
 const ORG_URL = 'https://github.com/acme/groundwork.git';
 const PUSH = 'git push --set-upstream origin main';
+const SET_DEFAULT = 'gh repo set-default acme/groundwork';
 const COMMIT = 'git commit -m chore: set up acme from groundwork v1.2.3';
 const stateWith = (steps = {}, consent = { answer: 'B', classes: ['wizard'] }) => ({
   schemaVersion: 1, org: 'acme', consent: { ...consent, answeredAt: NOW, endedAt: null }, steps,
@@ -101,9 +102,10 @@ function cloneFixture(t) {
   return { clone, org };
 }
 
-// gh repo create without --push: it adds origin and pushes nothing.
-const addOrigin = (clone, url = ORG_URL) => () => {
-  git(clone, 'remote', 'add', 'origin', url);
+// gh repo create without --push adds origin and pushes nothing; gh repo set-default writes the key gh resolves by.
+const addOrigin = (clone, url = ORG_URL) => (args) => {
+  if (args[1] === 'set-default') git(clone, 'config', 'remote.origin.gh-resolved', 'base');
+  else git(clone, 'remote', 'add', 'origin', url);
   return OK;
 };
 
@@ -131,8 +133,8 @@ function pushToOrg(clone, { org, pushStatus }) {
   return OK;
 }
 
-// y to the rename, owner login, three default slugs, then y to the files, the release reset, the commit, the create and the push.
-const COPY_ANSWERS = ['y', 'Owner-Login', '', '', '', 'y', 'y', 'y', 'y', 'y'];
+// y to the rename, owner login, three default slugs, then y to the files, the release reset, the commit, the create, the gh default and the push.
+const COPY_ANSWERS = ['y', 'Owner-Login', '', '', '', 'y', 'y', 'y', 'y', 'y', 'y'];
 const repoCopy = (io) => STEP_HANDLERS['repo-copy'](io, context());
 
 test('AC1 repo-copy renames, writes, resets, stages by name, shows diff, note and author, commits, creates, then pushes last', async (t) => {
@@ -142,6 +144,8 @@ test('AC1 repo-copy renames, writes, resets, stages by name, shows diff, note an
   const at = (call) => io.calls.indexOf(call);
   assert.ok(at('git remote rename origin upstream') < at(COPY_ADD) && at(COPY_ADD) < at(COMMIT) && at(COMMIT) < at(REPO_CREATE));
   assert.ok(at(REPO_CREATE) < at('git remote get-url --push --all origin'));
+  assert.ok(at('git remote get-url --push --all origin') < at(SET_DEFAULT));
+  assert.equal(git(clone, 'config', '--get', 'remote.origin.gh-resolved'), 'base');
   assert.equal(io.calls.at(-1), PUSH);
   assert.ok(!io.calls.some((call) => / add (-A|--all|\.)/.test(call) || call.includes('commit -a') || (call.startsWith('gh ') && call.includes('--push'))));
   const shown = io.output.indexOf(COMMIT);
@@ -187,6 +191,17 @@ test('repo-copy refuses the bot identity and an existing upstream remote beside 
   assert.ok(!bot.calls.includes(COMMIT));
 });
 
+test('repo-copy without a Git identity passes the Git reason through and names user.name and user.email', async (t) => {
+  const { clone } = cloneFixture(t);
+  const io = cloneIo(clone, { answers: [...COPY_ANSWERS] });
+  const capture = io.capture;
+  io.capture = (command, args) => (args[0] === 'var'
+    ? { status: 128, stdout: '', stderr: 'Author identity unknown\n\n*** Please tell me who you are.\n' }
+    : capture(command, args));
+  await assert.rejects(repoCopy(io), /Author identity unknown \| \*\*\* Please tell me who you are\.: set user\.name and user\.email/);
+  assert.ok(!io.calls.includes(COMMIT));
+});
+
 test('repo-copy refuses a push target that is not the org repository, or no upstream remote', async (t) => {
   const { clone } = cloneFixture(t);
   const elsewhere = cloneIo(clone, { answers: [...COPY_ANSWERS], gh: addOrigin(clone, 'https://github.com/other/groundwork.git') });
@@ -203,7 +218,7 @@ test('repo-copy refuses a push target that is not the org repository, or no upst
 
 test('AC6 after a decline at the commit y/N a rerun passes the prechecks and completes', async (t) => {
   const { clone, org } = cloneFixture(t);
-  const declined = cloneIo(clone, { answers: [...COPY_ANSWERS.slice(0, -3), 'n'] });
+  const declined = cloneIo(clone, { answers: [...COPY_ANSWERS.slice(0, -4), 'n'] });
   assert.equal(await repoCopy(declined), false);
   assert.ok(!declined.calls.includes(REPO_CREATE));
   const rerun = cloneIo(clone, { answers: COPY_ANSWERS.slice(1), org });
@@ -213,12 +228,13 @@ test('AC6 after a decline at the commit y/N a rerun passes the prechecks and com
   assert.equal(git(clone, 'rev-list', '--count', 'refs/remotes/upstream/main..HEAD'), '1');
 });
 
-test('AC6 after a failed push a rerun prints the commit, checks origin and pushes it', async (t) => {
+test('AC6 after a failed push a rerun accepts the gh default it wrote, prints the commit, checks origin and pushes it', async (t) => {
   const { clone, org } = cloneFixture(t);
   const failing = cloneIo(clone, { answers: [...COPY_ANSWERS], pushStatus: 1 });
   await assert.rejects(repoCopy(failing), /git push --set-upstream origin failed with exit 1/);
   const rerun = cloneIo(clone, { answers: ['y'], org });
   assert.equal(await repoCopy(rerun), true);
+  assert.ok(!rerun.calls.includes(SET_DEFAULT));
   assert.ok(rerun.output.includes('Commit ahead of refs/remotes/upstream/main, from an earlier run:'));
   assert.ok(rerun.output.indexOf('+0.0.0') < rerun.output.indexOf(PUSH));
   assert.ok(!rerun.calls.includes(REPO_CREATE));
@@ -280,7 +296,13 @@ test('repo-copy refuses a clone whose .git/config sets a key outside the allowli
     git(clone, 'config', '--local', '--unset', key);
   }
   git(clone, 'config', '--local', 'branch.main.rebase', 'false');
-  assert.equal(await repoCopy(cloneIo(clone, { answers: [...COPY_ANSWERS] })), true);
+  // A gh default set in the upstream clone moves to upstream on the rename, where gh would keep resolving to it.
+  git(clone, 'config', '--local', 'remote.origin.gh-resolved', 'base');
+  const upstreamDefault = cloneIo(clone, { answers: [...COPY_ANSWERS] });
+  await assert.rejects(repoCopy(upstreamDefault), /remote upstream is gh's default: run git config --unset remote\.upstream\.gh-resolved, then rerun/);
+  assert.ok(!upstreamDefault.calls.includes(REPO_CREATE));
+  git(clone, 'config', '--unset', 'remote.upstream.gh-resolved');
+  assert.equal(await repoCopy(cloneIo(clone, { answers: ['y', 'y', 'y'] })), true);
 });
 
 test('repo-copy refuses an origin with a second push URL', async (t) => {

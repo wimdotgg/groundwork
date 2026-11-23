@@ -122,7 +122,7 @@ test('AC6 a .git/config that sets filter.x.clean and diff.external refuses befor
     const result = spawnSync(command, args, { cwd: repo, encoding: 'utf8' });
     return { status: result.status, stdout: result.stdout, stderr: result.stderr };
   };
-  await refused(io, [], /\.git\/config sets filter\.x\.clean, which the wizard does not run with: remove it \(git config --local --unset-all 'filter\.x\.clean'\)/);
+  await refused(io, [], /\.git\/config sets filter\.x\.clean, which the wizard does not run with: remove it \(git config --local --unset-all "filter\.x\.clean"\)/);
   assert.deepEqual(io.calls, ['git config --local --name-only --list']);
   assert.ok(!existsSync(marker), 'a configured program ran');
 });

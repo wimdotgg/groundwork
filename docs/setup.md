@@ -4,7 +4,7 @@ From a fresh clone of upstream groundwork to `v0.1.0` in your own organization, 
 
 **Start.** Open Claude Code in your clone and say: `set up groundwork`. The `groundwork-setup` skill asks one consent question, (A) every step in the browser or (B) a wizard you run in your own terminal, then walks you through the steps below and resumes where you stopped. Under B you run `node scripts/owner/setup.mjs` in a terminal outside Claude Code; it asks y/N before every write. Without the skill, follow the steps below in order by hand (answer A).
 
-**You need:** a GitHub account with two-factor authentication; Node 24+, Git and the GitHub CLI (`gh auth login` as yourself) on the machine; a clone of upstream groundwork on `main` with no local changes; about an hour.
+**You need:** a GitHub account with two-factor authentication; Node 24+, Git with your own `user.name` and `user.email` set, and the GitHub CLI (`gh auth login` as yourself) on the machine; a clone of upstream groundwork on `main` with no local changes; about an hour.
 
 Placeholders: `<org>` your organization, `<owner>` your login (lower-case), `<app>` the agent App slug, `<admin-app>` and `<release-app>` the admin and release App slugs. `repo-copy` writes all of them to `.github/groundwork/config.json`, so pick the App slugs before you create the Apps. App names are global on GitHub; if one is taken, follow the slug recovery under `app-agent`.
 
@@ -106,10 +106,11 @@ git diff --cached                 # read it; nothing else may be staged
 git commit -m "chore: set up <org> from groundwork $(git describe --tags --abbrev=0 upstream/main)"
 gh repo create <org>/groundwork --public --source . --remote origin
 git remote get-url --push --all origin   # must print one line, the <org>/groundwork URL
+gh repo set-default <org>/groundwork
 git push --set-upstream origin main
 ```
 
-No `--push` on `gh repo create`: the wizard pushes with its own hook-free Git after checking the push URL, and by hand you run the same three commands. Never `git add -A` or `git commit -a`. The push carries `.github/workflows/`, which GitHub accepts only from a credential with the `workflow` scope: if it is refused for that scope and `gh` is your Git credential helper, run `gh auth refresh -s workflow` and push again. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
+No `--push` on `gh repo create`: the wizard pushes with its own hook-free Git after checking the push URL, and by hand you run the same four commands. `gh repo set-default` matters because the clone keeps `upstream`: without it `gh` and every agent script resolve to upstream groundwork, not your copy. Never `git add -A` or `git commit -a`. The push carries `.github/workflows/`, which GitHub accepts only from a credential with the `workflow` scope: if it is refused for that scope and `gh` is your Git credential helper, run `gh auth refresh -s workflow` and push again. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
 
 - Verify: https://github.com/<org>/groundwork shows your commit on `main`, and `main` contains `.github/workflows/admin-run.yml`. Nothing after this works without it.
 
@@ -190,7 +191,7 @@ The agent requests `apply-settings --repo groundwork --ref <main sha>`; you appr
 
 ### `release-dispatch` · app
 
-The agent runs `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml --ref main` once (any merged PR also triggers it). No `admin` run and no approval: the `release` environment has no reviewer. `<release-app>[bot]` opens a release PR for `v0.1.0`.
+The agent runs `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml --repo <org>/groundwork --ref main` once (any merged PR also triggers it). No `admin` run and no approval: the `release` environment has no reviewer. `<release-app>[bot]` opens a release PR for `v0.1.0`.
 
 ### `release-merge` · browser
 

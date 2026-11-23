@@ -33,7 +33,7 @@ Resume: if `setup-state.json` (section 3) already holds `consent.answer`, the qu
 
 Check these right after the answer, before `org-create`. The owner checks what needs their login; you never run `gh auth status`.
 
-- Node 24+ and git on PATH, here and in the owner's own terminal.
+- Node 24+ and git on PATH, here and in the owner's own terminal, with the owner's Git `user.name` and `user.email` set (the `repo-copy` commit is theirs).
 - Under B: `gh` logged in as the owner in their own terminal (they run `gh auth status` there).
 - This clone on `main`, `origin` pointing at upstream groundwork, `git status --porcelain` empty before the consent note; after it, the note is the only change.
 - macOS and Linux: `GROUNDWORK_SETUP_STATE_FILE` (and later `GROUNDWORK_AGENT_KEY_FILE`, `GROUNDWORK_AGENT_CLIENT_ID`) reach this session only from the environment Claude Code started in. The owner adds each line to their shell profile, restarts Claude Code, and uses the same values in the wizard's terminal. After a restart this skill resumes from the state file.
@@ -190,7 +190,7 @@ Under B the wizard does the rest, each write behind its own y/N; it asks the own
 1. `git remote rename origin upstream`.
 2. You write the confirmed `config.json` and `CODEOWNERS` changes and reset the release files: `.release-please-manifest.json` `{}`, `version.txt` `0.0.0`, empty `CHANGELOG.md`. Show `git diff`.
 3. `git add` those five paths and the consent note by name (never `-A`), then `git commit -m "chore: set up <org> from groundwork <tag>"` under their own Git identity, `<tag>` from `git describe --tags --abbrev=0 upstream/main` or the upstream short SHA.
-4. `gh repo create <org>/groundwork --public --source . --remote origin` (no `--push`), then `git remote get-url --push --all origin`, which must print exactly one URL, that of `<org>/groundwork` (HTTPS or SSH), then `git push --set-upstream origin main`. A push refused for the `workflow` scope (it carries `.github/workflows/`) needs `gh auth refresh -s workflow` when `gh` is the Git credential helper.
+4. `gh repo create <org>/groundwork --public --source . --remote origin` (no `--push`), then `git remote get-url --push --all origin`, which must print exactly one URL, that of `<org>/groundwork` (HTTPS or SSH), then `gh repo set-default <org>/groundwork` (without it `gh` and every agent script resolve to `upstream`), then `git push --set-upstream origin main`. A push refused for the `workflow` scope (it carries `.github/workflows/`) needs `gh auth refresh -s workflow` when `gh` is the Git credential helper.
 
 - Verify: https://github.com/<org>/groundwork shows the commit, with the consent note under `docs/runs/`.
 
@@ -213,7 +213,7 @@ URL: https://github.com/organizations/<org>/settings/apps/new. One action at a t
 ### `agent-key-store` (wizard)
 
 - B: the wizard asks for the client ID, on Windows the App ID, and the path of the downloaded `.pem`, then stores the key. A: the owner stores the key in their own terminal as `docs/setup.md` describes for `agent-key-store`. Windows: `%APPDATA%\groundwork\<agent>.pem.dpapi` and `<agent>.json` (`appId`, `slug`, `clientId`). Elsewhere: the PEM outside any repository, `GROUNDWORK_AGENT_KEY_FILE` and `GROUNDWORK_AGENT_CLIENT_ID` in the shell profile, then restart Claude Code (section 2).
-- Verify: `node scripts/agent/token.mjs exec -- gh repo view --json nameWithOwner` prints `<org>/groundwork`. From here you can read GitHub as the agent App.
+- Verify: `node scripts/agent/token.mjs exec -- gh repo view <org>/groundwork --json nameWithOwner` prints `<org>/groundwork`. From here you can read GitHub as the agent App.
 
 ### `app-admin` (browser)
 
@@ -254,11 +254,11 @@ Ask for the App's URL: `https://github.com/apps/<slug>` or the settings page `ht
 
 ### `release-dispatch` (app)
 
-- Run `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml` from this clone (the repo comes from `origin`).
+- Run `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml --repo <org>/groundwork --ref main`.
 - Verify: a release PR by `<release>[bot]` opens on https://github.com/<org>/groundwork/pulls.
 
 ### `release-merge` (browser)
 
 - URL: the release PR from `release-dispatch`.
 - Field, value: approve it as CODEOWNER and merge. Agents never merge release PRs.
-- Verify: `node scripts/agent/token.mjs exec -- gh release view v0.1.0 --json tagName` prints `v0.1.0`. Mark the step `done`, set `consent.endedAt`, and tell the owner setup is finished and per-project work follows spec 14.2.
+- Verify: `node scripts/agent/token.mjs exec -- gh release view v0.1.0 --repo <org>/groundwork --json tagName` prints `v0.1.0`. Mark the step `done`, set `consent.endedAt`, and tell the owner setup is finished and per-project work follows spec 14.2.
