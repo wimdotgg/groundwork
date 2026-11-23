@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFixtureClient } from '../lib/github.mjs';
@@ -5,7 +6,8 @@ import { loadConfig, repoRoot } from '../lib/config.mjs';
 import { collectInbox, formatOutput, isProtectedPath, parseArgs, parseProtectedPatterns } from './inbox.mjs';
 
 const root = repoRoot(import.meta.url);
-const config = await loadConfig({ root });
+const configRoot = fileURLToPath(new URL('../lib/fixtures/config-root/', import.meta.url));
+const config = await loadConfig({ root: configRoot });
 const repoRef = { owner: 'wimdotgg', repo: 'groundwork' };
 const BASE = '/repos/wimdotgg/groundwork';
 const HTML = 'https://github.com/wimdotgg/groundwork';
