@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/wimdotgg/groundwork/compare/v0.10.0...v0.10.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **ci:** build the release when a release PR merges through the queue ([#244](https://github.com/wimdotgg/groundwork/issues/244)) ([feeb272](https://github.com/wimdotgg/groundwork/commit/feeb2720369d03959ed400dd7054f36da88b0773))
+* **ci:** dispatch release-please on main from the closed run ([#248](https://github.com/wimdotgg/groundwork/issues/248)) ([bc5be24](https://github.com/wimdotgg/groundwork/commit/bc5be24b800f75b64fc2116b2384e941513d0f0c))
+
 ## [0.10.0](https://github.com/wimdotgg/groundwork/compare/v0.9.0...v0.10.0) (2026-11-22)
 
 
