@@ -35,7 +35,7 @@ Check these right after the answer, before `org-create`. The owner checks what n
 
 - Node 24+ and git on PATH, here and in the owner's own terminal.
 - Under B: `gh` logged in as the owner in their own terminal (they run `gh auth status` there).
-- This clone on `main`, `origin` pointing at upstream groundwork, `git status --porcelain` empty.
+- This clone on `main`, `origin` pointing at upstream groundwork, `git status --porcelain` empty before the consent note; after it, the note is the only change.
 - macOS and Linux: `GROUNDWORK_SETUP_STATE_FILE` (and later `GROUNDWORK_AGENT_KEY_FILE`, `GROUNDWORK_AGENT_CLIENT_ID`) reach this session only from the environment Claude Code started in. The owner adds each line to their shell profile, restarts Claude Code, and uses the same values in the wizard's terminal. After a restart this skill resumes from the state file.
 
 ## 3. Record the answer
@@ -97,7 +97,7 @@ The note has no `org` line: `org` is `null` when it is written, and the `repo-co
 Open a page without putting it on the command line: build the URL only from `<org>`, the slugs and the URLs in this file, write it to a file in your scratch directory, then run:
 
 ```
-node -e "const u=require('fs').readFileSync(process.argv[1],'utf8').trim();if(!/^https:\/\/github\.com\/[A-Za-z0-9\/?=&._-]*$/.test(u))process.exit(1);const [c,a]=process.platform==='win32'?['explorer.exe',[u]]:[process.platform==='darwin'?'open':'xdg-open',[u]];require('child_process').spawn(c,a,{detached:true,stdio:'ignore'}).unref()" <that file>
+node -e "const u=require('fs').readFileSync(process.argv[1],'utf8').trim();if(!/^https:\/\/github\.com\/[A-Za-z0-9\/?=&._-]*$/.test(u))process.exit(1);const [c,a]=process.platform==='win32'?['rundll32',['url.dll,FileProtocolHandler',u]]:[process.platform==='darwin'?'open':'xdg-open',[u]];require('child_process').spawn(c,a,{detached:true,stdio:'ignore'}).unref()" <that file>
 ```
 
 Also print the URL, in case no browser opens.
@@ -181,7 +181,7 @@ Never ask for, read, store or echo a secret value: App private keys, the agent k
 
 Before it, plan the App slugs and the config values:
 
-1. Propose `<org>-agent`, `<org>-admin` and `<org>-release` and get a yes or the owner's names. Gate every slug, proposed or typed: it must match `^[a-z0-9][a-z0-9-]*$` and be 34 characters at most. Refuse any other and ask again; nothing unchecked goes into a file.
+1. Propose `<org>-agent`, `<org>-admin` and `<org>-release` with `<org>` lowercased and get a yes or the owner's names. Gate every slug, proposed or typed: it must match `^[a-z0-9][a-z0-9-]*$` and be 34 characters at most. Refuse any other and ask again; nothing unchecked goes into a file.
 2. Check each slug. No App key exists yet, so call unauthenticated, and keep the slug off the command line: write a curl config file in your scratch directory, outside the clone, holding `url = "https://api.github.com/apps/<slug>"`, run `curl -s -o /dev/null -w "%{http_code}\n" -K <that file>`, then do the same for `url = "https://api.github.com/users/<slug>%5Bbot%5D"`. A private App answers 404 on the first; its bot user answers 200 on the second. Either 200: taken, ask for another. Both 404: probably free; the App form decides, and the slug check after each App is the fallback. Any other status (403 at the 60 per hour unauthenticated limit, 000, 5xx) is no answer: retry later, never read it as free.
 3. Propose the `.github/groundwork/config.json` change: `org`, `accounts.owner` (the owner's login), `accounts.agent` (`<agent>[bot]`), `apps.agent`, `apps.admin`, `apps.release`; plus the owner in `.github/CODEOWNERS`. Show the values and get a yes.
 
