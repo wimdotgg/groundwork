@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { GitHubError, apiPath } from '../lib/github.mjs';
+import { validateIssueBody } from '../lib/issue-model.mjs';
 import { SettingsError } from '../lib/settings.mjs';
-import { sameLogin } from '../lib/trust.mjs';
+import { normalizeLabel, sameLogin } from '../lib/trust.mjs';
 
 // Same value as bootstrap-tree.mjs (#144); the integration task (#149) may share one export.
 const KIT_VERSION_PATH = '.github/groundwork/kit-version.txt';
@@ -211,4 +213,94 @@ export async function commitBootstrapTree({ client, org, repo, tag, treeEntries,
     body: { sha: commit.sha, force: false },
   });
   return { sha: commit.sha, created: true };
+}
+
+// Spec 14.4: the project's README and LICENSE are kept and kit lines are appended to its CODEOWNERS.
+const ADOPT_KEPT_PATHS = new Set(['README.md', 'LICENSE', '.github/CODEOWNERS']);
+// admin-run cuts a plan fact at 200 characters; this budget leaves room for the row name and the count.
+const LIST_BUDGET = 120;
+const NOT_CHECKED_EMPTY = 'not checked: empty repository';
+
+const gapRow = (name, fail, detail) => ({ name, fail, detail });
+
+function listNames(names) {
+  if (names.length === 0) return 'none';
+  let shown = 0;
+  while (shown < names.length && names.slice(0, shown + 1).join(', ').length <= LIST_BUDGET) shown += 1;
+  const listed = names.slice(0, shown).join(', ');
+  if (shown === names.length) return listed;
+  return `${listed}${shown > 0 ? ' ' : ''}and ${names.length - shown} more`;
+}
+
+const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
+
+async function readMainProtection({ client, org, repo }) {
+  const { status, data } = await client.request('GET', repoPath(org, repo, `/branches/${DEFAULT_BRANCH}`), { okStatuses: [404] });
+  const isProtected = status === 200 && data?.protected === true;
+  return gapRow('protected main', isProtected, isProtected ? 'set; rulesets replace it, delete the branch protection rule in the browser' : 'not set');
+}
+
+const ancestorsOf = (path) => path.split('/').slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join('/'));
+
+/** A kit path collides when the target holds it as a non-blob, holds an ancestor as a non-tree, or holds other content. */
+function collisionsOf(kitEntries, targetByPath) {
+  const collisions = new Set();
+  for (const entry of kitEntries) {
+    for (const ancestor of ancestorsOf(entry.path)) {
+      const type = targetByPath.get(ancestor)?.type;
+      if (type !== undefined && type !== 'tree') collisions.add(`${ancestor} is a ${type}`);
+    }
+    const target = targetByPath.get(entry.path);
+    if (target === undefined) continue;
+    if (target.type !== 'blob') collisions.add(`${entry.path} is a ${target.type}`);
+    else if (!ADOPT_KEPT_PATHS.has(entry.path) && target.sha !== (entry.content === undefined ? entry.sha : gitBlobSha(entry.content))) collisions.add(entry.path);
+  }
+  return [...collisions];
+}
+
+/** Reads the tree by the head commit SHA, so a tag named like the branch cannot answer and the kit merge can reuse the SHA. */
+async function readCollisions({ client, org, repo, branch, kitEntries }) {
+  const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${encodeURIComponent(branch)}`));
+  const headSha = ref?.object?.sha;
+  if (typeof headSha !== 'string') return { row: gapRow('collisions', true, `heads/${branch} has no commit SHA`) };
+  const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(headSha)}`), { query: { recursive: 1 } });
+  if (data?.truncated) return { row: gapRow('collisions', true, 'target tree is truncated, so it cannot be compared'), headSha };
+  if (!Array.isArray(data?.tree)) return { row: gapRow('collisions', true, 'target tree response has no tree list'), headSha };
+  const collisions = collisionsOf(kitEntries, new Map(data.tree.map((entry) => [entry.path, entry])));
+  return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha };
+}
+
+/** The failing rows of spec 14.4 against the built kit tree, from GET calls; `headSha` is the commit the tree was read at. */
+export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
+  const { data: repository } = await client.request('GET', repoPath(org, repo, ''));
+  const branch = repository.default_branch;
+  const { status } = await client.request('GET', repoPath(org, repo, '/commits'), { query: { per_page: 1 }, okStatuses: [409] });
+  const empty = status === 409;
+  const rows = [
+    gapRow('default branch', branch !== DEFAULT_BRANCH, branch === DEFAULT_BRANCH ? branch : `${branch}, must be ${DEFAULT_BRANCH}`),
+    gapRow('empty repository', empty, empty ? 'yes' : 'no'),
+    gapRow('archived', repository.archived === true, repository.archived === true ? 'yes' : 'no'),
+  ];
+  if (empty) return { rows: [...rows, gapRow('protected main', false, NOT_CHECKED_EMPTY), gapRow('collisions', false, NOT_CHECKED_EMPTY)], empty };
+  rows.push(await readMainProtection({ client, org, repo }));
+  const { row, headSha } = await readCollisions({ client, org, repo, branch, kitEntries });
+  return { rows: [...rows, row], empty, headSha };
+}
+
+/** The reported rows of spec 14.4, which never fail; merge settings and secret names are not read. */
+export async function readAdoptionReport({ client, org, repo, kitLabels, empty }) {
+  const kept = new Set(kitLabels.map(normalizeLabel));
+  const labels = (await client.paginate(repoPath(org, repo, '/labels'))).map((label) => label.name).filter((name) => !kept.has(normalizeLabel(name)));
+  const tags = empty ? [] : (await client.paginate(repoPath(org, repo, '/git/matching-refs/tags/v'))).map((ref) => String(ref.ref).slice(TAG_REF_PREFIX.length));
+  const environments = await client.paginate(repoPath(org, repo, '/environments'), { itemsKey: 'environments' });
+  const issues = (await client.paginate(repoPath(org, repo, '/issues'), { query: { state: 'open' } })).filter((issue) => !issue.pull_request);
+  const unformatted = issues.filter((issue) => !validateIssueBody({ type: issue.type?.name ?? null, body: issue.body ?? '' }).ok);
+  return [
+    { name: 'labels the sync deletes', detail: listNames(labels) },
+    { name: 'v* tags', detail: listNames(tags) },
+    { name: 'environments', detail: listNames(environments.map((environment) => environment.name)) },
+    { name: 'open issues failing issue-format', detail: String(unformatted.length) },
+    { name: 'secrets', detail: 'not read; check them in the browser' },
+    { name: 'merge settings', detail: 'not read; pass 1 sets squash-only' },
+  ];
 }

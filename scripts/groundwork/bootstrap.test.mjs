@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -6,7 +7,7 @@ import path from 'node:path';
 import { GitHubError, createFixtureClient } from '../lib/github.mjs';
 import { SettingsError } from '../lib/settings.mjs';
 import {
-  CONTROL_READ_PERMISSIONS, CREATE_PERMISSIONS, DESCRIPTION_MAX_LENGTH, OP, PERMISSIONS, TOKEN_SCOPE, run, validateArgs,
+  CONTROL_READ_PERMISSIONS, CREATE_PERMISSIONS, DESCRIPTION_MAX_LENGTH, OP, PERMISSIONS, TOKEN_SCOPE, plan, run, validateArgs,
 } from './bootstrap.mjs';
 import { buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 
@@ -18,6 +19,7 @@ test('bootstrap identity', () => {
 test('validateArgs accepts a printable description up to the limit', () => {
   assert.deepEqual(validateArgs({ description: 'd' }), []);
   assert.deepEqual(validateArgs({ description: 'x'.repeat(DESCRIPTION_MAX_LENGTH) }), []);
+  assert.deepEqual(validateArgs({ description: 'd', adopt: true }), []);
 });
 
 for (const [name, args, errors] of [
@@ -29,6 +31,8 @@ for (const [name, args, errors] of [
   ['DEL in description', { description: 'a\x7fb' }, ['description must be printable ASCII']],
   ['non-ASCII description', { description: 'café' }, ['description must be printable ASCII']],
   ['unknown key', { description: 'd', extra: 1 }, ['unknown argument "extra"']],
+  ['adopt other than true', { description: 'd', adopt: false }, ['adopt must be true when given']],
+  ['adopt as a string', { description: 'd', adopt: 'true' }, ['adopt must be true when given']],
   ['array args', [], ['args must be a JSON object']],
   ['null args', null, ['args must be a JSON object']],
 ]) {
@@ -109,7 +113,7 @@ function expectedTree(files) {
 }
 
 /** Status of each kit-version read without a ref, in call order: one per `inspectRepo` (not when absent) and per `applySections` call. */
-const KIT_READS = { absent: [404, 200, 200, 200, 200], fresh: [404, 404, 200, 200, 200, 200], ours: [200, 200, 200, 200, 200, 200] };
+const KIT_READS = { foreign: [404], absent: [404, 200, 200, 200, 200], fresh: [404, 404, 200, 200, 200, 200], ours: [200, 200, 200, 200, 200, 200] };
 
 function targetRoutes(state, files) {
   const { treeEntries } = expectedTree(files);
@@ -435,4 +439,164 @@ test('an ours run whose setup-epic marker was planted by another login fails the
   const world = createWorld({ state: 'ours', overrides: { [ISSUES_ROUTE]: reply(200, [setupEpicIssue({ user: { login: 'stranger' } })]) } });
   await assert.rejects(run(world.ctx, world.seams), /was not written by/);
   assert.deepEqual(writesOf(world), []);
+});
+
+// --- adopt (spec 14.4) ------------------------------------------------------------------------------------------
+
+const ADOPT_ARGS = { description: DESCRIPTION, adopt: true };
+// #285 fills the kit CODEOWNERS from the release config's accounts.owner.
+const ADOPT_FILES = {
+  ...RELEASE_FILES, '.github/groundwork/config.json': JSON.stringify({ org: ORG, accounts: { owner: 'wianvdm' } }), '.github/CODEOWNERS': '* @wianvdm\n', LICENSE: 'MIT\n',
+};
+const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
+const releaseSha = (filePath) => releaseEntries(ADOPT_FILES).find((entry) => entry.path === filePath).sha;
+const blob = (filePath, sha) => ({ path: filePath, type: 'blob', sha });
+/** Kept project paths and kit paths with the kit's own content: none of them collides. */
+const PROJECT_TREE = [
+  blob('src/app.js', 'p1'), blob('README.md', 'p2'), blob('LICENSE', 'p3'), blob('.github/CODEOWNERS', 'p4'),
+  blob('.github/dependabot.yml', releaseSha('.github/dependabot.yml')), blob('version.txt', gitBlobSha('0.0.0\n')),
+];
+
+/** A readable foreign target with no gap unless a field says otherwise. */
+function foreignRoutes({ repository = {}, empty = false, branch = { protected: false }, tree = { truncated: false, tree: PROJECT_TREE } } = {}) {
+  const defaultBranch = repository.default_branch ?? 'main';
+  const head = `head-${defaultBranch}`;
+  const commits = empty ? reply(409, { message: 'Git Repository is empty.' }) : reply(200, [{ sha: 'c0', author: { login: 'someone' } }]);
+  return {
+    [`GET ${TARGET_PATH}`]: reply(200, { default_branch: 'main', archived: false, ...repository }),
+    [`GET ${TARGET_PATH}/commits?per_page=2`]: commits,
+    [`GET ${TARGET_PATH}/commits?per_page=1`]: commits,
+    [`GET ${TARGET_PATH}/branches/main`]: reply(200, branch),
+    [`GET ${TARGET_PATH}/git/ref/heads/${defaultBranch}`]: reply(200, { object: { sha: head } }),
+    [`GET ${TARGET_PATH}/git/trees/${head}?recursive=1`]: reply(200, tree),
+    [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, [{ name: 'bug' }, { name: 'Accepted' }]),
+    [`GET ${TARGET_PATH}/git/matching-refs/tags/v?per_page=100`]: reply(200, [{ ref: 'refs/tags/v1.0.0' }]),
+    [`GET ${TARGET_PATH}/environments?per_page=100`]: reply(200, { total_count: 1, environments: [{ name: 'production' }] }),
+    [`GET ${TARGET_PATH}/issues?per_page=100&state=open`]: reply(200, [{ number: 1, type: { name: 'Feature' }, body: 'no headings' }, { number: 2, pull_request: {} }]),
+  };
+}
+
+const adoptWorld = (gaps, state = 'foreign') => createWorld({ state, files: ADOPT_FILES, args: ADOPT_ARGS, overrides: state === 'foreign' ? foreignRoutes(gaps) : {} });
+
+function planCall({ state = 'foreign', gaps, args = ADOPT_ARGS, files = ADOPT_FILES, overrides = {}, repo = REPO } = {}) {
+  const calls = [];
+  const fixed = { ...targetRoutes(state, files), ...controlRoutes(files), ...(state === 'foreign' ? foreignRoutes(gaps) : {}), ...overrides };
+  // The fixtures name REPO; another target name moves every target route to its path.
+  const routes = Object.fromEntries(Object.entries(fixed).map(([key, route]) => [key.replace(TARGET_PATH, `/repos/${ORG}/${repo}`), route]));
+  const client = createFixtureClient(routes, { onCall: ({ method, path: callPath }) => calls.push(`${method} ${urlKey(callPath)}`) });
+  const request = { op: OP, targetRepo: repo, args };
+  return { calls, result: plan({ client, org: ORG, controlRepo: CONTROL, request, config: CONFIG }) };
+}
+
+const COLLIDING_TREE = { truncated: false, tree: [blob('.github/dependabot.yml', 'project-dependabot'), blob('version.txt', 'project-version')] };
+const projectTree = (...entries) => ({ truncated: false, tree: entries });
+/** [case, gaps, row name, row detail]: every case is one failing row. */
+const GAPS = [
+  ['default branch', { repository: { default_branch: 'master' } }, 'default branch', /default branch: master/],
+  ['empty repository', { empty: true }, 'empty repository', /empty repository: yes/],
+  ['archived', { repository: { archived: true } }, 'archived', /archived: yes/],
+  ['protected main', { branch: { protected: true } }, 'protected main', /protected main: set/],
+  ['collision', { tree: COLLIDING_TREE }, 'collisions', /collisions: \.github\/dependabot\.yml, version\.txt/],
+  ['directory at a kit file', { tree: projectTree({ path: 'scripts/verify', type: 'tree', sha: 't1' }, blob('scripts/verify/run.sh', 'p1')) }, 'collisions', /collisions: scripts\/verify is a tree/],
+  ['file at a kit directory', { tree: projectTree(blob('docs', 'p1')) }, 'collisions', /collisions: docs is a blob/],
+  ['submodule at a kit path', { tree: projectTree({ path: 'README.md', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: README\.md is a commit/],
+  ['truncated target tree', { tree: { truncated: true, tree: [] } }, 'collisions', /collisions: target tree is truncated/],
+  ['tree response without a tree list', { tree: { truncated: false } }, 'collisions', /collisions: target tree response has no tree list/],
+];
+
+test('AC2 plan without the opt-in makes no call and adds nothing', async () => {
+  const { calls, result } = planCall({ args: { description: DESCRIPTION } });
+  assert.deepEqual(await result, {});
+  assert.deepEqual(calls, []);
+});
+
+test('AC2 plan lists every failing and reported row of a foreign target from GET calls only', async () => {
+  const { calls, result } = planCall();
+  const { facts, problem } = await result;
+  assert.equal(problem, undefined);
+  assert.deepEqual(facts.slice(0, 2), [`Adoption preflight against ${TAG}: 0 failing row(s)`, 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships']);
+  const rows = ['ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
+    'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1',
+    'report secrets: not read; check them in the browser', 'report merge settings: not read; pass 1 sets squash-only'];
+  assert.deepEqual(facts.slice(2), rows);
+  assert.ok(calls.length > 0);
+  assert.deepEqual(calls.filter((call) => !call.startsWith('GET ')), []);
+});
+
+for (const [name, gaps, rowName, row] of GAPS) {
+  test(`AC2 plan marks a ${name} as a failing row and still lists the reported rows`, async () => {
+    const { facts } = await planCall({ gaps }).result;
+    assert.match(facts[0], /[1-9] failing row\(s\)$/);
+    assert.equal(facts[1], 'Apply stops before any write');
+    assert.ok(facts.some((fact) => fact.startsWith('FAIL ') && row.test(fact)), facts.join('\n'));
+    assert.ok(facts.some((fact) => fact.startsWith('report secrets')));
+  });
+
+  test(`AC3 apply with a ${name} names the row and stops before any write call or target grant`, async () => {
+    const world = adoptWorld(gaps);
+    await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && error.message === `adopt preflight failed: ${rowName}`);
+    assert.ok(world.logs.some((line) => line.startsWith('FAIL ') && row.test(line)), world.logs.join('\n'));
+    assert.deepEqual(writesOf(world), []);
+    assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
+  });
+}
+
+test('AC4 apply with the opt-in and no failing row ends after the preflight with no write call', async () => {
+  const world = adoptWorld();
+  const result = await run(world.ctx, world.seams);
+  assert.equal(result.ok, false);
+  const lines = result.summary.split('\n');
+  for (const line of ['- inspect: foreign', '- target head: head-main', '- ok collisions: none', '- ok protected main: not set']) assert.ok(lines.includes(line), line);
+  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/head-main`), 'the tree is read at the head commit SHA');
+  assert.match(result.summary, /stopped after the preflight: the kit merge \(#274\) is not built, so no write was made/);
+  assert.deepEqual(writesOf(world), []);
+  assert.deepEqual(world.written, []);
+  assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
+  assert.equal(world.calls.some((call) => /\/(labels|issues|environments)$/.test(call.path)), false);
+});
+
+test('adopt on an absent or fresh target is refused in plan and in apply before any write', async () => {
+  for (const state of ['absent', 'fresh']) {
+    const message = new RegExp(`is ${state === 'absent' ? 'absent or private \\(these tokens read public data only\\)' : state}, nothing to adopt`);
+    assert.match((await planCall({ state }).result).problem, message);
+    const world = adoptWorld(undefined, state);
+    await assert.rejects(run(world.ctx, world.seams), message);
+    assert.deepEqual(writesOf(world), []);
+    assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
+  }
+});
+
+test('adopt on an ours target resumes as usual', async () => {
+  const { result } = planCall({ state: 'ours' });
+  assert.deepEqual((await result).facts, ['Adopt: the target is a groundwork project, so bootstrap resumes as usual']);
+  const world = adoptWorld(undefined, 'ours');
+  assert.equal((await run(world.ctx, world.seams)).ok, true);
+});
+
+test('AC2 a long row keeps its count within the rendered fact length', async () => {
+  const labels = Array.from({ length: 30 }, (_, index) => ({ name: `project-label-number-${index}` }));
+  const { facts } = await planCall({ overrides: { [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, labels) } }).result;
+  const row = facts.find((fact) => fact.startsWith('report labels the sync deletes: '));
+  assert.ok(row.length <= 200, row);
+  assert.match(row, / and \d+ more$/);
+});
+
+test('plan turns a missing or malformed labels.json into a problem instead of a crash', async () => {
+  const missing = { ...ADOPT_FILES };
+  delete missing['.github/groundwork/labels.json'];
+  for (const files of [missing, ...['{not json', '{"labels":[null]}', 'null'].map((text) => ({ ...ADOPT_FILES, '.github/groundwork/labels.json': text }))]) {
+    const { problem } = await planCall({ files }).result;
+    assert.match(problem, /labels\.json in the release tree is missing or not a label list/);
+  }
+});
+
+test('AC2 every plan fact fits the 200-character render limit for a 100-character repository name', async () => {
+  const repo = 'r'.repeat(100);
+  const { facts, problem } = await planCall({ repo, gaps: { tree: COLLIDING_TREE } }).result;
+  assert.equal(problem, undefined);
+  for (const fact of facts) assert.ok(fact.length <= 200, fact);
+  assert.equal(facts[1], 'Apply stops before any write');
+  const { facts: clean } = await planCall({ repo }).result;
+  for (const fact of clean) assert.ok(fact.length <= 200, fact);
+  assert.equal(clean[1], 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships');
 });
