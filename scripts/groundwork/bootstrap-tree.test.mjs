@@ -362,11 +362,20 @@ test('#274 AC2: README.md and LICENSE keep the project content; CODEOWNERS ends 
   assert.ok(codeowners.endsWith(kitLines));
 });
 
-test('#274 AC2: a target without README.md, LICENSE or CODEOWNERS gets the kit files', () => {
+test('#274 AC2: a target without README.md or CODEOWNERS gets the kit files; adopt never adds a LICENSE (owner decision, #258)', () => {
   const { treeEntries, contents } = adoptFixture();
   const tree = EXISTING_TREE.filter((entry) => !['README.md', 'LICENSE', '.github/CODEOWNERS'].includes(entry.path));
   const entries = adoptTreeEntries({ treeEntries, contents, target: { tree } });
-  for (const path of ['README.md', 'LICENSE', '.github/CODEOWNERS']) assert.deepEqual(find(entries, path), find(treeEntries, path), path);
+  for (const path of ['README.md', '.github/CODEOWNERS']) assert.deepEqual(find(entries, path), find(treeEntries, path), path);
+  assert.equal(find(entries, 'LICENSE'), undefined);
+});
+
+test('#274 AC2: a readme in another case or extension keeps the kit README.md out', () => {
+  const { treeEntries, contents } = adoptFixture();
+  for (const readme of ['Readme.md', 'README.rst', 'readme']) {
+    const tree = [{ path: readme, mode: '100644', type: 'blob', sha: 'project-readme' }];
+    assert.equal(find(adoptTreeEntries({ treeEntries, contents, target: { tree } }), 'README.md'), undefined, readme);
+  }
 });
 
 test('#274 AC2: a target CODEOWNERS without its text is a SettingsError, not a silent replace', () => {

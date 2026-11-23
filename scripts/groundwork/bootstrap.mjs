@@ -3,14 +3,13 @@ import { SettingsError, repoKind } from '../lib/settings.mjs';
 import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
   commitAdoptTree, commitBootstrapTree, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
-  readBlobTexts, readKitVersion, readReleaseTree, resolveTagCommit,
+  readBlobTexts, readKitVersion, readReleaseTree, requireMainHead, resolveTagCommit,
 } from './bootstrap-repo.mjs';
-import { adoptTreeEntries, buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
+import { CODEOWNERS_PATH, adoptTreeEntries, buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 import { findSetupEpic, openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
 
 const SETUP_TEMPLATES_DIR = 'scripts/groundwork/stubs/setup/';
 const LABELS_PATH = '.github/groundwork/labels.json';
-const CODEOWNERS_PATH = '.github/CODEOWNERS';
 
 /** Op identity, read by admin-run (12.1). */
 export const OP = 'bootstrap';
@@ -169,8 +168,8 @@ async function adoptionPlan({ client, org, controlRepo, request, config }) {
   if (refused !== undefined) return { problem: refused };
   const tag = await latestReleaseTag({ client, org, controlRepo });
   const kit = await readKit({ client, org, controlRepo, repo, description: args.description, tag });
-  const { rows, empty, headSha } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
-  const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabelNames(kit), empty });
+  const { rows, empty, headSha, tree } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
+  const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabelNames(kit), empty, tree });
   const failing = rows.filter((row) => row.fail).length;
   // admin-run cuts each fact at 200 characters, so the outcome is its own fact and neither carries the target name.
   const outcome = failing > 0 ? 'Apply stops before any write' : 'If the target is still foreign when apply runs, apply merges the kit into main at the target head';
@@ -201,6 +200,8 @@ async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
   const sections = (groups) => applySections(targetContext, groups, settingsDependencies);
   const lines = [];
 
+  // The label sync deletes project labels for good, so a moved main refuses before it (spec 14.4).
+  if (source.pin !== undefined) await requireMainHead({ client, org, repo, headSha: source.pin.headSha });
   lines.push(...stepLines(await sections(['labels'])));
   const kit = { client, org, repo, tag: source.tag, treeEntries: source.treeEntries, blobs: source.blobs, sleep };
   const commit = source.pin === undefined ? await commitBootstrapTree(kit) : await commitAdoptTree({ ...kit, pin: source.pin });

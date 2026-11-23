@@ -34,7 +34,7 @@ const FIXED_STUBS = [
 const STUB_DOCS_DIR = `${STUBS_DIR}docs/`;
 const PROJECT_DOCS_DIR = 'docs/';
 
-const CODEOWNERS_PATH = '.github/CODEOWNERS';
+export const CODEOWNERS_PATH = '.github/CODEOWNERS';
 const CONFIG_PATH = `${SETTINGS_DIR}config.json`;
 // A GitHub login: letters, digits, hyphens, and underscores for enterprise managed users (<handle>_<shortcode>).
 // It must exclude whitespace, "#", "@" and "/", which could add a CODEOWNERS rule or a team.
@@ -180,8 +180,12 @@ export function buildBootstrapTree({ entries, contents, org, controlRepo, repo, 
   return [...kept, ...stubEntries, ...generated].sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
-// Spec 14.4: an adopted repository keeps its own copy of these when it has one.
-const ADOPT_KEPT_PATHS = new Set(['README.md', 'LICENSE']);
+const README_PATH = 'README.md';
+const LICENSE_PATH = 'LICENSE';
+/** Spec 14.4: kit paths an adopted repository keeps in its own form, so other content there is no collision. */
+export const ADOPT_KEPT_PATHS = new Set([README_PATH, LICENSE_PATH, CODEOWNERS_PATH]);
+// A root readme in any case or extension: a second README.md beside Readme.md breaks case-insensitive checkouts.
+const ROOT_README = /^readme(\.[^/]*)?$/i;
 
 function appendedCodeowners(entry, contents, projectText) {
   if (typeof projectText !== 'string') throw new SettingsError(`the target's ${CODEOWNERS_PATH} text is needed to append the kit lines`, CODEOWNERS_PATH);
@@ -191,8 +195,9 @@ function appendedCodeowners(entry, contents, projectText) {
 }
 
 /**
- * The kit entries to write over an existing tree with `base_tree` (spec 14.4). The target keeps its README.md and
- * LICENSE; its CODEOWNERS keeps its own lines and gets the kit lines appended, so the kit rules match last and win.
+ * The kit entries to write over an existing tree with `base_tree` (spec 14.4). Adopt never adds a LICENSE (owner
+ * decision, #258) and adds README.md only when the root holds no readme; the target's CODEOWNERS keeps its own lines
+ * and gets the kit lines appended, so the kit rules match last and win.
  * @param {{ treeEntries: TreeEntry[], contents: Record<string, string>,
  *   target: { tree: Array<{ path: string }>, codeowners?: string } }} options `target.codeowners` is the text of the
  *   target's CODEOWNERS, required when its tree holds one
@@ -200,8 +205,9 @@ function appendedCodeowners(entry, contents, projectText) {
  */
 export function adoptTreeEntries({ treeEntries, contents, target }) {
   const targetPaths = new Set(target.tree.map((entry) => entry.path));
+  const hasReadme = target.tree.some((entry) => ROOT_README.test(entry.path));
   return treeEntries
-    .filter((entry) => !(ADOPT_KEPT_PATHS.has(entry.path) && targetPaths.has(entry.path)))
+    .filter((entry) => entry.path !== LICENSE_PATH && !(entry.path === README_PATH && hasReadme))
     .map((entry) => (entry.path === CODEOWNERS_PATH && targetPaths.has(entry.path) ? appendedCodeowners(entry, contents, target.codeowners) : entry));
 }
 

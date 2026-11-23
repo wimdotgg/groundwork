@@ -4,6 +4,7 @@ import { GitHubError, apiPath } from '../lib/github.mjs';
 import { validateIssueBody } from '../lib/issue-model.mjs';
 import { SettingsError } from '../lib/settings.mjs';
 import { normalizeLabel, sameLogin } from '../lib/trust.mjs';
+import { ADOPT_KEPT_PATHS, CODEOWNERS_PATH } from './bootstrap-tree.mjs';
 
 // Same value as bootstrap-tree.mjs (#144); the integration task (#149) may share one export.
 const KIT_VERSION_PATH = '.github/groundwork/kit-version.txt';
@@ -215,10 +216,21 @@ export async function commitBootstrapTree({ client, org, repo, tag, treeEntries,
  * @returns {Promise<{ sha: string, created: boolean }>}
  */
 export async function commitAdoptTree({ client, org, repo, tag, pin, treeEntries, blobs, sleep = delay }) {
-  const head = await readMainHead({ client, org, repo });
-  if (head !== pin.headSha) throw new SettingsError(`${org}/${repo} main moved from ${pin.headSha} to ${head} after the adopt preflight; no commit was made, rerun bootstrap`);
+  const head = await requireMainHead({ client, org, repo, headSha: pin.headSha });
   const tree = await createTargetBlobs({ client, org, repo, treeEntries, blobs, sleep });
   return { sha: await pushCommit({ client, org, repo, tag, head, tree: { base_tree: pin.treeSha, tree } }), created: true };
+}
+
+/**
+ * Spec 14.4: an adopt run checks `main` against the head its preflight read before its first write and again before
+ * the commit, so a moved target refuses.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string, headSha: string }} options
+ * @returns {Promise<string>} the head, equal to `headSha`
+ */
+export async function requireMainHead({ client, org, repo, headSha }) {
+  const head = await readMainHead({ client, org, repo });
+  if (head !== headSha) throw new SettingsError(`${org}/${repo} main moved from ${headSha} to ${head} after the adopt preflight; no write was made since, rerun bootstrap`);
+  return head;
 }
 
 async function readMainHead({ client, org, repo }) {
@@ -232,14 +244,18 @@ async function pushCommit({ client, org, repo, tag, head, tree }) {
   const { data: commit } = await client.request('POST', repoPath(org, repo, '/git/commits'), {
     body: { message, tree: createdTree.sha, parents: [head] },
   });
-  await client.request('PATCH', repoPath(org, repo, `/git/refs/heads/${DEFAULT_BRANCH}`), {
+  // 422: main is no longer the parent, so the update is not a fast forward.
+  const { status } = await client.request('PATCH', repoPath(org, repo, `/git/refs/heads/${DEFAULT_BRANCH}`), {
     body: { sha: commit.sha, force: false },
+    okStatuses: [422],
   });
+  if (status === 422) throw new SettingsError(`${org}/${repo} main moved during the commit; no ref update was made, rerun bootstrap`);
   return commit.sha;
 }
 
-// Spec 14.4: the project's README and LICENSE are kept and kit lines are appended to its CODEOWNERS.
-const ADOPT_KEPT_PATHS = new Set(['README.md', 'LICENSE', '.github/CODEOWNERS']);
+// GitHub reads the first of these after .github/CODEOWNERS, so the kit file would shadow them.
+const SHADOWED_CODEOWNERS = ['CODEOWNERS', 'docs/CODEOWNERS'];
+const ROOT_LICENSE = /^(licen[cs]e|copying|unlicense)([.-][^/]*)?$/i;
 // admin-run cuts a plan fact at 200 characters; this budget leaves room for the row name and the count.
 const LIST_BUDGET = 120;
 const NOT_CHECKED_EMPTY = 'not checked: empty repository';
@@ -281,20 +297,30 @@ function collisionsOf(kitEntries, targetByPath) {
     if (target.type !== 'blob') collisions.add(`${entry.path} is a ${target.type}`);
     else if (!ADOPT_KEPT_PATHS.has(entry.path) && target.sha !== (entry.content === undefined ? entry.sha : gitBlobSha(entry.content))) collisions.add(entry.path);
   }
+  // Refused rather than appended in place: check and kit-update read .github/CODEOWNERS, and moving the file keeps its rules.
+  if (kitEntries.some((entry) => entry.path === CODEOWNERS_PATH) && !targetByPath.has(CODEOWNERS_PATH)) {
+    for (const path of SHADOWED_CODEOWNERS.filter((candidate) => targetByPath.has(candidate))) collisions.add(`${path} would be shadowed by ${CODEOWNERS_PATH}, move it there`);
+  }
   return [...collisions];
 }
 
-/** Reads the tree by the head commit SHA, so a tag named like the branch cannot answer and the kit merge reuses the SHA and tree. */
+/**
+ * Reads the tree of the head commit, so a tag named like the branch cannot answer and the kit merge reuses the head and
+ * tree. The tree SHA comes from the commit: `git/trees/<commit SHA>` echoes the commit SHA as its `sha`.
+ */
 async function readCollisions({ client, org, repo, branch, kitEntries }) {
   const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${encodeURIComponent(branch)}`));
   const headSha = ref?.object?.sha;
   if (typeof headSha !== 'string') return { row: gapRow('collisions', true, `heads/${capName(branch)} has no commit SHA`) };
-  const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(headSha)}`), { query: { recursive: 1 } });
+  const { data: commit } = await client.request('GET', repoPath(org, repo, `/git/commits/${encodeURIComponent(headSha)}`));
+  const treeSha = commit?.tree?.sha;
+  // Without it the merge would post no base_tree and drop every project file.
+  if (typeof treeSha !== 'string') return { row: gapRow('collisions', true, `head commit ${headSha} has no tree SHA`), headSha };
+  const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(treeSha)}`), { query: { recursive: 1 } });
   if (data?.truncated) return { row: gapRow('collisions', true, 'target tree is truncated, so it cannot be compared'), headSha };
-  // Without its SHA the merge would post no base_tree and drop every project file.
-  if (!Array.isArray(data?.tree) || typeof data.sha !== 'string') return { row: gapRow('collisions', true, 'target tree response has no tree list or tree SHA'), headSha };
+  if (!Array.isArray(data?.tree)) return { row: gapRow('collisions', true, 'target tree response has no tree list'), headSha };
   const collisions = collisionsOf(kitEntries, new Map(data.tree.map((entry) => [entry.path, entry])));
-  return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha, treeSha: data.sha, tree: data.tree };
+  return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha, treeSha, tree: data.tree };
 }
 
 /**
@@ -317,8 +343,18 @@ export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
   return { rows: [...rows, row], empty, ...pin };
 }
 
-/** The reported rows of spec 14.4, which never fail; merge settings and secret names are not read. */
-export async function readAdoptionReport({ client, org, repo, kitLabels, empty }) {
+/** Owner decision (#258): adopt never adds a LICENSE, so the report names the project's or says none is there. */
+function licenseDetail(tree) {
+  if (tree === undefined) return 'not checked: no tree read';
+  const licenses = tree.filter((entry) => ROOT_LICENSE.test(entry.path)).map((entry) => entry.path);
+  return licenses.length > 0 ? listNames(licenses) : 'none; adopt adds none, the repository owner picks one';
+}
+
+/**
+ * The reported rows of spec 14.4, which never fail; merge settings and secret names are not read. `tree` is the
+ * `readAdoptionGaps` tree, absent when it was not read whole.
+ */
+export async function readAdoptionReport({ client, org, repo, kitLabels, empty, tree }) {
   const kept = new Set(kitLabels.map(normalizeLabel));
   const labels = (await client.paginate(repoPath(org, repo, '/labels'))).map((label) => label.name).filter((name) => !kept.has(normalizeLabel(name)));
   const tags = empty ? [] : (await client.paginate(repoPath(org, repo, '/git/matching-refs/tags/v'))).map((ref) => String(ref.ref).slice(TAG_REF_PREFIX.length));
@@ -330,6 +366,7 @@ export async function readAdoptionReport({ client, org, repo, kitLabels, empty }
     { name: 'v* tags', detail: listNames(tags) },
     { name: 'environments', detail: listNames(environments.map((environment) => environment.name)) },
     { name: 'open issues failing issue-format', detail: String(unformatted.length) },
+    { name: 'license', detail: licenseDetail(tree) },
     { name: 'secrets', detail: 'not read; check them in the browser' },
     { name: 'merge settings', detail: 'not read; pass 1 sets squash-only' },
   ];

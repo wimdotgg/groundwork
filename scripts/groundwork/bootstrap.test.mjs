@@ -458,9 +458,10 @@ const PROJECT_TREE = [
 ];
 
 /** A readable foreign target with no gap unless a field says otherwise. */
-function foreignRoutes({ repository = {}, empty = false, branch = { protected: false }, tree = { truncated: false, sha: 'tree-main', tree: PROJECT_TREE } } = {}) {
+function foreignRoutes({ repository = {}, empty = false, branch = { protected: false }, tree = { truncated: false, sha: 'tree-main', tree: PROJECT_TREE }, commit } = {}) {
   const defaultBranch = repository.default_branch ?? 'main';
   const head = `head-${defaultBranch}`;
+  const headCommit = commit ?? { sha: head, tree: { sha: 'tree-main' } };
   const commits = empty ? reply(409, { message: 'Git Repository is empty.' }) : reply(200, [{ sha: 'c0', author: { login: 'someone' } }]);
   return {
     [`GET ${TARGET_PATH}`]: reply(200, { default_branch: 'main', archived: false, ...repository }),
@@ -468,7 +469,8 @@ function foreignRoutes({ repository = {}, empty = false, branch = { protected: f
     [`GET ${TARGET_PATH}/commits?per_page=1`]: commits,
     [`GET ${TARGET_PATH}/branches/main`]: reply(200, branch),
     [`GET ${TARGET_PATH}/git/ref/heads/${defaultBranch}`]: reply(200, { object: { sha: head } }),
-    [`GET ${TARGET_PATH}/git/trees/${head}?recursive=1`]: reply(200, tree),
+    [`GET ${TARGET_PATH}/git/commits/${head}`]: reply(200, headCommit),
+    [`GET ${TARGET_PATH}/git/trees/${headCommit.tree?.sha}?recursive=1`]: reply(200, tree),
     [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, [{ name: 'bug' }, { name: 'Accepted' }]),
     [`GET ${TARGET_PATH}/git/matching-refs/tags/v?per_page=100`]: reply(200, [{ ref: 'refs/tags/v1.0.0' }]),
     [`GET ${TARGET_PATH}/environments?per_page=100`]: reply(200, { total_count: 1, environments: [{ name: 'production' }] }),
@@ -502,7 +504,9 @@ const GAPS = [
   ['submodule at a kit path', { tree: projectTree({ path: 'README.md', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: README\.md is a commit/],
   ['truncated target tree', { tree: { truncated: true, tree: [] } }, 'collisions', /collisions: target tree is truncated/],
   ['tree response without a tree list', { tree: { truncated: false } }, 'collisions', /collisions: target tree response has no tree list/],
-  ['tree response without a tree SHA', { tree: { truncated: false, tree: PROJECT_TREE } }, 'collisions', /collisions: target tree response has no tree list or tree SHA/],
+  ['head commit without a tree SHA', { commit: { sha: 'head-main', tree: {} } }, 'collisions', /collisions: head commit head-main has no tree SHA/],
+  ['root CODEOWNERS the kit file would shadow', { tree: projectTree(blob('CODEOWNERS', 'p1')) }, 'collisions', /collisions: CODEOWNERS would be shadowed by \.github\/CODEOWNERS, move it there/],
+  ['docs CODEOWNERS the kit file would shadow', { tree: projectTree(blob('docs/CODEOWNERS', 'p1')) }, 'collisions', /collisions: docs\/CODEOWNERS would be shadowed by \.github\/CODEOWNERS, move it there/],
 ];
 
 test('AC2 plan without the opt-in makes no call and adds nothing', async () => {
@@ -517,7 +521,7 @@ test('AC2 plan lists every failing and reported row of a foreign target from GET
   assert.equal(problem, undefined);
   assert.deepEqual(facts.slice(0, 2), [`Adoption preflight against ${TAG}: 0 failing row(s)`, 'If the target is still foreign when apply runs, apply merges the kit into main at the target head']);
   const rows = ['target head: head-main', 'ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
-    'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1',
+    'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1', 'report license: LICENSE',
     'report secrets: not read; check them in the browser', 'report merge settings: not read; pass 1 sets squash-only'];
   assert.deepEqual(facts.slice(2), rows);
   assert.ok(calls.length > 0);
@@ -571,7 +575,8 @@ test('#274 AC1 AC2 AC4 apply merges the kit over the target tree at the pinned h
   assert.equal(result.ok, true, result.summary);
   const lines = result.summary.split('\n');
   for (const line of ['- inspect: foreign', '- target head: head-main', '- ok collisions: none', '- adopt commit: pushed commit-1']) assert.ok(lines.includes(line), line);
-  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/head-main`), 'the tree is read at the head commit SHA');
+  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/commits/head-main`), 'the tree SHA comes from the head commit');
+  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/tree-main`), 'the tree is read by its own SHA');
   const tree = bodyOf(world, `POST ${TARGET_PATH}/git/trees`);
   assert.equal(tree.base_tree, 'tree-main', 'the kit is written over the existing tree');
   const written = new Map(tree.tree.map((entry) => [entry.path, entry]));
@@ -583,12 +588,24 @@ test('#274 AC1 AC2 AC4 apply merges the kit over the target tree at the pinned h
   assert.equal(world.calls.some((call) => call.path === `/orgs/${ORG}/repos`), false);
 });
 
-test('#274 AC4 apply refuses the kit merge when main moved after the preflight read', async () => {
+test('#274 AC4 apply refuses before any write, label sync included, when main moved after the preflight read', async () => {
   const moved = [reply(200, { object: { sha: 'head-main' } }), reply(200, { object: { sha: 'head-moved' } })];
   const world = adoptApplyWorld({ [`GET ${TARGET_PATH}/git/ref/heads/main`]: moved });
   await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /main moved from head-main to head-moved/.test(error.message));
-  const gitWrites = writesOf(world).filter((call) => call.path.includes('/git/'));
-  assert.deepEqual(gitWrites, []);
+  assert.deepEqual(writesOf(world), []);
+});
+
+test('#274 a main that moves during the blob posts refuses the ref update with the same rerun advice', async () => {
+  const world = adoptApplyWorld({ [`PATCH ${TARGET_PATH}/git/refs/heads/main`]: reply(422, { message: 'Update is not a fast forward' }) });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /main moved during the commit; no ref update was made, rerun bootstrap/.test(error.message));
+});
+
+test('#274 the plan reports a license-like file as kept and a missing one as left to the repository owner', async () => {
+  const withLicenseMd = projectTree(blob('src/app.js', 'p1'), blob('LICENSE.md', 'p2'));
+  const { facts } = await planCall({ gaps: { tree: withLicenseMd } }).result;
+  assert.ok(facts.includes('report license: LICENSE.md'), facts.join('\n'));
+  const { facts: none } = await planCall({ gaps: { tree: projectTree(blob('src/app.js', 'p1')) } }).result;
+  assert.ok(none.includes('report license: none; adopt adds none, the repository owner picks one'), none.join('\n'));
 });
 
 test('#274 AC3 a colliding workflow path makes apply refuse before any write, naming the path', async () => {
@@ -647,7 +664,7 @@ test('AC2 every plan fact fits the 200-character render limit for a 100-characte
 
 test('#274 a long default branch name is capped so its fact keeps ", must be main"', async () => {
   const branch = 'b'.repeat(240);
-  const overrides = { [`GET ${TARGET_PATH}/git/ref/heads/${branch}`]: reply(200, { object: { sha: 'head-long' } }), [`GET ${TARGET_PATH}/git/trees/head-long?recursive=1`]: reply(200, { truncated: false, sha: 'tree-long', tree: [] }) };
+  const overrides = { [`GET ${TARGET_PATH}/git/ref/heads/${branch}`]: reply(200, { object: { sha: 'head-long' } }), [`GET ${TARGET_PATH}/git/commits/head-long`]: reply(200, { sha: 'head-long', tree: { sha: 'tree-long' } }), [`GET ${TARGET_PATH}/git/trees/tree-long?recursive=1`]: reply(200, { truncated: false, sha: 'tree-long', tree: [] }) };
   const { facts } = await planCall({ gaps: { repository: { default_branch: branch } }, overrides }).result;
   const row = facts.find((fact) => fact.startsWith('FAIL default branch: '));
   assert.ok(row.length <= 200, row);
