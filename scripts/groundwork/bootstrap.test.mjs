@@ -475,11 +475,13 @@ function foreignRoutes({ repository = {}, empty = false, branch = { protected: f
 
 const adoptWorld = (gaps, state = 'foreign') => createWorld({ state, files: ADOPT_FILES, args: ADOPT_ARGS, overrides: state === 'foreign' ? foreignRoutes(gaps) : {} });
 
-function planCall({ state = 'foreign', gaps, args = ADOPT_ARGS, files = ADOPT_FILES, overrides = {} } = {}) {
+function planCall({ state = 'foreign', gaps, args = ADOPT_ARGS, files = ADOPT_FILES, overrides = {}, repo = REPO } = {}) {
   const calls = [];
-  const routes = { ...targetRoutes(state, files), ...controlRoutes(files), ...(state === 'foreign' ? foreignRoutes(gaps) : {}), ...overrides };
+  const fixed = { ...targetRoutes(state, files), ...controlRoutes(files), ...(state === 'foreign' ? foreignRoutes(gaps) : {}), ...overrides };
+  // The fixtures name REPO; another target name moves every target route to its path.
+  const routes = Object.fromEntries(Object.entries(fixed).map(([key, route]) => [key.replace(TARGET_PATH, `/repos/${ORG}/${repo}`), route]));
   const client = createFixtureClient(routes, { onCall: ({ method, path: callPath }) => calls.push(`${method} ${urlKey(callPath)}`) });
-  const request = { op: OP, targetRepo: REPO, args };
+  const request = { op: OP, targetRepo: repo, args };
   return { calls, result: plan({ client, org: ORG, controlRepo: CONTROL, request, config: CONFIG }) };
 }
 
@@ -509,12 +511,11 @@ test('AC2 plan lists every failing and reported row of a foreign target from GET
   const { calls, result } = planCall();
   const { facts, problem } = await result;
   assert.equal(problem, undefined);
-  assert.match(facts[0], /0 failing row\(s\)/);
-  assert.match(facts[0], /if the target is still foreign when apply runs, apply stops after the preflight with no write/);
+  assert.deepEqual(facts.slice(0, 2), [`Adoption preflight against ${TAG}: 0 failing row(s)`, 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships']);
   const rows = ['ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
     'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1',
     'report secrets: not read; check them in the browser', 'report merge settings: not read; pass 1 sets squash-only'];
-  assert.deepEqual(facts.slice(1), rows);
+  assert.deepEqual(facts.slice(2), rows);
   assert.ok(calls.length > 0);
   assert.deepEqual(calls.filter((call) => !call.startsWith('GET ')), []);
 });
@@ -522,7 +523,8 @@ test('AC2 plan lists every failing and reported row of a foreign target from GET
 for (const [name, gaps, rowName, row] of GAPS) {
   test(`AC2 plan marks a ${name} as a failing row and still lists the reported rows`, async () => {
     const { facts } = await planCall({ gaps }).result;
-    assert.match(facts[0], /[1-9] failing row\(s\); apply stops before any write/);
+    assert.match(facts[0], /[1-9] failing row\(s\)$/);
+    assert.equal(facts[1], 'Apply stops before any write');
     assert.ok(facts.some((fact) => fact.startsWith('FAIL ') && row.test(fact)), facts.join('\n'));
     assert.ok(facts.some((fact) => fact.startsWith('report secrets')));
   });
@@ -576,9 +578,22 @@ test('AC2 a long row keeps its count within the rendered fact length', async () 
   assert.match(row, / and \d+ more$/);
 });
 
-test('plan turns a broken release tree into a problem instead of a crash', async () => {
-  const files = { ...ADOPT_FILES };
-  delete files['.github/groundwork/labels.json'];
-  const { problem } = await planCall({ files }).result;
-  assert.match(problem, /labels\.json/);
+test('plan turns a missing or malformed labels.json into a problem instead of a crash', async () => {
+  const missing = { ...ADOPT_FILES };
+  delete missing['.github/groundwork/labels.json'];
+  for (const files of [missing, ...['{not json', '{"labels":[null]}', 'null'].map((text) => ({ ...ADOPT_FILES, '.github/groundwork/labels.json': text }))]) {
+    const { problem } = await planCall({ files }).result;
+    assert.match(problem, /labels\.json in the release tree is missing or not a label list/);
+  }
+});
+
+test('AC2 every plan fact fits the 200-character render limit for a 100-character repository name', async () => {
+  const repo = 'r'.repeat(100);
+  const { facts, problem } = await planCall({ repo, gaps: { tree: COLLIDING_TREE } }).result;
+  assert.equal(problem, undefined);
+  for (const fact of facts) assert.ok(fact.length <= 200, fact);
+  assert.equal(facts[1], 'Apply stops before any write');
+  const { facts: clean } = await planCall({ repo }).result;
+  for (const fact of clean) assert.ok(fact.length <= 200, fact);
+  assert.equal(clean[1], 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships');
 });

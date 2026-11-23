@@ -143,10 +143,13 @@ export async function plan({ client, org, controlRepo, request, config }) {
   }
 }
 
+/** Any shape but a list of label objects, unparsable JSON included, is one SettingsError, so `plan` reports a problem. */
 function kitLabelNames(kit) {
-  const labels = JSON.parse(settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH] ?? 'null')?.labels;
-  if (!Array.isArray(labels)) throw new SettingsError(`${LABELS_PATH} in the release tree is missing or not a label list`);
-  return labels.map((label) => label.name);
+  try {
+    return JSON.parse(settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH]).labels.map((label) => label.name);
+  } catch {
+    throw new SettingsError(`${LABELS_PATH} in the release tree is missing or not a label list`);
+  }
 }
 
 async function adoptionPlan({ client, org, controlRepo, request, config }) {
@@ -160,10 +163,10 @@ async function adoptionPlan({ client, org, controlRepo, request, config }) {
   const { rows, empty } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
   const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabelNames(kit), empty });
   const failing = rows.filter((row) => row.fail).length;
-  const outcome = failing > 0 ? 'apply stops before any write'
-    : 'if the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships';
-  const heading = `Adoption preflight of ${org}/${repo} against ${tag}: ${failing} failing row(s); ${outcome}`;
-  return { facts: [heading, ...rows.map(gapLine), ...report.map(({ name, detail }) => `report ${name}: ${detail}`)] };
+  // admin-run cuts each fact at 200 characters, so the outcome is its own fact and neither carries the target name.
+  const outcome = failing > 0 ? 'Apply stops before any write' : 'If the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships';
+  const heading = `Adoption preflight against ${tag}: ${failing} failing row(s)`;
+  return { facts: [heading, outcome, ...rows.map(gapLine), ...report.map(({ name, detail }) => `report ${name}: ${detail}`)] };
 }
 
 /** @returns {string[]} the `- step: result` lines of an `applySections` summary */
