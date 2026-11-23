@@ -219,15 +219,15 @@ test('output is sorted by path and each entry has exactly one of sha and content
   for (const entry of tree) assert.equal(Number('sha' in entry) + Number('content' in entry), 1, entry.path);
 });
 
-const LIVE_CONFIG_URL = new URL('../../.github/groundwork/config.json', import.meta.url);
+const FIXTURE_CONFIG_URL = new URL('../lib/fixtures/config-root/.github/groundwork/config.json', import.meta.url);
 const LIVE_CODEOWNERS_URL = new URL('../../.github/CODEOWNERS', import.meta.url);
-const LIVE_CONFIG = JSON.parse(readFileSync(LIVE_CONFIG_URL, 'utf8'));
+const FIXTURE_CONFIG = JSON.parse(readFileSync(FIXTURE_CONFIG_URL, 'utf8'));
 const LIVE_CODEOWNERS = readFileSync(LIVE_CODEOWNERS_URL, 'utf8');
 const SWAPPED_OWNER = 'octo-owner';
-// The live config and a copy with another owner: the owner always comes from the config the tree carries.
+// The frozen fixture config and a copy with another owner: the owner always comes from the config the tree carries.
 const OWNER_CONFIGS = [
-  ['live config', LIVE_CONFIG],
-  ['swapped config', { ...LIVE_CONFIG, accounts: { ...LIVE_CONFIG.accounts, owner: SWAPPED_OWNER } }],
+  ['fixture config', FIXTURE_CONFIG],
+  ['swapped config', { ...FIXTURE_CONFIG, accounts: { ...FIXTURE_CONFIG.accounts, owner: SWAPPED_OWNER } }],
 ];
 
 function ownerFixture(configText, codeowners = LIVE_CODEOWNERS) {
@@ -252,7 +252,10 @@ for (const [name, config] of OWNER_CONFIGS) {
     assert.equal(lines.length, ruleLines(LIVE_CODEOWNERS).length);
     for (const line of lines) assert.deepEqual(ownersOf(line), [owner], line);
     assert.deepEqual(lines.map((line) => line.trim().split(/\s+/)[0]), ruleLines(LIVE_CODEOWNERS).map((line) => line.trim().split(/\s+/)[0]));
-    if (config.accounts.owner !== 'wianvdm') assert.ok(!text.includes('wianvdm'), 'the control repo owner is gone');
+    const templateOwners = new Set(ruleLines(LIVE_CODEOWNERS).flatMap(ownersOf));
+    for (const templateOwner of templateOwners) {
+      if (templateOwner !== owner) assert.ok(!text.includes(templateOwner), 'the control repo owner is gone');
+    }
   });
 }
 

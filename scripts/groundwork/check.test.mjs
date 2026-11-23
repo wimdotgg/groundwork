@@ -295,10 +295,10 @@ test('runCheck: a null repo throws SettingsError before any reading', async () =
 });
 
 const CODEOWNERS_KEY = '.github/CODEOWNERS';
-const LIVE_CONFIG = JSON.parse(readFileSync(new URL('../../.github/groundwork/config.json', import.meta.url), 'utf8'));
+const FIXTURE_CONFIG = JSON.parse(readFileSync(new URL('../lib/fixtures/config-root/.github/groundwork/config.json', import.meta.url), 'utf8'));
 const OWNER_CONFIGS = [
-  ['live config', LIVE_CONFIG],
-  ['swapped config', { ...LIVE_CONFIG, accounts: { ...LIVE_CONFIG.accounts, owner: 'octo-owner' } }],
+  ['fixture config', FIXTURE_CONFIG],
+  ['swapped config', { ...FIXTURE_CONFIG, accounts: { ...FIXTURE_CONFIG.accounts, owner: 'octo-owner' } }],
 ];
 
 const codeownersRows = (rows) => rows.filter((row) => row.section === CODEOWNERS_SECTION);
