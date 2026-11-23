@@ -3,7 +3,7 @@ import { SettingsError, loadDesiredState, repoKind } from '../lib/settings.mjs';
 import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
   commitAdoptTree, commitBootstrapTree, createMissingLabels, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
-  readBlobTexts, readKitVersion, readReleaseTree, requireMainHead, resolveTagCommit,
+  readBlobTexts, readKitVersion, readReleaseTree, requireMainHead, requireReplacedRulesets, resolveTagCommit,
 } from './bootstrap-repo.mjs';
 import { CODEOWNERS_PATH, adoptTreeEntries, buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 import { findSetupEpic, openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
@@ -39,7 +39,7 @@ export const DESCRIPTION_MAX_LENGTH = 350;
 
 const ACCEPTED_LABEL = 'accepted';
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
-const ALLOWED_KEYS = new Set(['description', 'adopt']);
+const ALLOWED_KEYS = new Set(['description', 'adopt', 'replaceRulesets']);
 const NOTHING_TO_ADOPT = new Set(['absent', 'fresh']);
 
 /**
@@ -51,11 +51,18 @@ export function validateArgs(args) {
   const unknown = Object.keys(args).filter((key) => !ALLOWED_KEYS.has(key)).map((key) => `unknown argument "${key}"`);
   // An adopt key with any value but true is reported beside the unknown keys.
   if (Object.hasOwn(args, 'adopt') && args.adopt !== true) unknown.push('adopt must be true when given');
+  if (Object.hasOwn(args, 'replaceRulesets')) unknown.push(...replaceRulesetsProblems(args));
   const { description } = args;
   if (typeof description !== 'string' || description === '') return [...unknown, 'description is required: a non-empty string'];
   if (description.length > DESCRIPTION_MAX_LENGTH) return [...unknown, `description must be at most ${DESCRIPTION_MAX_LENGTH} characters`];
   if (!PRINTABLE_ASCII.test(description)) return [...unknown, 'description must be printable ASCII'];
   return unknown;
+}
+
+function replaceRulesetsProblems({ adopt, replaceRulesets }) {
+  if (adopt !== true) return ['replaceRulesets is only allowed with adopt: true'];
+  const valid = Array.isArray(replaceRulesets) && replaceRulesets.every((name) => typeof name === 'string' && name !== '');
+  return valid ? [] : ['replaceRulesets must be an array of non-empty strings'];
 }
 
 /** @param {Record<string, string|undefined>} env the dispatch input, re-validated because `ctx` carries no args */
@@ -130,7 +137,7 @@ async function readSource({ client, org, controlRepo, repo, args, adminBot, log 
   const treeEntries = adoption?.treeEntries ?? kit.treeEntries;
   // An `ours` repository already holds the commit, which reads no blob.
   const blobs = state === 'ours' ? new Map() : await readBlobContents({ client, org, controlRepo, entries: treeEntries });
-  return { state, tag, treeEntries, contents: kit.contents, templates, blobs, pin: adoption?.pin, gaps: adoption?.gaps };
+  return { state, tag, treeEntries, contents: kit.contents, templates, blobs, pin: adoption?.pin, gaps: adoption?.gaps, replaceRulesets: args.replaceRulesets };
 }
 
 /**
@@ -168,8 +175,8 @@ async function adoptionPlan({ client, org, controlRepo, request, config }) {
   if (refused !== undefined) return { problem: refused };
   const tag = await latestReleaseTag({ client, org, controlRepo });
   const kit = await readKit({ client, org, controlRepo, repo, description: args.description, tag });
-  const { rows, empty, headSha, tree } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
-  const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabels(kit).map((label) => label.name), empty, tree });
+  const { rows, empty, headSha, tree, rulesets } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
+  const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabels(kit).map((label) => label.name), empty, tree, rulesets });
   const failing = rows.filter((row) => row.fail).length;
   // admin-run cuts each fact at 200 characters, so the outcome is its own fact and neither carries the target name.
   const outcome = failing > 0 ? 'Apply stops before any write' : 'If the target is still foreign when apply runs, apply merges the kit into main at the target head';
@@ -197,9 +204,10 @@ async function labelsAndCommit({ client, org, repo, source, sleep, sections, set
   // The full sync that validates the settings runs after the commit here, so validate before the first write.
   const { labels } = await loadDesiredState({ root: settingsRoot });
   await requireMainHead({ client, org, repo, headSha: source.pin.headSha });
+  const replaced = await requireReplacedRulesets({ client, org, repo, names: source.replaceRulesets });
   const created = await createMissingLabels({ client, org, repo, labels });
   const commit = await commitAdoptTree({ ...kit, pin: source.pin });
-  return [`- labels (missing kit labels): ${created} created`, commitLine('adopt', commit), ...stepLines(await sections(['labels']))];
+  return [`- rulesets named for replacement: ${replaced.length > 0 ? replaced.join(', ') : 'none'}`, `- labels (missing kit labels): ${created} created`, commitLine('adopt', commit), ...stepLines(await sections(['labels']))];
 }
 
 /** Owner decision on #167 (Q4): once the setup epic is accepted or closed, `apply-settings` is the repair path. */

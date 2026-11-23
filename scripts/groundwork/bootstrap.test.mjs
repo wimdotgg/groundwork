@@ -20,6 +20,8 @@ test('validateArgs accepts a printable description up to the limit', () => {
   assert.deepEqual(validateArgs({ description: 'd' }), []);
   assert.deepEqual(validateArgs({ description: 'x'.repeat(DESCRIPTION_MAX_LENGTH) }), []);
   assert.deepEqual(validateArgs({ description: 'd', adopt: true }), []);
+  assert.deepEqual(validateArgs({ description: 'd', adopt: true, replaceRulesets: [] }), []);
+  assert.deepEqual(validateArgs({ description: 'd', adopt: true, replaceRulesets: ['main', 'tags'] }), []);
 });
 
 for (const [name, args, errors] of [
@@ -33,6 +35,10 @@ for (const [name, args, errors] of [
   ['unknown key', { description: 'd', extra: 1 }, ['unknown argument "extra"']],
   ['adopt other than true', { description: 'd', adopt: false }, ['adopt must be true when given']],
   ['adopt as a string', { description: 'd', adopt: 'true' }, ['adopt must be true when given']],
+  ['replaceRulesets without adopt', { description: 'd', replaceRulesets: [] }, ['replaceRulesets is only allowed with adopt: true']],
+  ['replaceRulesets as a string', { description: 'd', adopt: true, replaceRulesets: 'main' }, ['replaceRulesets must be an array of non-empty strings']],
+  ['replaceRulesets with an empty name', { description: 'd', adopt: true, replaceRulesets: ['main', ''] }, ['replaceRulesets must be an array of non-empty strings']],
+  ['replaceRulesets with a non-string name', { description: 'd', adopt: true, replaceRulesets: [7] }, ['replaceRulesets must be an array of non-empty strings']],
   ['array args', [], ['args must be a JSON object']],
   ['null args', null, ['args must be a JSON object']],
 ]) {
@@ -521,7 +527,7 @@ test('AC2 plan lists every failing and reported row of a foreign target from GET
   assert.equal(problem, undefined);
   assert.deepEqual(facts.slice(0, 2), [`Adoption preflight against ${TAG}: 0 failing row(s)`, 'If the target is still foreign when apply runs, apply merges the kit into main at the target head']);
   const rows = ['target head: head-main', 'ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
-    'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1', 'report license: LICENSE',
+    'report rulesets the sync deletes: none', 'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1', 'report license: LICENSE',
     'report secrets: not read; check them in the browser', 'report merge settings: not read; pass 1 sets squash-only'];
   assert.deepEqual(facts.slice(2), rows);
   assert.ok(calls.length > 0);
@@ -723,4 +729,75 @@ test('#274 a long default branch name is capped so its fact keeps ", must be mai
   const row = facts.find((fact) => fact.startsWith('FAIL default branch: '));
   assert.ok(row.length <= 200, row);
   assert.match(row, /, must be main$/);
+});
+
+// --- #300 repository rulesets ------------------------------------------------------------------------------------
+
+const RULESETS_KEY = `GET ${TARGET_PATH}/rulesets?includes_parents=false&per_page=100`;
+const LONG_RULESET_NAME = `legacy ${'n'.repeat(93)}`;
+const TARGET_RULESETS = [
+  { id: 1, name: LONG_RULESET_NAME, enforcement: 'active', target: 'branch', source_type: 'Repository' },
+  { id: 2, name: 'release tags', enforcement: 'evaluate', target: 'tag', source_type: 'Repository' },
+  { id: 3, name: 'push guard', enforcement: 'disabled', target: 'push', source_type: 'Repository' },
+];
+const RULESET_NAMES = TARGET_RULESETS.map((ruleset) => ruleset.name);
+const withRulesets = { [RULESETS_KEY]: reply(200, TARGET_RULESETS) };
+const deleteRoutes = Object.fromEntries(TARGET_RULESETS.map(({ id }) => [`DELETE ${TARGET_PATH}/rulesets/${id}`, reply(204)]));
+
+test('#300 AC1 plan lists every repository ruleset with enforcement and target, uncut, from GET calls only', async () => {
+  const { calls, result } = planCall({ overrides: withRulesets });
+  const { facts } = await result;
+  const rows = facts.filter((fact) => fact.startsWith('report rulesets the sync deletes: '));
+  assert.deepEqual(rows, [
+    `report rulesets the sync deletes: "${LONG_RULESET_NAME}" (enforcement active, target branch)`,
+    'report rulesets the sync deletes: "release tags" (enforcement evaluate, target tag)',
+    'report rulesets the sync deletes: "push guard" (enforcement disabled, target push)',
+  ]);
+  for (const row of rows) assert.ok(row.length <= 200, row);
+  assert.deepEqual(calls.filter((call) => !call.startsWith('GET ')), []);
+});
+
+test('#300 AC2 the protected main row names a classic branch protection rule', async () => {
+  const { facts } = await planCall({ gaps: { branch: { protected: true, protection: { enabled: true } } }, overrides: withRulesets }).result;
+  assert.ok(facts.includes('FAIL protected main: set by a classic branch protection rule: delete it in settings/branches'), facts.join('\n'));
+});
+
+test('#300 AC2 the protected main row names the branch rulesets when no classic rule is set', async () => {
+  const { facts } = await planCall({ gaps: { branch: { protected: true, protection: { enabled: false } } }, overrides: withRulesets }).result;
+  const row = facts.find((fact) => fact.startsWith('FAIL protected main: '));
+  assert.equal(row, `FAIL protected main: set by a ruleset: ${LONG_RULESET_NAME}; disable it and name it in replaceRulesets`);
+});
+
+const replaceWorld = (replaceRulesets) => {
+  const world = adoptApplyWorld({ ...withRulesets, ...deleteRoutes });
+  const args = replaceRulesets === undefined ? ADOPT_ARGS : { ...ADOPT_ARGS, replaceRulesets };
+  world.ctx.env.INPUT_ARGS = JSON.stringify(args);
+  return world;
+};
+
+test('#300 AC3 apply with replaceRulesets equal to the live names proceeds and deletes those rulesets', async () => {
+  const world = replaceWorld([...RULESET_NAMES].reverse());
+  const result = await run(world.ctx, world.seams);
+  assert.equal(result.ok, true, result.summary);
+  assert.ok(result.summary.split('\n').includes(`- rulesets named for replacement: ${RULESET_NAMES.join(', ')}`), result.summary);
+  for (const { id } of TARGET_RULESETS) assert.ok(indexOfLine(world, `DELETE ${TARGET_PATH}/rulesets/${id}`) >= 0, String(id));
+});
+
+for (const [name, replaceRulesets, message] of [
+  ['a missing name', RULESET_NAMES.slice(0, 2), /not named: push guard/],
+  ['an extra name', [...RULESET_NAMES, 'gone'], /named but absent: gone/],
+  ['no name list', undefined, /replaceRulesets is missing/],
+]) {
+  test(`#300 AC3 apply with ${name} refuses before any write call, naming the difference`, async () => {
+    const world = replaceWorld(replaceRulesets);
+    await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && message.test(error.message));
+    assert.deepEqual(writesOf(world), []);
+  });
+}
+
+test('#300 AC3 apply without replaceRulesets proceeds on a target with no repository ruleset', async () => {
+  const world = adoptApplyWorld({ [RULESETS_KEY]: reply(200, [{ id: 9, name: 'org rule', enforcement: 'active', target: 'branch', source_type: 'Organization' }]) });
+  const result = await run(world.ctx, world.seams);
+  assert.equal(result.ok, true, result.summary);
+  assert.ok(result.summary.split('\n').includes('- rulesets named for replacement: none'), result.summary);
 });
