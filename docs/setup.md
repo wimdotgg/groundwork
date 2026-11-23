@@ -105,11 +105,11 @@ git add .github/groundwork/config.json .github/CODEOWNERS .release-please-manife
 git diff --cached                 # read it; nothing else may be staged
 git commit -m "chore: set up <org> from groundwork $(git describe --tags --abbrev=0 upstream/main)"
 gh repo create <org>/groundwork --public --source . --remote origin
-git remote get-url --push --all origin   # must print one line: https://github.com/<org>/groundwork.git
+git remote get-url --push --all origin   # must print one line, the <org>/groundwork URL
 git push --set-upstream origin main
 ```
 
-No `--push` on `gh repo create`: the wizard pushes with its own hook-free Git after checking the push URL, and by hand you do the same in two steps. Never `git add -A` or `git commit -a`. The push carries `.github/workflows/`, which GitHub accepts only from a credential with the `workflow` scope: if it is refused for that scope and `gh` is your Git credential helper, run `gh auth refresh -s workflow` and push again. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
+No `--push` on `gh repo create`: the wizard pushes with its own hook-free Git after checking the push URL, and by hand you run the same three commands. Never `git add -A` or `git commit -a`. The push carries `.github/workflows/`, which GitHub accepts only from a credential with the `workflow` scope: if it is refused for that scope and `gh` is your Git credential helper, run `gh auth refresh -s workflow` and push again. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
 
 - Verify: https://github.com/<org>/groundwork shows your commit on `main`, and `main` contains `.github/workflows/admin-run.yml`. Nothing after this works without it.
 

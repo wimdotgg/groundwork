@@ -190,7 +190,7 @@ Under B the wizard does the rest, each write behind its own y/N; it asks the own
 1. `git remote rename origin upstream`.
 2. You write the confirmed `config.json` and `CODEOWNERS` changes and reset the release files: `.release-please-manifest.json` `{}`, `version.txt` `0.0.0`, empty `CHANGELOG.md`. Show `git diff`.
 3. `git add` those five paths and the consent note by name (never `-A`), then `git commit -m "chore: set up <org> from groundwork <tag>"` under their own Git identity, `<tag>` from `git describe --tags --abbrev=0 upstream/main` or the upstream short SHA.
-4. `gh repo create <org>/groundwork --public --source . --remote origin` (no `--push`), then `git remote get-url --push --all origin`, which must print exactly one URL, `https://github.com/<org>/groundwork.git`, then `git push --set-upstream origin main`. A push refused for the `workflow` scope (it carries `.github/workflows/`) needs `gh auth refresh -s workflow` when `gh` is the Git credential helper.
+4. `gh repo create <org>/groundwork --public --source . --remote origin` (no `--push`), then `git remote get-url --push --all origin`, which must print exactly one URL, that of `<org>/groundwork` (HTTPS or SSH), then `git push --set-upstream origin main`. A push refused for the `workflow` scope (it carries `.github/workflows/`) needs `gh auth refresh -s workflow` when `gh` is the Git credential helper.
 
 - Verify: https://github.com/<org>/groundwork shows the commit, with the consent note under `docs/runs/`.
 
