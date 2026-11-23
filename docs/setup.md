@@ -10,7 +10,7 @@ Placeholders: `<org>` your organization, `<owner>` your login (lower-case), `<ap
 
 ## Part 1: once per organization
 
-Each step has an ID and a class. **browser**: you, on a GitHub page; the skill or wizard only opens it. **wizard**: the owner wizard under answer B; under answer A you do it by hand as written. **app**: the agent requests an `admin` run and you approve it in the browser. `setup-state.json` records the answer and each step's status; it is a record, not a control. On Windows it lives in `%APPDATA%\groundwork\`; on macOS and Linux set `GROUNDWORK_SETUP_STATE_FILE` to its path, or the skill and wizard stop (the variable also wins on Windows). Billing, org ownership, deletions, key rotation and `admin` approvals stay in the browser under either answer. Consent ends when the last step is done.
+Each step has an ID and a class. **browser**: you, on a GitHub page; the skill or wizard only opens it. **wizard**: the owner wizard under answer B; under answer A you do it by hand as written. **app**: the agent requests an `admin` run and you approve it in the browser. `setup-state.json` records the answer and each step's status; it is a record, not a control. On Windows it lives in `%APPDATA%\groundwork\`; on macOS and Linux set `GROUNDWORK_SETUP_STATE_FILE` to its path, or the skill and wizard stop (the variable also wins on Windows). Billing, org ownership, deletions, key rotation and `admin` approvals stay in the browser under either answer. Consent ends when the last step is done. The wizard builds every `wizard` and `browser` step except `org-team-agents` and `release-merge`: it stops at those with "not in this wizard version", the skill walks them with you and marks them, and you rerun the wizard.
 
 ### Consent note
 
@@ -24,7 +24,7 @@ The skill writes it into your clone right after you answer. By hand, create `doc
 - Classes: <[] for A, [wizard] for B>
 - Always excluded: billing, org ownership, deletions, agent App key rotation, admin environment approvals
 - Ends: when release-merge is done
-- setup-state.json schema version: 1
+- setup-state.json schemaVersion: 1
 ```
 
 ### `org-create` · browser
@@ -104,10 +104,12 @@ Then, in either shell:
 git add .github/groundwork/config.json .github/CODEOWNERS .release-please-manifest.json version.txt CHANGELOG.md docs/runs/<YYYY-MM-DD>-setup-consent.md
 git diff --cached                 # read it; nothing else may be staged
 git commit -m "chore: set up <org> from groundwork $(git describe --tags --abbrev=0 upstream/main)"
-gh repo create <org>/groundwork --public --source . --remote origin --push
+gh repo create <org>/groundwork --public --source . --remote origin
+git remote get-url --push --all origin   # must print one line: https://github.com/<org>/groundwork.git
+git push --set-upstream origin main
 ```
 
-Never `git add -A` or `git commit -a`. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
+No `--push` on `gh repo create`: the wizard pushes with its own hook-free Git after checking the push URL, and by hand you do the same in two steps. Never `git add -A` or `git commit -a`. The push carries `.github/workflows/`, which GitHub accepts only from a credential with the `workflow` scope: if it is refused for that scope and `gh` is your Git credential helper, run `gh auth refresh -s workflow` and push again. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
 
 - Verify: https://github.com/<org>/groundwork shows your commit on `main`, and `main` contains `.github/workflows/admin-run.yml`. Nothing after this works without it.
 
@@ -198,7 +200,7 @@ The agent runs `node scripts/agent/token.mjs exec -- gh workflow run release-ple
 
 ## Part 2: each project
 
-Pass 1, the probe and pass 2 run through `request.mjs`; every `admin` run waits for your approval in the browser. The path is spec 14.2.
+Pass 1, the probe and pass 2 run through `request.mjs`; every `admin` run waits for your approval in the browser. The path is spec 14.2. To turn a repository you already have into a project in place, follow [adopt.md](adopt.md) for pass 1, then continue here at step 2.
 
 1. Agent runs `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs bootstrap --repo <name> --args '{"description":"..."}'`. You open the run URL, read the plan, approve. Pass 1 creates the repo, creates the labels, pushes a single `chore: bootstrap from groundwork vX.Y.Z` commit (reusable workflows pinned to the tag's commit SHA), applies settings, team access, environments and security settings, applies rulesets last, sets `GROUNDWORK_READY`, opens the "Project setup" epic (unaccepted), runs a final labels pass and ends with `check`. GitHub's default labels are gone afterwards.
 2. Agent runs `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs probe --repo <name>`. No approval. The push to `main` must be rejected (`"protected": true`, status 409 or 422).
