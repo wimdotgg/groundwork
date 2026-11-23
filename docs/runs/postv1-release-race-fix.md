@@ -1,6 +1,6 @@
 # Release-please race with the merge queue
 
-Issue #238, epic #242. Session 796c62d1-7b1a-489c-a7aa-2be0a912db7f, `sonnet/claude-code`. Fix: `.github/workflows/release-please.yml`; trigger documented in spec 11 and 8.5. The live proof is #243.
+Issue #238, epic #242. Session 796c62d1-7b1a-489c-a7aa-2be0a912db7f, `sonnet/claude-code`. Fix: `.github/workflows/release-please.yml`; trigger documented in spec 11 and 8.5. The live proof is the v0.10.1 release on `groundwork` itself; #243 was dropped (#242 Decisions, 2026-11-23).
 
 Correction (#247, session c1c8b9d9-cdf7-4a9b-aece-6d95192469a4, `sonnet/claude-code`): the first version of the fix failed on its own merge. See "Live failure and correction"; the trace and the `GITHUB_REF` claims below it were wrong for a merged close and are marked.
 
@@ -83,7 +83,7 @@ Unknowns:
 
 ## Not proven here
 
-No workflow test harness exists, so the trigger conditions rest on the config diff and this trace. #243 proves it live on a repository with the merge queue, and must check each of these:
+No workflow test harness exists, so the trigger conditions rest on the config diff and this trace. The live proof moved from #243 (dropped, #242 Decisions 2026-11-23) to the v0.10.1 release on `groundwork`, which has the merge queue. Items 1 and 2 are proven there: the closed run 45121171745 on the merge of #248 dispatched run 45121179765 (both `success`), and the closed run 45121694658 on the merge of release PR #246 dispatched run 45121710649 on `main` (both `success`, the `release` environment admitted it), which produced the v0.10.1 release (tag on `03ed897`, run 45121710649 started 06:04:28Z, release published 06:04:40Z by `wimdotgg-release[bot]`) with no release PR open afterwards. Item 4 stays unobserved. The checks were:
 
 1. The first merged same-repository PR close builds or updates the release PR.
 2. Merging a release PR through the merge queue yields tag and release with no stray release PR: the closed run dispatches, and the dispatched run on `refs/heads/main` is admitted by the `release` environment.

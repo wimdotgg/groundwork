@@ -1,6 +1,6 @@
 # Phase 5 G4 blocked PRs run 2026-11-22
 
-Issue #221, epic #169. Session 5fc603c8-f02e-4568-99c0-ed169bca1ac1, `sonnet/claude-code`. Target: `wimdotgg/gw-acceptance` (live, `main` at the bootstrap and setup state of [the setup note](2026-11-22-phase5-setup-pass2.md)). Three branches and three PRs were made outside `claim.mjs`, each enqueued with `gh pr merge --auto --squash`, then closed unmerged after the evidence was captured. The owner withheld approval on the CODEOWNERS case and did nothing else.
+Issue #221, epic #169. Session 5fc603c8-f02e-4568-99c0-ed169bca1ac1, `sonnet/claude-code`. Target: `gw-acceptance` (owner `wimdotgg`; live, `main` at the bootstrap and setup state of [the setup note](2026-11-22-phase5-setup-pass2.md)). Three branches and three PRs were made outside `claim.mjs`, each enqueued with `gh pr merge --auto --squash`, then closed unmerged after the evidence was captured. The owner withheld approval on the CODEOWNERS case and did nothing else. `gw-acceptance` is deleted by the owner once epic #242 closes (#242 Decisions), so this note is the record: every reference to it is a name, number, run ID or quoted value, not a link.
 
 ## Setup
 
@@ -8,15 +8,15 @@ Each PR closes its own probe issue. The probes add one file each, away from `src
 
 | Case | Issue | Branch, commit | PR | File |
 |---|---|---|---|---|
-| AC1 | [#19](https://github.com/wimdotgg/gw-acceptance/issues/19), Chore, child of the closed accepted setup epic #1 | `issue/19`, `bf1c99f` | [#22](https://github.com/wimdotgg/gw-acceptance/pull/22) | `.github/g4-protected-path-probe.md` (`/.github/` is in CODEOWNERS for `@wianvdm`) |
-| AC2 | [#20](https://github.com/wimdotgg/gw-acceptance/issues/20), Chore, no parent | `issue/20`, `fd122ab` | [#23](https://github.com/wimdotgg/gw-acceptance/pull/23) | `docs/g4-no-accepted-epic-probe.md` |
-| AC3 | [#21](https://github.com/wimdotgg/gw-acceptance/issues/21), Chore, child of #1, AC1 and AC2 | `issue/21`, `e154fda` | [#24](https://github.com/wimdotgg/gw-acceptance/pull/24) | `docs/g4-unmapped-ac-probe.md` |
+| AC1 | gw-acceptance#19, Chore, child of the closed accepted setup epic #1 | `issue/19`, `bf1c99f` | gw-acceptance#22 | `.github/g4-protected-path-probe.md` (`/.github/` is in CODEOWNERS for `@wianvdm`) |
+| AC2 | gw-acceptance#20, Chore, no parent | `issue/20`, `fd122ab` | gw-acceptance#23 | `docs/g4-no-accepted-epic-probe.md` |
+| AC3 | gw-acceptance#21, Chore, child of #1, AC1 and AC2 | `issue/21`, `e154fda` | gw-acceptance#24 | `docs/g4-unmapped-ac-probe.md` |
 
-The PRs, branches and issues were created at 14:13 to 14:16Z. Auto-merge was enabled at 14:16:08Z (#22), 14:16:15Z (#23) and 14:16:20Z (#24). No `gw-acceptance` epic was open and accepted: the G3 epic [#13](https://github.com/wimdotgg/gw-acceptance/issues/13) was not accepted yet. `PR metadata` reads the `accepted` label on any ancestor epic and not its open state, so the closed setup epic served as accepted ancestor for AC1 and AC3.
+The PRs, branches and issues were created at 14:13 to 14:16Z. Auto-merge was enabled at 14:16:08Z (#22), 14:16:15Z (#23) and 14:16:20Z (#24). No `gw-acceptance` epic was open and accepted: the G3 epic gw-acceptance#13 was not accepted yet. `PR metadata` reads the `accepted` label on any ancestor epic and not its open state, so the closed setup epic served as accepted ancestor for AC1 and AC3.
 
 ## AC1: protected path, owner approval withheld
 
-[PR #22](https://github.com/wimdotgg/gw-acceptance/pull/22) changes a CODEOWNERS path. Required checks all green: [PR metadata](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031866238/job/137236994695), [Check](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031866504/job/137237077225) and [pr-size](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031866238/job/137236994838). The other 12 checks, including CodeQL, passed. The code owner `wianvdm` was requested as reviewer; no review was submitted.
+gw-acceptance PR #22 changes a CODEOWNERS path. Required checks all green: PR metadata (gw-acceptance run 45031866238, job 137236994695), Check (gw-acceptance run 45031866504, job 137237077225) and pr-size (gw-acceptance run 45031866238, job 137236994838). The other 12 checks, including CodeQL, passed. The code owner `wianvdm` was requested as reviewer; no review was submitted.
 
 Captured at about 14:31Z, 15 minutes after enqueue, before closing:
 
@@ -35,7 +35,7 @@ Reading: with every check green, the only unmet gate is the code-owner review, a
 
 ## AC2: no accepted ancestor epic
 
-[PR #23](https://github.com/wimdotgg/gw-acceptance/pull/23): check run [PR metadata](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031874518/job/137237020882) FAILURE. The workflow writes its errors to the step summary. The API and `gh run view` expose only the annotation "Process completed with exit code 1" (check run `output.title` and `summary` are null), and the step summary page was not read. The text below comes from re-running the validator locally against the PR's event payload:
+gw-acceptance PR #23: check run PR metadata (gw-acceptance run 45031874518, job 137237020882) FAILURE. The workflow writes its errors to the step summary. The API and `gh run view` expose only the annotation "Process completed with exit code 1" (check run `output.title` and `summary` are null), and the step summary page was not read. The text below comes from re-running the validator locally against the PR's event payload:
 
 ```
 Conclusion: **fail**
@@ -46,7 +46,7 @@ Conclusion: **fail**
 
 ## AC3: AC without an evidence row
 
-[PR #24](https://github.com/wimdotgg/gw-acceptance/pull/24): check run [PR metadata](https://github.com/wimdotgg/gw-acceptance/actions/runs/45031882938/job/137237047084) FAILURE, same exposure as #23. The text below comes from the same local re-run against this PR's event payload:
+gw-acceptance PR #24: check run PR metadata (gw-acceptance run 45031882938, job 137237047084) FAILURE, same exposure as #23. The text below comes from the same local re-run against this PR's event payload:
 
 ```
 Conclusion: **fail**

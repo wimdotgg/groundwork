@@ -1,6 +1,6 @@
 # Phase 5 bootstrap run 2026-11-22
 
-Issue #217, epic #169. Session 64f1702a-d9ac-4e9e-a6bc-cfef09005dd0, `sonnet/claude-code`, Node 24.22.3 on Windows. Target: `wimdotgg/gw-acceptance`, created from `groundwork` v0.9.0.
+Issue #217, epic #169. Session 64f1702a-d9ac-4e9e-a6bc-cfef09005dd0, `sonnet/claude-code`, Node 24.22.3 on Windows. Target: `gw-acceptance` (owner `wimdotgg`), created from `groundwork` v0.9.0. `gw-acceptance` is deleted by the owner once epic #242 closes (#242 Decisions), so this note is the record: every reference to it is a name, number, run ID or quoted value, not a link. `{owner}` in a path or quoted output stands for `wimdotgg`.
 
 ## Release (AC5)
 
@@ -13,14 +13,14 @@ exit 0
 
 ## Bootstrap run (AC1, AC2)
 
-Request: `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs bootstrap --repo gw-acceptance --args '{"description":"groundwork acceptance project: small Node stack, deploy none (throwaway)"}'`, dispatched 2026-11-22T11:45:01Z. Before it, `GET /repos/wimdotgg/gw-acceptance` returned 404.
+Request: `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs bootstrap --repo gw-acceptance --args '{"description":"groundwork acceptance project: small Node stack, deploy none (throwaway)"}'`, dispatched 2026-11-22T11:45:01Z. Before it, `GET /repos/{owner}/gw-acceptance` returned 404.
 
-Run: [groundwork run 45018831414](https://github.com/wimdotgg/groundwork/actions/runs/45018831414), `plan` and `apply` both success, finished 11:52:20Z. The only bootstrap request. Bootstrap commit on `gw-acceptance` `main` is `5b949fe` `chore: bootstrap from groundwork v0.9.0`; the setup epic is [gw-acceptance#1](https://github.com/wimdotgg/gw-acceptance/issues/1) with 6 sub-issues (7 issues in all).
+Run: [groundwork run 45018831414](https://github.com/wimdotgg/groundwork/actions/runs/45018831414), `plan` and `apply` both success, finished 11:52:20Z. The only bootstrap request. Bootstrap commit on `gw-acceptance` `main` is `5b949fe` `chore: bootstrap from groundwork v0.9.0`; the setup epic is gw-acceptance#1 with 6 sub-issues (7 issues in all).
 
 Closing `check`, from the `apply` log:
 
 ```
-check wimdotgg/gw-acceptance: 83 rows, all match or deferred
+check {owner}/gw-acceptance: 83 rows, all match or deferred
 match: 80, differ: 0, missing: 0, extra: 0, unreadable: 0, deferred: 3
 ```
 
@@ -32,7 +32,7 @@ One: the owner login `wianvdm` approved the pending `admin` deployment of run 45
 
 ## Config (AC4)
 
-`GET /repos/wimdotgg/gw-acceptance/contents/.github/groundwork/config.json` on `main` declares `"deploy": "none"`. `.github/groundwork/kit-version.txt` reads `v0.9.0`.
+`GET /repos/{owner}/gw-acceptance/contents/.github/groundwork/config.json` on `main` declares `"deploy": "none"`. `.github/groundwork/kit-version.txt` reads `v0.9.0`.
 
 The small Node stack is not in the bootstrap output: the stub `scripts/verify` stays until the setup tasks (next task).
 
