@@ -326,8 +326,9 @@ async function planDetails({ createClient: makeClient, env, config, request }) {
   }
 }
 
+/** Facts may carry target text (label, tag, path names), so each is an inert code span. */
 function renderPlanDetails({ facts = [], source }) {
-  const lines = facts.map((fact) => `- ${safeText(fact)}`);
+  const lines = facts.map((fact) => `- ${inCodeSpan(fact)}`);
   if (source === undefined) return lines.length === 0 ? [] : [...lines, ''];
   return [...lines, '', fencedBlock(source, 'js'), ''];
 }

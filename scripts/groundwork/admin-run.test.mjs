@@ -320,12 +320,12 @@ test('plan: an op plan hook gets the config and its facts render without a sourc
   const received = [];
   registry.check.plan = async ({ config }) => {
     received.push(config);
-    return { facts: ['FAIL archived: yes', 'report v* tags: `v1` <b>'] };
+    return { facts: ['FAIL archived: yes', 'report labels the sync deletes: [approve](https://example.test) `v1` <b>'] };
   };
   const result = await plan(dispatchEnv(), { ...planOverrides({}), registry });
   assert.equal(result.exitCode, 0);
   assert.equal(received[0].controlRepo, CONTROL_REPO);
-  assert.ok(result.summary.includes("\n- FAIL archived: yes\n- report v* tags: 'v1' 'b'\n"), result.summary);
+  assert.ok(result.summary.includes("\n- `FAIL archived: yes`\n- `report labels the sync deletes: [approve](https://example.test) 'v1' 'b'`\n"), result.summary);
   assert.doesNotMatch(result.summary, /```js\n/);
 });
 
@@ -1292,7 +1292,7 @@ test('plan: script prints the file, its SHA-256 and permissions, and publishes t
   const result = await plan(dispatchEnv(SCRIPT_ENV), { ...planOverrides(scriptRoutes()), registry: REGISTRY });
   assert.equal(result.exitCode, 0, result.reason);
   assert.deepEqual(result.outputs, { script_sha256: SCRIPT_SHA256 });
-  for (const text of [SCRIPT_SOURCE, `- SHA-256: ${SCRIPT_SHA256}`, `- Script: ${SCRIPT_FILE}`, '| issues | read |', 'Token grant, `proj`, exactly:']) assert.ok(result.summary.includes(text), text);
+  for (const text of [SCRIPT_SOURCE, `- \`SHA-256: ${SCRIPT_SHA256}\``, `- \`Script: ${SCRIPT_FILE}\``, '| issues | read |', 'Token grant, `proj`, exactly:']) assert.ok(result.summary.includes(text), text);
 });
 
 test('plan: script refuses a ref that is not the main head and a file without permissions', async () => {

@@ -457,13 +457,15 @@ const PROJECT_TREE = [
 /** A readable foreign target with no gap unless a field says otherwise. */
 function foreignRoutes({ repository = {}, empty = false, branch = { protected: false }, tree = { truncated: false, tree: PROJECT_TREE } } = {}) {
   const defaultBranch = repository.default_branch ?? 'main';
+  const head = `head-${defaultBranch}`;
   const commits = empty ? reply(409, { message: 'Git Repository is empty.' }) : reply(200, [{ sha: 'c0', author: { login: 'someone' } }]);
   return {
     [`GET ${TARGET_PATH}`]: reply(200, { default_branch: 'main', archived: false, ...repository }),
     [`GET ${TARGET_PATH}/commits?per_page=2`]: commits,
     [`GET ${TARGET_PATH}/commits?per_page=1`]: commits,
     [`GET ${TARGET_PATH}/branches/main`]: reply(200, branch),
-    [`GET ${TARGET_PATH}/git/trees/${defaultBranch}?recursive=1`]: reply(200, tree),
+    [`GET ${TARGET_PATH}/git/ref/heads/${defaultBranch}`]: reply(200, { object: { sha: head } }),
+    [`GET ${TARGET_PATH}/git/trees/${head}?recursive=1`]: reply(200, tree),
     [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, [{ name: 'bug' }, { name: 'Accepted' }]),
     [`GET ${TARGET_PATH}/git/matching-refs/tags/v?per_page=100`]: reply(200, [{ ref: 'refs/tags/v1.0.0' }]),
     [`GET ${TARGET_PATH}/environments?per_page=100`]: reply(200, { total_count: 1, environments: [{ name: 'production' }] }),
@@ -482,13 +484,19 @@ function planCall({ state = 'foreign', gaps, args = ADOPT_ARGS } = {}) {
 }
 
 const COLLIDING_TREE = { truncated: false, tree: [blob('.github/dependabot.yml', 'project-dependabot'), blob('version.txt', 'project-version')] };
+const projectTree = (...entries) => ({ truncated: false, tree: entries });
+/** [case, gaps, row name, row detail]: every case is one failing row. */
 const GAPS = [
-  ['default branch', { repository: { default_branch: 'master' } }, /default branch: master/],
-  ['empty repository', { empty: true }, /empty repository: yes/],
-  ['archived', { repository: { archived: true } }, /archived: yes/],
-  ['protected main', { branch: { protected: true } }, /protected main: set/],
-  ['collision', { tree: COLLIDING_TREE }, /collisions: \.github\/dependabot\.yml, version\.txt/],
-  ['truncated target tree', { tree: { truncated: true, tree: [] } }, /collisions: target tree is truncated/],
+  ['default branch', { repository: { default_branch: 'master' } }, 'default branch', /default branch: master/],
+  ['empty repository', { empty: true }, 'empty repository', /empty repository: yes/],
+  ['archived', { repository: { archived: true } }, 'archived', /archived: yes/],
+  ['protected main', { branch: { protected: true } }, 'protected main', /protected main: set/],
+  ['collision', { tree: COLLIDING_TREE }, 'collisions', /collisions: \.github\/dependabot\.yml, version\.txt/],
+  ['directory at a kit file', { tree: projectTree({ path: 'scripts/verify', type: 'tree', sha: 't1' }, blob('scripts/verify/run.sh', 'p1')) }, 'collisions', /collisions: scripts\/verify is a tree/],
+  ['file at a kit directory', { tree: projectTree(blob('docs', 'p1')) }, 'collisions', /collisions: docs is a blob/],
+  ['submodule at a kit path', { tree: projectTree({ path: 'README.md', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: README\.md is a commit/],
+  ['truncated target tree', { tree: { truncated: true, tree: [] } }, 'collisions', /collisions: target tree is truncated/],
+  ['tree response without a tree list', { tree: { truncated: false } }, 'collisions', /collisions: target tree response has no tree list/],
 ];
 
 test('AC2 plan without the opt-in makes no call and adds nothing', async () => {
@@ -502,7 +510,7 @@ test('AC2 plan lists every failing and reported row of a foreign target from GET
   const { facts, problem } = await result;
   assert.equal(problem, undefined);
   assert.match(facts[0], /0 failing row\(s\)/);
-  assert.match(facts[0], /no write/);
+  assert.match(facts[0], /if the target is still foreign when apply runs, apply stops after the preflight with no write/);
   const rows = ['ok default branch: main', 'ok empty repository: no', 'ok archived: no', 'ok protected main: not set', 'ok collisions: none',
     'report labels the sync deletes: bug', 'report v* tags: v1.0.0', 'report environments: production', 'report open issues failing issue-format: 1',
     'report secrets: not read; check them in the browser', 'report merge settings: not read; pass 1 sets squash-only'];
@@ -511,7 +519,7 @@ test('AC2 plan lists every failing and reported row of a foreign target from GET
   assert.deepEqual(calls.filter((call) => !call.startsWith('GET ')), []);
 });
 
-for (const [name, gaps, row] of GAPS) {
+for (const [name, gaps, rowName, row] of GAPS) {
   test(`AC2 plan marks a ${name} as a failing row and still lists the reported rows`, async () => {
     const { facts } = await planCall({ gaps }).result;
     assert.match(facts[0], /[1-9] failing row\(s\); apply stops before any write/);
@@ -521,7 +529,8 @@ for (const [name, gaps, row] of GAPS) {
 
   test(`AC3 apply with a ${name} names the row and stops before any write call or target grant`, async () => {
     const world = adoptWorld(gaps);
-    await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /adopt preflight failed/.test(error.message) && row.test(error.message));
+    await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && error.message === `adopt preflight failed: ${rowName}`);
+    assert.ok(world.logs.some((line) => line.startsWith('FAIL ') && row.test(line)), world.logs.join('\n'));
     assert.deepEqual(writesOf(world), []);
     assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
   });
@@ -543,9 +552,10 @@ test('AC4 apply with the opt-in and no failing row ends after the preflight with
 
 test('adopt on an absent or fresh target is refused in plan and in apply before any write', async () => {
   for (const state of ['absent', 'fresh']) {
-    assert.match((await planCall({ state }).result).problem, new RegExp(`is ${state}, nothing to adopt`));
+    const message = new RegExp(`is ${state === 'absent' ? 'absent or private \\(these tokens read public data only\\)' : state}, nothing to adopt`);
+    assert.match((await planCall({ state }).result).problem, message);
     const world = adoptWorld(undefined, state);
-    await assert.rejects(run(world.ctx, world.seams), new RegExp(`is ${state}, nothing to adopt`));
+    await assert.rejects(run(world.ctx, world.seams), message);
     assert.deepEqual(writesOf(world), []);
     assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
   }
@@ -556,4 +566,31 @@ test('adopt on an ours target resumes as usual', async () => {
   assert.deepEqual((await result).facts, ['Adopt: the target is a groundwork project, so bootstrap resumes as usual']);
   const world = adoptWorld(undefined, 'ours');
   assert.equal((await run(world.ctx, world.seams)).ok, true);
+});
+
+test('AC4 the preflight reads the tree by the head commit SHA and apply reports that SHA', async () => {
+  const world = adoptWorld();
+  const { summary } = await run(world.ctx, world.seams);
+  assert.ok(world.calls.some((call) => call.path === `${TARGET_PATH}/git/trees/head-main`));
+  assert.ok(summary.split('\n').includes('- target head: head-main'));
+});
+
+test('AC2 a long row keeps its count within the rendered fact length', async () => {
+  const labels = Array.from({ length: 30 }, (_, index) => ({ name: `project-label-number-${index}` }));
+  const client = createFixtureClient({
+    ...targetRoutes('foreign', ADOPT_FILES), ...controlRoutes(ADOPT_FILES), ...foreignRoutes(), [`GET ${TARGET_PATH}/labels?per_page=100`]: reply(200, labels),
+  });
+  const { facts } = await plan({ client, org: ORG, controlRepo: CONTROL, request: { op: OP, targetRepo: REPO, args: ADOPT_ARGS }, config: CONFIG });
+  const row = facts.find((fact) => fact.startsWith('report labels the sync deletes: '));
+  assert.ok(row.length <= 200, row);
+  assert.match(row, / and \d+ more$/);
+});
+
+test('plan turns a broken release tree into a problem instead of a crash', async () => {
+  const files = { ...ADOPT_FILES };
+  delete files['.github/groundwork/labels.json'];
+  const routes = { ...targetRoutes('foreign', files), ...controlRoutes(files), ...foreignRoutes() };
+  const client = createFixtureClient(routes);
+  const { problem } = await plan({ client, org: ORG, controlRepo: CONTROL, request: { op: OP, targetRepo: REPO, args: ADOPT_ARGS }, config: CONFIG });
+  assert.match(problem, /labels\.json/);
 });

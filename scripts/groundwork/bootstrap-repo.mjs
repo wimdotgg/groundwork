@@ -217,7 +217,8 @@ export async function commitBootstrapTree({ client, org, repo, tag, treeEntries,
 
 // Spec 14.4: the project's README and LICENSE are kept and kit lines are appended to its CODEOWNERS.
 const ADOPT_KEPT_PATHS = new Set(['README.md', 'LICENSE', '.github/CODEOWNERS']);
-const LIST_LIMIT = 10;
+// admin-run cuts a plan fact at 200 characters; this budget leaves room for the row name and the count.
+const LIST_BUDGET = 120;
 const NOT_CHECKED_EMPTY = 'not checked: empty repository';
 
 /** @typedef {{ name: string, fail: boolean, detail: string }} GapRow */
@@ -226,8 +227,11 @@ const gapRow = (name, fail, detail) => ({ name, fail, detail });
 
 function listNames(names) {
   if (names.length === 0) return 'none';
-  const shown = names.slice(0, LIST_LIMIT).join(', ');
-  return names.length > LIST_LIMIT ? `${shown} and ${names.length - LIST_LIMIT} more` : shown;
+  let shown = 0;
+  while (shown < names.length && names.slice(0, shown + 1).join(', ').length <= LIST_BUDGET) shown += 1;
+  const listed = names.slice(0, shown).join(', ');
+  if (shown === names.length) return listed;
+  return `${listed}${shown > 0 ? ' ' : ''}and ${names.length - shown} more`;
 }
 
 function gitBlobSha(text) {
@@ -241,22 +245,41 @@ async function readMainProtection({ client, org, repo }) {
   return gapRow('protected main', isProtected, isProtected ? 'set; rulesets replace it, delete the branch protection rule in the browser' : 'not set');
 }
 
+const ancestorsOf = (path) => path.split('/').slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join('/'));
+
+/** A kit path collides when the target holds it as a non-blob, holds an ancestor as a non-tree, or holds other content. */
+function collisionsOf(kitEntries, targetByPath) {
+  const collisions = new Set();
+  for (const entry of kitEntries) {
+    for (const ancestor of ancestorsOf(entry.path)) {
+      const type = targetByPath.get(ancestor)?.type;
+      if (type !== undefined && type !== 'tree') collisions.add(`${ancestor} is a ${type}`);
+    }
+    const target = targetByPath.get(entry.path);
+    if (target === undefined) continue;
+    if (target.type !== 'blob') collisions.add(`${entry.path} is a ${target.type}`);
+    else if (!ADOPT_KEPT_PATHS.has(entry.path) && target.sha !== (entry.content === undefined ? entry.sha : gitBlobSha(entry.content))) collisions.add(entry.path);
+  }
+  return [...collisions];
+}
+
+/** Reads the tree by the head commit SHA, so a tag named like the branch cannot answer and the kit merge can reuse the SHA. */
 async function readCollisions({ client, org, repo, branch, kitEntries }) {
-  const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(branch)}`), { query: { recursive: 1 } });
-  if (data?.truncated) return gapRow('collisions', true, 'target tree is truncated, so it cannot be compared');
-  const targetShas = new Map((data?.tree ?? []).filter((entry) => entry.type === 'blob').map((entry) => [entry.path, entry.sha]));
-  const collisions = kitEntries
-    .filter((entry) => !ADOPT_KEPT_PATHS.has(entry.path) && targetShas.has(entry.path))
-    .filter((entry) => targetShas.get(entry.path) !== (entry.content === undefined ? entry.sha : gitBlobSha(entry.content)))
-    .map((entry) => entry.path);
-  return gapRow('collisions', collisions.length > 0, listNames(collisions));
+  const { data: ref } = await client.request('GET', repoPath(org, repo, `/git/ref/heads/${encodeURIComponent(branch)}`));
+  const headSha = ref?.object?.sha;
+  if (typeof headSha !== 'string') return { row: gapRow('collisions', true, `heads/${branch} has no commit SHA`) };
+  const { data } = await client.request('GET', repoPath(org, repo, `/git/trees/${encodeURIComponent(headSha)}`), { query: { recursive: 1 } });
+  if (data?.truncated) return { row: gapRow('collisions', true, 'target tree is truncated, so it cannot be compared'), headSha };
+  if (!Array.isArray(data?.tree)) return { row: gapRow('collisions', true, 'target tree response has no tree list'), headSha };
+  const collisions = collisionsOf(kitEntries, new Map(data.tree.map((entry) => [entry.path, entry])));
+  return { row: gapRow('collisions', collisions.length > 0, listNames(collisions)), headSha };
 }
 
 /**
  * The failing rows of spec 14.4, from GET calls only.
  * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string,
  *   kitEntries: Array<{ path: string, sha?: string, content?: string }> }} options `kitEntries` is the built kit tree
- * @returns {Promise<{ rows: GapRow[], empty: boolean }>}
+ * @returns {Promise<{ rows: GapRow[], empty: boolean, headSha?: string }>} `headSha` is the commit the collisions were read at
  */
 export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
   const { data: repository } = await client.request('GET', repoPath(org, repo, ''));
@@ -269,8 +292,9 @@ export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
     gapRow('archived', repository.archived === true, repository.archived === true ? 'yes' : 'no'),
   ];
   if (empty) return { rows: [...rows, gapRow('protected main', false, NOT_CHECKED_EMPTY), gapRow('collisions', false, NOT_CHECKED_EMPTY)], empty };
-  rows.push(await readMainProtection({ client, org, repo }), await readCollisions({ client, org, repo, branch, kitEntries }));
-  return { rows, empty };
+  rows.push(await readMainProtection({ client, org, repo }));
+  const { row, headSha } = await readCollisions({ client, org, repo, branch, kitEntries });
+  return { rows: [...rows, row], empty, headSha };
 }
 
 /**

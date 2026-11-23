@@ -79,7 +79,8 @@ function setupTemplateFiles(contents) {
 
 /** @returns {string|undefined} why the target state rules the run out */
 function refusal(state, { org, repo, adopt }) {
-  if (adopt && NOTHING_TO_ADOPT.has(state)) return `adopt: ${org}/${repo} is ${state}, nothing to adopt`;
+  // Both bootstrap tokens read public data only, so a private repository inspects as absent.
+  if (adopt && NOTHING_TO_ADOPT.has(state)) return `adopt: ${org}/${repo} is ${state === 'absent' ? 'absent or private (these tokens read public data only)' : state}, nothing to adopt`;
   if (state === 'foreign' && !adopt) return `${org}/${repo} exists and is neither a groundwork project nor a fresh auto_init repository`;
   return undefined;
 }
@@ -105,7 +106,10 @@ async function readSource({ client, org, controlRepo, repo, args, adminBot }) {
     : await latestReleaseTag({ client, org, controlRepo });
   const { treeEntries, contents } = await readKit({ client, org, controlRepo, repo, description, tag });
   // Spec 14.4: apply repeats the failing rows before any write; an adopted repository never gets the full-tree commit.
-  if (state === 'foreign') return { state, tag, gaps: (await readAdoptionGaps({ client, org, repo, kitEntries: treeEntries })).rows };
+  if (state === 'foreign') {
+    const { rows, headSha } = await readAdoptionGaps({ client, org, repo, kitEntries: treeEntries });
+    return { state, tag, gaps: rows, headSha };
+  }
   const templates = parseSetupTemplates(setupTemplateFiles(contents), { org, repo, description });
   // An `ours` repository already holds the commit, which reads no blob.
   const blobs = state === 'ours' ? new Map() : await readBlobContents({ client, org, controlRepo, entries: treeEntries });
@@ -115,10 +119,15 @@ async function readSource({ client, org, controlRepo, repo, args, adminBot }) {
 const gapLine = ({ name, fail, detail }) => `${fail ? 'FAIL' : 'ok'} ${name}: ${detail}`;
 
 /** Until the kit merge ships, an adopt run ends here: it refuses on a failing row and otherwise stops without a write. */
-function stopAfterPreflight(heading, source) {
+function stopAfterPreflight({ heading, source, log }) {
+  // One log line per row: the error names the failing rows, the log keeps each row's detail whole.
+  for (const row of source.gaps) log(gapLine(row));
   const failing = source.gaps.filter((row) => row.fail);
-  if (failing.length > 0) throw new SettingsError(`adopt preflight failed: ${failing.map(gapLine).join('; ')}`);
-  const lines = ['- inspect: foreign', `- release tag: ${source.tag}`, ...source.gaps.map((row) => `- ${gapLine(row)}`), `- ${STOPPED_AFTER_PREFLIGHT}`];
+  if (failing.length > 0) throw new SettingsError(`adopt preflight failed: ${failing.map((row) => row.name).join(', ')}`);
+  const lines = [
+    '- inspect: foreign', `- release tag: ${source.tag}`, `- target head: ${source.headSha}`,
+    ...source.gaps.map((row) => `- ${gapLine(row)}`), `- ${STOPPED_AFTER_PREFLIGHT}`,
+  ];
   return { ok: false, summary: [heading, '', ...lines].join('\n') };
 }
 
@@ -130,8 +139,27 @@ function stopAfterPreflight(heading, source) {
  * @returns {Promise<{ facts?: string[], problem?: string }>}
  */
 export async function plan({ client, org, controlRepo, request, config }) {
+  if (request.args.adopt !== true) return {};
+  try {
+    return await adoptionPlan({ client, org, controlRepo, request, config });
+  } catch (error) {
+    if (!(error instanceof SettingsError)) throw error;
+    return { problem: error.message };
+  }
+}
+
+function kitLabelNames(kit) {
+  const text = settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH];
+  if (text === undefined) throw new SettingsError(`the release tree has no ${LABELS_PATH}`);
+  try {
+    return JSON.parse(text).labels.map((label) => label.name);
+  } catch {
+    throw new SettingsError(`${LABELS_PATH} in the release tree is not a label list`);
+  }
+}
+
+async function adoptionPlan({ client, org, controlRepo, request, config }) {
   const { targetRepo: repo, args } = request;
-  if (args.adopt !== true) return {};
   const state = await inspectRepo({ client, org, repo, adminBot: `${config.apps.admin}[bot]` });
   if (state === 'ours') return { facts: ['Adopt: the target is a groundwork project, so bootstrap resumes as usual'] };
   const refused = refusal(state, { org, repo, adopt: true });
@@ -139,10 +167,11 @@ export async function plan({ client, org, controlRepo, request, config }) {
   const tag = await latestReleaseTag({ client, org, controlRepo });
   const kit = await readKit({ client, org, controlRepo, repo, description: args.description, tag });
   const { rows, empty } = await readAdoptionGaps({ client, org, repo, kitEntries: kit.treeEntries });
-  const kitLabels = JSON.parse(settingsFiles(kit.treeEntries, kit.contents)[LABELS_PATH]).labels.map((label) => label.name);
-  const report = await readAdoptionReport({ client, org, repo, kitLabels, empty });
+  const report = await readAdoptionReport({ client, org, repo, kitLabels: kitLabelNames(kit), empty });
   const failing = rows.filter((row) => row.fail).length;
-  const outcome = failing > 0 ? 'apply stops before any write' : 'apply stops after the preflight with no write until the kit merge (#274) ships';
+  const outcome = failing > 0
+    ? 'apply stops before any write'
+    : 'if the target is still foreign when apply runs, apply stops after the preflight with no write until the kit merge (#274) ships';
   return {
     facts: [
       `Adoption preflight of ${org}/${repo} against ${tag}: ${failing} failing row(s); ${outcome}`,
@@ -209,7 +238,7 @@ export async function run(ctx, { sleep = delay, settingsDependencies } = {}) {
     { repositories: [controlRepo], permissions: CONTROL_READ_PERMISSIONS },
     ({ client }) => readSource({ client, org, controlRepo, repo, args, adminBot }),
   );
-  if (source.state === 'foreign') return stopAfterPreflight(`### ${OP} ${org}/${repo}`, source);
+  if (source.state === 'foreign') return stopAfterPreflight({ heading: `### ${OP} ${org}/${repo}`, source, log: ctx.log });
   const lines = [`- inspect: ${source.state}`, `- release tag: ${source.tag}`];
   if (source.state === 'absent') {
     ctx.log('creating the repository');
