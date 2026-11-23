@@ -83,7 +83,7 @@ Unknowns:
 
 ## Not proven here
 
-No workflow test harness exists, so the trigger conditions rest on the config diff and this trace. The live proof moved from #243 (dropped, #242 Decisions 2026-11-23) to the v0.10.1 release on `groundwork`, which has the merge queue. Items 1 and 2 are proven there: the closed run 45121171745 on the merge of #248 dispatched run 45121179765 (both `success`), and the closed run 45121694658 on the merge of release PR #246 dispatched run 45121710649 on `main` (both `success`, the `release` environment admitted it), which produced tag `v0.10.1` by `wimdotgg-release[bot]` at 2026-11-23T06:03:08Z with no release PR open afterwards. Item 4 stays unobserved. The checks were:
+No workflow test harness exists, so the trigger conditions rest on the config diff and this trace. The live proof moved from #243 (dropped, #242 Decisions 2026-11-23) to the v0.10.1 release on `groundwork`, which has the merge queue. Items 1 and 2 are proven there: the closed run 45121171745 on the merge of #248 dispatched run 45121179765 (both `success`), and the closed run 45121694658 on the merge of release PR #246 dispatched run 45121710649 on `main` (both `success`, the `release` environment admitted it), which produced the v0.10.1 release (tag on `03ed897`, run 45121710649 started 06:04:28Z, release published 06:04:40Z by `wimdotgg-release[bot]`) with no release PR open afterwards. Item 4 stays unobserved. The checks were:
 
 1. The first merged same-repository PR close builds or updates the release PR.
 2. Merging a release PR through the merge queue yields tag and release with no stray release PR: the closed run dispatches, and the dispatched run on `refs/heads/main` is admitted by the `release` environment.
