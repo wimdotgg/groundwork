@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { GitHubError, apiPath } from '../lib/github.mjs';
 import { validateIssueBody } from '../lib/issue-model.mjs';
 import { SettingsError } from '../lib/settings.mjs';
+import { rulesetNameLiteral } from './apply-settings.mjs';
 import { normalizeLabel, sameLogin } from '../lib/trust.mjs';
 import { ADOPT_KEPT_PATHS, CODEOWNERS_PATH } from './bootstrap-tree.mjs';
 
@@ -277,6 +278,9 @@ const LIST_BUDGET = 120;
 const NOT_CHECKED_EMPTY = 'not checked: empty repository';
 // applyRulesets deletes or replaces only these; organization rulesets stay.
 const REPOSITORY_RULESET_SOURCE = 'Repository';
+// A ruleset row fits one 200-character fact below this detail length; a longer name moves to part rows.
+const RULESET_DETAIL_BUDGET = 160;
+const RULESET_NAME_PART_LENGTH = 150;
 
 const gapRow = (name, fail, detail) => ({ name, fail, detail });
 
@@ -312,24 +316,44 @@ export async function readRepositoryRulesets({ client, org, repo }) {
  */
 export async function requireReplacedRulesets({ client, org, repo, names }) {
   const live = (await readRepositoryRulesets({ client, org, repo })).map((ruleset) => ruleset.name);
-  const advice = 'no write was made; copy the names from the plan row "rulesets the sync deletes"';
+  const advice = 'no write was made; copy the names from the plan rows "rulesets the sync deletes"';
+  const literals = (list) => list.map(rulesetNameLiteral).join(', ');
   if (names === undefined) {
     if (live.length === 0) return live;
-    throw new SettingsError(`${org}/${repo} has repository rulesets the sync deletes or replaces (${live.join(', ')}) and replaceRulesets is missing; ${advice}`);
+    throw new SettingsError(`${org}/${repo} has repository rulesets the sync deletes or replaces (${literals(live)}) and replaceRulesets is missing; ${advice}`);
   }
   const unnamed = live.filter((name) => !names.includes(name));
   const absent = names.filter((name) => !live.includes(name));
   if (unnamed.length === 0 && absent.length === 0) return live;
-  const differences = [unnamed.length > 0 && `not named: ${unnamed.join(', ')}`, absent.length > 0 && `named but absent: ${absent.join(', ')}`].filter(Boolean);
+  const differences = [unnamed.length > 0 && `not named: ${literals(unnamed)}`, absent.length > 0 && `named but absent: ${literals(absent)}`].filter(Boolean);
   throw new SettingsError(`${org}/${repo} repository rulesets differ from replaceRulesets (${differences.join('; ')}); ${advice}`);
 }
 
-/** `protection.enabled` is the classic rule; a protected branch without it is held by a ruleset. */
+/** `protection.enabled` is the classic rule; a protected branch without it is held by an enforced ruleset. */
 function protectionSource(branch, rulesets) {
   if (branch?.protection?.enabled === true) return 'set by a classic branch protection rule: delete it in settings/branches';
-  const names = rulesets.filter((ruleset) => ruleset.target === 'branch').map((ruleset) => ruleset.name);
+  const names = rulesets.filter((ruleset) => ruleset.target === 'branch' && ruleset.enforcement !== 'disabled').map((ruleset) => ruleset.name);
   if (names.length === 0) return 'set by a ruleset outside this repository: exclude the repository from it';
-  return `set by a ruleset: ${listNames(names)}; disable it and name it in replaceRulesets`;
+  return `set by a ruleset: ${names.length === 1 ? capName(names[0]) : listNames(names)}; disable it and name it in replaceRulesets`;
+}
+
+/**
+ * One row per ruleset, never cut: the owner copies each name literal into `replaceRulesets`. A literal too long for one
+ * fact continues on `ruleset name part i/n` rows, bracketed so no part loses an edge space; joined, they parse as JSON.
+ * @param {Array<{ name: string, enforcement: string, target: string }>} rulesets
+ * @param {string} rowName
+ * @returns {Array<{ name: string, detail: string }>}
+ */
+export function rulesetRows(rulesets, rowName) {
+  if (rulesets.length === 0) return [{ name: rowName, detail: 'none' }];
+  return rulesets.flatMap(({ name, enforcement, target }) => {
+    const meta = `enforcement ${enforcement}, target ${target}, name`;
+    const literal = rulesetNameLiteral(name);
+    if (meta.length + literal.length < RULESET_DETAIL_BUDGET) return [{ name: rowName, detail: `${meta} ${literal}` }];
+    const parts = literal.match(new RegExp(`.{1,${RULESET_NAME_PART_LENGTH}}`, 'g'));
+    const partRows = parts.map((part, index) => ({ name: `ruleset name part ${index + 1}/${parts.length}`, detail: `[${part}]` }));
+    return [{ name: rowName, detail: `${meta} in parts below` }, ...partRows];
+  });
 }
 
 async function readMainProtection({ client, org, repo, rulesets }) {
@@ -419,9 +443,8 @@ export async function readAdoptionReport({ client, org, repo, kitLabels, empty, 
   const environments = await client.paginate(repoPath(org, repo, '/environments'), { itemsKey: 'environments' });
   const issues = (await client.paginate(repoPath(org, repo, '/issues'), { query: { state: 'open' } })).filter((issue) => !issue.pull_request);
   const unformatted = issues.filter((issue) => !validateIssueBody({ type: issue.type?.name ?? null, body: issue.body ?? '' }).ok);
-  const rulesetRows = rulesets.map(({ name, enforcement, target }) => ({ name: 'rulesets the sync deletes', detail: `"${name}" (enforcement ${enforcement}, target ${target})` }));
   return [
-    ...(rulesetRows.length > 0 ? rulesetRows : [{ name: 'rulesets the sync deletes', detail: 'none' }]),
+    ...rulesetRows(rulesets, 'rulesets the sync deletes'),
     { name: 'labels the sync deletes', detail: listNames(labels) },
     { name: 'v* tags', detail: listNames(tags) },
     { name: 'environments', detail: listNames(environments.map((environment) => environment.name)) },

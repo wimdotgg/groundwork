@@ -3,7 +3,7 @@ import { SettingsError, loadDesiredState, repoKind } from '../lib/settings.mjs';
 import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
   commitAdoptTree, commitBootstrapTree, createMissingLabels, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
-  readBlobTexts, readKitVersion, readReleaseTree, requireMainHead, requireReplacedRulesets, resolveTagCommit,
+  readBlobTexts, readKitVersion, readReleaseTree, readRepositoryRulesets, requireMainHead, requireReplacedRulesets, resolveTagCommit, rulesetRows,
 } from './bootstrap-repo.mjs';
 import { CODEOWNERS_PATH, adoptTreeEntries, buildBootstrapTree, contentPaths, settingsFiles } from './bootstrap-tree.mjs';
 import { findSetupEpic, openSetupEpic, parseSetupTemplates } from './setup-epic.mjs';
@@ -167,10 +167,13 @@ function kitLabels(kit) {
   return labels;
 }
 
+const reportFacts = (rows) => rows.map(({ name, detail }) => `report ${name}: ${detail}`);
+
 async function adoptionPlan({ client, org, controlRepo, request, config }) {
   const { targetRepo: repo, args } = request;
   const state = await inspectRepo({ client, org, repo, adminBot: `${config.apps.admin}[bot]` });
-  if (state === 'ours') return { facts: ['Adopt: the target is a groundwork project, so bootstrap resumes as usual'] };
+  // A rerun deletes an undeclared ruleset only when replaceRulesets names it, so the owner approves it against this list.
+  if (state === 'ours') return { facts: ['Adopt: the target is a groundwork project, so bootstrap resumes as usual', ...reportFacts(rulesetRows(await readRepositoryRulesets({ client, org, repo }), 'repository rulesets'))] };
   const refused = refusal(state, { org, repo, adopt: true });
   if (refused !== undefined) return { problem: refused };
   const tag = await latestReleaseTag({ client, org, controlRepo });
@@ -183,7 +186,7 @@ async function adoptionPlan({ client, org, controlRepo, request, config }) {
   const heading = `Adoption preflight against ${tag}: ${failing} failing row(s)`;
   // Apply reads the head again and prints it, so the owner can compare the two.
   const head = `target head: ${headSha ?? 'none'}`;
-  return { facts: [heading, outcome, head, ...rows.map(gapLine), ...report.map(({ name, detail }) => `report ${name}: ${detail}`)] };
+  return { facts: [heading, outcome, head, ...rows.map(gapLine), ...reportFacts(report)] };
 }
 
 /** @returns {string[]} the `- step: result` lines of an `applySections` summary */
@@ -224,7 +227,8 @@ async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
   const { sleep, settingsDependencies } = seams;
   const { org, repo } = ctx;
   const { settingsRoot, config } = await ctx.writeSettings(settingsFiles(source.treeEntries, source.contents));
-  const targetContext = { ...ctx, client, token, settingsRoot, config };
+  // Spec 14.4: on every bootstrap path the rulesets step deletes an undeclared ruleset only when the owner named it.
+  const targetContext = { ...ctx, client, token, settingsRoot, config, replaceRulesets: source.replaceRulesets ?? [] };
   const sections = (groups) => applySections(targetContext, groups, settingsDependencies);
   const lines = [];
 

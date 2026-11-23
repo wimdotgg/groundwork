@@ -689,7 +689,7 @@ test('adopt on an absent or fresh target is refused in plan and in apply before 
 
 test('adopt on an ours target resumes as usual', async () => {
   const { result } = planCall({ state: 'ours' });
-  assert.deepEqual((await result).facts, ['Adopt: the target is a groundwork project, so bootstrap resumes as usual']);
+  assert.deepEqual((await result).facts, ['Adopt: the target is a groundwork project, so bootstrap resumes as usual', 'report repository rulesets: none']);
   const world = adoptWorld(undefined, 'ours');
   assert.equal((await run(world.ctx, world.seams)).ok, true);
 });
@@ -749,9 +749,9 @@ test('#300 AC1 plan lists every repository ruleset with enforcement and target, 
   const { facts } = await result;
   const rows = facts.filter((fact) => fact.startsWith('report rulesets the sync deletes: '));
   assert.deepEqual(rows, [
-    `report rulesets the sync deletes: "${LONG_RULESET_NAME}" (enforcement active, target branch)`,
-    'report rulesets the sync deletes: "release tags" (enforcement evaluate, target tag)',
-    'report rulesets the sync deletes: "push guard" (enforcement disabled, target push)',
+    `report rulesets the sync deletes: enforcement active, target branch, name "${LONG_RULESET_NAME}"`,
+    'report rulesets the sync deletes: enforcement evaluate, target tag, name "release tags"',
+    'report rulesets the sync deletes: enforcement disabled, target push, name "push guard"',
   ]);
   for (const row of rows) assert.ok(row.length <= 200, row);
   assert.deepEqual(calls.filter((call) => !call.startsWith('GET ')), []);
@@ -784,8 +784,8 @@ test('#300 AC3 apply with replaceRulesets equal to the live names proceeds and d
 });
 
 for (const [name, replaceRulesets, message] of [
-  ['a missing name', RULESET_NAMES.slice(0, 2), /not named: push guard/],
-  ['an extra name', [...RULESET_NAMES, 'gone'], /named but absent: gone/],
+  ['a missing name', RULESET_NAMES.slice(0, 2), /not named: "push guard"/],
+  ['an extra name', [...RULESET_NAMES, 'gone'], /named but absent: "gone"/],
   ['no name list', undefined, /replaceRulesets is missing/],
 ]) {
   test(`#300 AC3 apply with ${name} refuses before any write call, naming the difference`, async () => {
@@ -800,4 +800,91 @@ test('#300 AC3 apply without replaceRulesets proceeds on a target with no reposi
   const result = await run(world.ctx, world.seams);
   assert.equal(result.ok, true, result.summary);
   assert.ok(result.summary.split('\n').includes('- rulesets named for replacement: none'), result.summary);
+});
+
+// --- #301 review round 1 ---------------------------------------------------------------------------------------
+
+const ruleset = (id, name, extra = {}) => ({ id, name, enforcement: 'active', target: 'branch', source_type: 'Repository', ...extra });
+const rulesetWrites = (world) => writesOf(world).filter((call) => call.path.startsWith(`${TARGET_PATH}/rulesets`));
+/** admin-run's safeText, so a test sees what the run page shows. */
+const rendered = (fact) => fact.replace(/[^\x20-\x7e]+/g, ' ').replace(/[`<>|]/g, "'").trim().slice(0, 200);
+
+/** Joins the `ruleset name part` facts back into names, the way the owner copies them. */
+function namesFromParts(facts) {
+  const names = [];
+  let literal = '';
+  for (const fact of facts) {
+    const part = /^report ruleset name part (\d+)\/(\d+): \[(.*)\]$/.exec(fact);
+    if (part === null) continue;
+    literal += part[3];
+    if (part[1] !== part[2]) continue;
+    names.push(JSON.parse(literal));
+    literal = '';
+  }
+  return names;
+}
+
+test('#301 an ours rerun refuses before any ruleset write when an undeclared ruleset is not named', async () => {
+  const world = createWorld({ state: 'ours', files: ADOPT_FILES, args: ADOPT_ARGS, overrides: { [RULESETS_KEY]: reply(200, [ruleset(5, 'added later')]) } });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /not named in replaceRulesets: "added later"; no ruleset was changed/.test(error.message));
+  assert.deepEqual(rulesetWrites(world), []);
+});
+
+test('#301 an ours rerun without adopt refuses the same way', async () => {
+  const world = createWorld({ state: 'ours', files: ADOPT_FILES, overrides: { [RULESETS_KEY]: reply(200, [ruleset(5, 'added later')]) } });
+  await assert.rejects(run(world.ctx, world.seams), /not named in replaceRulesets: "added later"/);
+  assert.deepEqual(rulesetWrites(world), []);
+});
+
+test('#301 an ours rerun deletes an undeclared ruleset the owner named', async () => {
+  const world = createWorld({
+    state: 'ours', files: ADOPT_FILES, args: { ...ADOPT_ARGS, replaceRulesets: ['legacy', 'added later'] },
+    overrides: { [RULESETS_KEY]: reply(200, [ruleset(5, 'added later')]), [`DELETE ${TARGET_PATH}/rulesets/5`]: reply(204) },
+  });
+  assert.equal((await run(world.ctx, world.seams)).ok, true);
+  assert.ok(indexOfLine(world, `DELETE ${TARGET_PATH}/rulesets/5`) >= 0);
+});
+
+test('#301 a ruleset added after the adopt check in the same run stops the rulesets step and is not deleted', async () => {
+  const legacy = ruleset(1, 'legacy');
+  const late = ruleset(6, 'added later');
+  const world = adoptApplyWorld({ [RULESETS_KEY]: [reply(200, [legacy]), reply(200, [legacy]), ...Array.from({ length: 6 }, () => reply(200, [legacy, late]))], [`DELETE ${TARGET_PATH}/rulesets/1`]: reply(204) });
+  world.ctx.env.INPUT_ARGS = JSON.stringify({ ...ADOPT_ARGS, replaceRulesets: ['legacy'] });
+  await assert.rejects(run(world.ctx, world.seams), /not named in replaceRulesets: "added later"/);
+  assert.deepEqual(rulesetWrites(world), []);
+});
+
+test('#301 plan on an ours target with adopt lists the repository rulesets again', async () => {
+  const { facts } = await planCall({ state: 'ours', overrides: { [RULESETS_KEY]: reply(200, [ruleset(5, 'added later')]) } }).result;
+  assert.equal(facts[0], 'Adopt: the target is a groundwork project, so bootstrap resumes as usual');
+  assert.ok(facts.includes('report repository rulesets: enforcement active, target branch, name "added later"'), facts.join('\n'));
+});
+
+test('#301 replaceRulesets [] proceeds on a target with none and refuses against live rulesets', async () => {
+  const none = adoptApplyWorld();
+  none.ctx.env.INPUT_ARGS = JSON.stringify({ ...ADOPT_ARGS, replaceRulesets: [] });
+  assert.equal((await run(none.ctx, none.seams)).ok, true);
+  const live = replaceWorld([]);
+  await assert.rejects(run(live.ctx, live.seams), /not named: /);
+  assert.deepEqual(writesOf(live), []);
+});
+
+test('#301 long and non-ASCII ruleset names render uncut and copyable within the fact limit', async () => {
+  const name = `règles → main \`x\` <a|b> ${'é'.repeat(200)}`.slice(0, 200);
+  const plain = 'n'.repeat(170);
+  const { facts } = await planCall({ overrides: { [RULESETS_KEY]: reply(200, [ruleset(7, name), ruleset(8, plain)]) } }).result;
+  for (const fact of facts) assert.equal(rendered(fact), fact, fact);
+  assert.ok(facts.includes('report rulesets the sync deletes: enforcement active, target branch, name in parts below'), facts.join('\n'));
+  assert.deepEqual(namesFromParts(facts), [name, plain]);
+});
+
+test('#301 the protected main row names a lone long ruleset and skips disabled ones', async () => {
+  const long = 'r'.repeat(130);
+  const branch = { protected: true, protection: { enabled: false } };
+  const { facts } = await planCall({ gaps: { branch }, overrides: { [RULESETS_KEY]: reply(200, [ruleset(1, long)]) } }).result;
+  const row = facts.find((fact) => fact.startsWith('FAIL protected main: '));
+  assert.doesNotMatch(row, /and 1 more/);
+  assert.match(row, /set by a ruleset: r{120}\.\.\.; disable it/);
+  const { facts: disabled } = await planCall({ gaps: { branch }, overrides: { [RULESETS_KEY]: reply(200, [ruleset(1, 'off', { enforcement: 'disabled' })]) } }).result;
+  assert.ok(disabled.includes('FAIL protected main: set by a ruleset outside this repository: exclude the repository from it'), disabled.join('\n'));
 });
