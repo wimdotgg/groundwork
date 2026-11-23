@@ -9,7 +9,8 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createFixtureClient } from './lib/github.mjs';
 import { repoRoot } from './lib/config.mjs';
-import { KIT_PATHS, UNMODIFIED_ONLY_PATHS, isKitPath, main, mergeConfig, rewritePins, run } from './kit-update.mjs';
+import { CONTROL_PATHS } from './groundwork/bootstrap-tree.mjs';
+import { KIT_EXCLUDED_PATHS, KIT_PATHS, UNMODIFIED_ONLY_PATHS, isKitPath, main, mergeConfig, rewritePins, run } from './kit-update.mjs';
 
 const execFileAsync = promisify(execFile);
 const realConfigText = await readFile(path.join(repoRoot(import.meta.url), '.github/groundwork/config.json'), 'utf8');
@@ -280,6 +281,25 @@ test('KIT_PATHS match the kit and never the project, stub or deploy paths', () =
     assert.ok(!isKitPath(other), other);
   }
   assert.ok(KIT_PATHS.length > 0 && UNMODIFIED_ONLY_PATHS.every((file) => !isKitPath(file)));
+});
+
+test('#290 AC1 run writes the worker skill and no path under the control-only groundwork-setup skill', async () => {
+  const skills = {
+    '.claude/skills/groundwork-setup/SKILL.md': 'setup\n',
+    '.claude/skills/groundwork-worker/SKILL.md': 'worker\n',
+  };
+  await withProject(PROJECT_FILES, {}, async (project) => {
+    const result = await execute(project, releasesClient(OLD_TREE, { ...NEW_TREE, ...skills }));
+    assert.equal(await readProject(project, '.claude/skills/groundwork-worker/SKILL.md'), 'worker\n');
+    await assert.rejects(readProject(project, '.claude/skills/groundwork-setup/SKILL.md'), { code: 'ENOENT' });
+    assert.ok(result.changed.includes('.claude/skills/groundwork-worker/SKILL.md'));
+    assert.ok(!result.changed.some((file) => file.startsWith('.claude/skills/groundwork-setup/')));
+  });
+});
+
+test('#290 the kit leaves out the control-only skill that bootstrap drops', () => {
+  assert.ok(KIT_EXCLUDED_PATHS.every((excluded) => CONTROL_PATHS.includes(excluded)));
+  assert.ok(!isKitPath('.claude/skills/groundwork-setup/SKILL.md'));
 });
 
 test('mergeConfig recurses into an object key that both sides added', () => {
