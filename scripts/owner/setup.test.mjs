@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import {
-  askHidden, askLine, clean, gitArguments, hardenExecutableLookup, main, openCommand, parseScopes, stepsToRun, validateState, wasInterrupted,
+  askHidden, askLine, clean, ghEnvironment, gitArguments, hardenExecutableLookup, main, openCommand, parseScopes, stepsToRun, validateState, wasInterrupted,
 } from './setup.mjs';
 
 const NOW = '2026-11-23T09:00:00Z';
@@ -36,7 +36,7 @@ function fakeIo({ state = stateWith(), answers = [], git = {}, gitFails = [], sc
     capture: (command, args) => {
       record(command, args);
       const scopeList = [...io.scopes].map((scope) => `'${scope}'`).join(', ');
-      if (command === 'gh') return { status: authStatus, stdout: `github.com\n  - Token scopes: ${scopeList}\n`, stderr: '' };
+      if (command === 'gh') return { status: Array.isArray(authStatus) ? authStatus.shift() ?? 0 : authStatus, stdout: `github.com\n  - Token scopes: ${scopeList}\n`, stderr: '' };
       const status = gitFails.includes(args[0]) ? 128 : (args[0] === 'diff' && git.diff ? 1 : 0);
       return { status, stdout: { ...GIT_REPLIES, ...git }[args[0]], stderr: '' };
     },
@@ -96,6 +96,7 @@ test('AC1c validates setup-state.json, strips control characters, refuses org st
     [{ extra: 1 }, /unknown key extra/], [{ schemaVersion: 2 }, /schemaVersion/], [{ steps: { nope: done() } }, /unknown step nope/],
     [{ steps: { 'org-2fa': { ...done(), status: 'maybe' } } }, /unknown status/], [{ org: 'a/b' }, /valid login/],
     [{ org: ['acme'] }, /valid login/], [{ org: 123 }, /valid login/], [{ org: null }, /org is null after org-create/],
+    [{ consent: { ...consent, answer: ['B'] } }, /consent answer/],
     [stamp('2026-11-23 09:00'), /ISO 8601/], [stamp([NOW]), /ISO 8601/], [{ steps: { 'org-2fa': { status: 'done', updatedAt: NOW } } }, /missing key note/],
   ]) assert.throws(() => validateState(stateWith(patch)), reason);
   assert.equal(clean('a\u001b[31mb\nc'), 'a[31mbc');
@@ -119,11 +120,41 @@ test('AC1d scope reads fail closed and match the exact scope', async () => {
   assert.deepEqual(parseScopes("  - Token scopes: 'admin:org_hook', 'repo'"), ['admin:org_hook', 'repo']);
   assert.equal(parseScopes('You are not logged into any GitHub hosts.'), null);
   const unreadable = fakeIo({ authStatus: 1, answers: ['', 'n'] });
-  await refused(unreadable, [], /may still be granted; run: gh auth refresh --remove-scopes admin:org/);
-  assert.equal(count(unreadable, REMOVE_SCOPE), 1);
+  await refused(unreadable, [], /refused: cannot read the scopes from gh auth status \(exit 1\)/);
+  assert.equal(count(unreadable, REMOVE_SCOPE), 0);
+  const unreadableAtEnd = fakeIo({ authStatus: [0, 1], answers: ['', 'n'] });
+  await refused(unreadableAtEnd, [], /cannot read the scopes from gh auth status \(exit 1\)\nadmin:org may still be granted/);
   const hook = fakeIo({ scopes: ['admin:org_hook'], answers: ['', 'n'] });
   assert.equal(await main(hook, ['--step', 'org-pat-policy']), 0);
   assert.equal(count(hook, REMOVE_SCOPE), 0);
+});
+
+test('AC1d coloured scope lists still match, and gh runs with colour forced off', async () => {
+  for (const line of ["Token scopes: \u001b[0;1;39m'admin:org', 'gist'\u001b[0m", "Token scopes: \u001b[0;1;39m'admin:org'\u001b[0m", "Token scopes: 'gist', \u001b[1m'admin:org'\u001b[0m"]) {
+    assert.ok(parseScopes(line).includes('admin:org'), JSON.stringify(line));
+  }
+  const coloured = fakeIo({ scopes: ['admin:org'], answers: ['', 'n'] });
+  coloured.capture = ((original) => (command, args) => {
+    const result = original(command, args);
+    return { ...result, stdout: result.stdout.replace(/Token scopes: (.*)/, 'Token scopes: \u001b[0;1;39m$1\u001b[0m') };
+  })(coloured.capture);
+  assert.equal(await main(coloured, ['--step', 'org-pat-policy']), 0);
+  assert.equal(count(coloured, REMOVE_SCOPE), 1);
+  const env = ghEnvironment({ PATH: '/bin', CLICOLOR_FORCE: '1', GH_FORCE_TTY: '1' });
+  assert.deepEqual(env, { PATH: '/bin', NO_COLOR: '1' });
+});
+
+test('AC1d a failed removal exits non-zero even when the read says the scope is gone', async () => {
+  const failed = fakeIo({ answers: ['', 'n'] });
+  const attach = failed.attach;
+  failed.attach = (command, args) => {
+    const result = attach(command, args);
+    if (args[2] !== '--remove-scopes') return result;
+    failed.scopes.delete('admin:org');
+    return { status: 1 };
+  };
+  await refused(failed, [], /gh auth refresh --remove-scopes admin:org exited 1\nadmin:org may still be granted/);
+  assert.ok(!failed.output.includes('admin:org is gone'));
 });
 
 test('AC1d AC6 drops admin:org once at the end, never logs out, fails when it stays', async () => {

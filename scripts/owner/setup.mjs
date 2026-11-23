@@ -21,6 +21,8 @@ const ADD_ADMIN_ORG = ['auth', 'refresh', '-s', ADMIN_ORG];
 const REMOVE_ADMIN_ORG = ['auth', 'refresh', '--remove-scopes', ADMIN_ORG];
 const AUTH_STATUS = ['auth', 'status', '--active', '--hostname', 'github.com'];
 const SCOPES_LINE = /Token scopes:[ \t]*(.*)$/m;
+const SGR_SEQUENCE = /\u001b\[[0-9;]*m/g;
+const QUOTED_SCOPE = /'([^']+)'/g;
 // Windows reports a console Ctrl+C as this exit code (STATUS_CONTROL_C_EXIT) instead of a signal.
 const WINDOWS_CTRL_C_EXIT = 0xc000013a;
 const INTERRUPTED = 'interrupted';
@@ -95,7 +97,7 @@ export function validateState(state) {
   if (state.schemaVersion !== SCHEMA_VERSION) refuse(`setup-state.json: schemaVersion must be ${SCHEMA_VERSION}`);
   exactKeys(state.consent, ['answer', 'classes', 'answeredAt', 'endedAt'], 'consent');
   const { answer, classes } = state.consent;
-  const expected = { A: '[]', B: '["wizard"]' }[answer];
+  const expected = typeof answer === 'string' ? { A: '[]', B: '["wizard"]' }[answer] : undefined;
   if (!expected || JSON.stringify(classes) !== expected) refuse('setup-state.json: consent answer and classes do not match A or B');
   timestamp(state.consent.answeredAt, 'consent.answeredAt');
   if (state.consent.endedAt !== null) timestamp(state.consent.endedAt, 'consent.endedAt');
@@ -145,25 +147,39 @@ export function checkReviewedCode(io) {
   if (diff.status !== 0) refuse(`git diff failed with exit ${diff.status}`);
 }
 
-export function parseScopes(text) {
-  const line = SCOPES_LINE.exec(text);
-  if (!line) return null;
-  return line[1].split(',').map((scope) => scope.trim().replace(/^'|'$/g, '')).filter(Boolean);
+// gh colours the scope list when CLICOLOR_FORCE or GH_FORCE_TTY is set, even on a pipe.
+export function ghEnvironment(env) {
+  const childEnv = { ...env, NO_COLOR: '1' };
+  delete childEnv.CLICOLOR_FORCE;
+  delete childEnv.GH_FORCE_TTY;
+  return childEnv;
 }
 
-// True when the active github.com account holds admin:org, or when gh cannot tell: unknown counts as granted.
-function adminOrgMayBeGranted(io) {
+export function parseScopes(text) {
+  const line = SCOPES_LINE.exec(text.replace(SGR_SEQUENCE, ''));
+  if (!line) return null;
+  const quoted = [...line[1].matchAll(QUOTED_SCOPE)].map((match) => match[1]);
+  if (quoted.length) return quoted;
+  return line[1].split(',').map((scope) => scope.trim()).filter(Boolean);
+}
+
+// granted is null when gh cannot tell; every caller treats that as possibly granted.
+function readAdminOrg(io) {
   const result = io.capture('gh', AUTH_STATUS);
   const scopes = result.status === 0 ? parseScopes(`${result.stdout}\n${result.stderr}`) : null;
-  return scopes === null || scopes.includes(ADMIN_ORG);
+  return { status: result.status, granted: scopes === null ? null : scopes.includes(ADMIN_ORG) };
 }
+const unreadableScopes = (read) => `cannot read the scopes from gh auth status (exit ${read.status})`;
 
 // Never throws: it runs on every exit path, interrupt included. Returns false when the scope may remain.
 function dropAdminOrg(io) {
   try {
     io.clearInterrupt();
-    io.attach('gh', REMOVE_ADMIN_ORG);
-    if (!adminOrgMayBeGranted(io)) {
+    const removal = io.attach('gh', REMOVE_ADMIN_ORG);
+    const after = readAdminOrg(io);
+    if (removal.status !== 0) io.print(`gh ${REMOVE_ADMIN_ORG.join(' ')} exited ${removal.status}`);
+    else if (after.granted === null) io.print(unreadableScopes(after));
+    else if (!after.granted) {
       io.print('admin:org is gone');
       return true;
     }
@@ -270,7 +286,9 @@ async function run(io, argv, context) {
   context.statePath = stateFilePath(io);
   context.state = loadState(io, context.statePath);
   const steps = stepsToRun(context.state, stepArgument);
-  if (adminOrgMayBeGranted(io) && !dropAdminOrg(io)) return 1;
+  const leftover = readAdminOrg(io);
+  if (leftover.granted === null) refuse(`${unreadableScopes(leftover)}: check gh auth status --active --hostname github.com, then rerun`);
+  if (leftover.granted && !dropAdminOrg(io)) return 1;
   await walk(io, context, steps);
   return 0;
 }
@@ -350,7 +368,8 @@ function terminalIo() {
       process.once('exit', () => { if (hooksDir) rmSync(hooksDir, { recursive: true, force: true }); });
     }
     const fullArgs = command === 'git' ? gitArguments(noHooksDir(), args) : args;
-    const result = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', stdio });
+    const env = command === 'gh' ? ghEnvironment(process.env) : process.env;
+    const result = spawnSync(command, fullArgs, { cwd: ROOT, encoding: 'utf8', stdio, env });
     if (interrupted || wasInterrupted(result)) throw new Error(INTERRUPTED);
     if (result.error) throw result.error;
     return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
