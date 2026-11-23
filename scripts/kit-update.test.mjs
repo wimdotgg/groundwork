@@ -307,7 +307,7 @@ test('#290 run removes a groundwork-setup copy a project already holds, whether 
   await withProject(projectFiles, {}, async (project) => {
     // A project's .gitignore re-includes groundwork-* skills; force-add them so a global ignore of .claude/skills/ cannot hide them.
     await project.git(['add', '-f', '--', '.claude/skills']);
-    await project.git(['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'skills']);
+    await project.git(['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'skills']);
     const result = await execute(project, releasesClient({ ...OLD_TREE, ...setup }, { ...NEW_TREE, ...setup }));
     for (const filePath of Object.keys(setup)) {
       await assert.rejects(readProject(project, filePath), { code: 'ENOENT' });
