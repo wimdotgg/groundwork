@@ -82,10 +82,10 @@
       "^\\s*func\\s+Test"
     ],
     "suppressionPatterns": [
-      "eslint-disabl[e]",
-      "@ts-igno[r]e",
-      "@ts-expect-erro[r]",
-      "@ts-nochec[k]",
+      "e\u0073lint-disable",
+      "@\u0074s-ignore",
+      "@\u0074s-expect-error",
+      "@\u0074s-nocheck",
       "#\\s*noqa",
       "#\\s*type:\\s*ignore",
       "\\.skip\\s*\\(",
