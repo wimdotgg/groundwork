@@ -220,6 +220,8 @@ To move a project to a newer release, an agent claims a Chore issue and runs `no
 2. On `issue/N`: `git fetch --no-tags upstream refs/tags/vX.Y.Z`, then `git merge FETCH_HEAD`. Resolve conflicts keeping your side in `.github/groundwork/config.json`, `.github/CODEOWNERS`, `version.txt`, `.release-please-manifest.json` and `CHANGELOG.md`; take upstream elsewhere unless you changed the region on purpose.
 3. Push through the wrapper and mark the PR ready. You apply `size-exception` (an upstream release is far over 400 lines) and approve as code owner.
 
+A clone without the `upstream` remote gets it with `git remote add upstream` and the upstream groundwork URL. Then run `gh repo set-default <org>/groundwork` in that clone, or check that `git config --get remote.origin.gh-resolved` prints `base`: with `upstream` present and no default, `gh` and every agent script resolve to upstream groundwork, not your copy.
+
 The cost of squash-only `main` (`rulesets/main.json`): the squash commit has no upstream parent, so the merge base stays at the clone point. Every later update conflicts again in each region upstream changed twice since the clone, and the version files conflict every time. An upstream release that deletes or skips tests also needs your `integrity-exception`.
 
 ## Notes
