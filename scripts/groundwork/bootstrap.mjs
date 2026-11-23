@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { SettingsError, repoKind } from '../lib/settings.mjs';
+import { SettingsError, loadDesiredState, repoKind } from '../lib/settings.mjs';
 import { applySections, requireReleaseValues } from './apply-settings.mjs';
 import {
   commitAdoptTree, commitBootstrapTree, createMissingLabels, createRepo, inspectRepo, latestReleaseTag, readAdoptionGaps, readAdoptionReport, readBlobContents,
@@ -188,14 +188,16 @@ const commitLine = (kind, commit) => `- ${kind} commit: ${commit.created ? `push
  * Steps 4 and 5 of 14.2. An adopted repository gets only its missing kit labels before the kit merge; the full sync,
  * which changes and deletes project labels for good, runs once the ref update landed (14.4).
  */
-async function labelsAndCommit({ client, org, repo, source, sleep, sections }) {
+async function labelsAndCommit({ client, org, repo, source, sleep, sections, settingsRoot }) {
   const kit = { client, org, repo, tag: source.tag, treeEntries: source.treeEntries, blobs: source.blobs, sleep };
   if (source.pin === undefined) {
     const labels = stepLines(await sections(['labels']));
     return [...labels, commitLine('bootstrap', await commitBootstrapTree(kit))];
   }
+  // The full sync that validates the settings runs after the commit here, so validate before the first write.
+  const { labels } = await loadDesiredState({ root: settingsRoot });
   await requireMainHead({ client, org, repo, headSha: source.pin.headSha });
-  const created = await createMissingLabels({ client, org, repo, labels: kitLabels(source) });
+  const created = await createMissingLabels({ client, org, repo, labels });
   const commit = await commitAdoptTree({ ...kit, pin: source.pin });
   return [`- labels (missing kit labels): ${created} created`, commitLine('adopt', commit), ...stepLines(await sections(['labels']))];
 }
@@ -218,7 +220,7 @@ async function applyToTarget({ ctx, source, adminBot, minted, seams }) {
   const sections = (groups) => applySections(targetContext, groups, settingsDependencies);
   const lines = [];
 
-  lines.push(...await labelsAndCommit({ client, org, repo, source, sleep, sections }));
+  lines.push(...await labelsAndCommit({ client, org, repo, source, sleep, sections, settingsRoot }));
   for (const groups of [['settings'], ['rulesets'], ['variables']]) lines.push(...stepLines(await sections(groups)));
   const epic = await openSetupEpic({ client, org, repo, templates: source.templates, adminBot, sleep });
   lines.push(`- setup epic: #${epic.epic}, ${epic.created.length} issue(s) created`);

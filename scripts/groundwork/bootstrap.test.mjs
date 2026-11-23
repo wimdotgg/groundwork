@@ -555,12 +555,12 @@ const PROJECT_LABEL = { name: 'bug', color: 'd73a4a', description: 'Something is
 const LABEL_EDITS = new Set(['PATCH', 'DELETE']);
 const labelEditsOf = (world) => writesOf(world).filter((call) => LABEL_EDITS.has(call.method) && call.path.startsWith(`${TARGET_PATH}/labels/`));
 
-function adoptApplyWorld(overrides = {}) {
-  const { treeEntries, contents } = expectedTree(ADOPT_FILES);
+function adoptApplyWorld(overrides = {}, files = ADOPT_FILES) {
+  const { treeEntries, contents } = expectedTree(files);
   const merged = adoptTreeEntries({ treeEntries, contents, target: { tree: PROJECT_TREE, codeowners: PROJECT_CODEOWNERS } });
   return createWorld({
     state: 'foreign',
-    files: ADOPT_FILES,
+    files,
     args: ADOPT_ARGS,
     overrides: {
       ...foreignRoutes(),
@@ -605,6 +605,31 @@ test('#274 adopt creates the missing kit labels before the commit and updates or
   const commit = order[1];
   assert.deepEqual(world.calls.filter((call, index) => index < commit && call.method === 'POST' && call.path === `${TARGET_PATH}/labels`).length, 2);
   assert.deepEqual(labelEditsOf(world).map(lineOf), [`DELETE ${TARGET_PATH}/labels/bug`]);
+});
+
+test('#274 adopt creates only the kit labels the target lacks and changes a held one only after the ref update', async () => {
+  const heldKitLabel = { name: 'Dependencies', color: '000000', description: 'old' };
+  const live = [PROJECT_LABEL, heldKitLabel];
+  const world = adoptApplyWorld({
+    [`GET ${TARGET_PATH}/labels?per_page=100`]: [reply(200, live), reply(200, [...live, LABELS[1]]), reply(200, LABELS)],
+    [`PATCH ${TARGET_PATH}/labels/Dependencies`]: reply(200),
+  });
+  const result = await run(world.ctx, world.seams);
+  assert.equal(result.ok, true, result.summary);
+  assert.ok(result.summary.split('\n').includes('- labels (missing kit labels): 1 created'), result.summary);
+  const created = world.bodies.filter((call) => call.method === 'POST' && call.path === `${TARGET_PATH}/labels`).map((call) => call.body.name);
+  assert.deepEqual(created, ['accepted']);
+  const refUpdate = indexOfLine(world, `PATCH ${TARGET_PATH}/git/refs/heads/main`);
+  const edits = world.calls.map((call, index) => ({ ...call, index })).filter((call) => lineOf(call) === `PATCH ${TARGET_PATH}/labels/Dependencies`);
+  assert.equal(edits.length, 1);
+  assert.ok(edits[0].index > refUpdate, 'the held kit label changes only after the ref update');
+});
+
+test('#274 adopt with a release tree whose settings fail validation refuses before any write', async () => {
+  const brokenLabels = JSON.stringify({ schemaVersion: 1, labels: [{ name: 'dependencies', description: 'no color' }] });
+  const world = adoptApplyWorld({}, { ...ADOPT_FILES, '.github/groundwork/labels.json': brokenLabels });
+  await assert.rejects(run(world.ctx, world.seams), (error) => error instanceof SettingsError && /needs string color and description/.test(error.message));
+  assert.deepEqual(writesOf(world), []);
 });
 
 test('#274 a main that moves after the label create refuses the commit and leaves every project label unchanged', async () => {
