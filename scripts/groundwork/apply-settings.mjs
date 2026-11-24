@@ -312,6 +312,22 @@ function assertNoCaseOnlyNameClash(live, bodies) {
   }
 }
 
+/**
+ * A ruleset name as an ASCII JSON string literal that pastes into `--args`: run pages show printable ASCII only and turn
+ * `<>|` and backticks into quotes, so those characters and every non-ASCII one become `\u` escapes.
+ */
+export const rulesetNameLiteral = (name) => JSON.stringify(name).replace(/[^\x20-\x7e]|[`<>|]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
+/** Bootstrap passes `replaceRulesets` (spec 14.4); routine runs pass none and keep deleting undeclared rulesets. */
+function assertNamedForDeletion(undeclared, replaceRulesets) {
+  if (replaceRulesets === undefined) return;
+  const unnamed = undeclared.filter((candidate) => !replaceRulesets.includes(candidate.name));
+  if (unnamed.length === 0) return;
+  // Names last: admin-run cuts a refusal at 200 characters, and a cut then costs only names the plan rows carry.
+  const reason = 'undeclared repository rulesets not named in replaceRulesets, no ruleset was changed; rerun with adopt: true and replaceRulesets, or delete them in settings/rules';
+  throw new SettingsError(`${reason}: ${unnamed.map((candidate) => rulesetNameLiteral(candidate.name)).join(', ')}`);
+}
+
 async function applyRulesets(context) {
   const bodies = [];
   for (const ruleset of context.desired.rulesets) {
@@ -320,6 +336,9 @@ async function applyRulesets(context) {
   }
   const live = await repoList(context, { suffix: '/rulesets', query: { includes_parents: false } });
   assertNoCaseOnlyNameClash(live, bodies);
+  const desiredNames = new Set(bodies.map((body) => body.name));
+  const undeclared = live.filter((candidate) => candidate.source_type === REPOSITORY_RULESET_SOURCE && !desiredNames.has(candidate.name));
+  assertNamedForDeletion(undeclared, context.replaceRulesets);
   const counts = { created: 0, updated: 0, deleted: 0 };
   for (const body of bodies) {
     const existing = live.find((candidate) => candidate.name === body.name);
@@ -331,8 +350,6 @@ async function applyRulesets(context) {
       counts.created += 1;
     }
   }
-  const desiredNames = new Set(bodies.map((body) => body.name));
-  const undeclared = live.filter((candidate) => candidate.source_type === REPOSITORY_RULESET_SOURCE && !desiredNames.has(candidate.name));
   for (const entry of undeclared) {
     await repoRequest(context, { method: 'DELETE', suffix: '/rulesets/{id}', params: { id: entry.id } });
     counts.deleted += 1;

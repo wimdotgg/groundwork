@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { GitHubError, apiPath } from '../lib/github.mjs';
 import { validateIssueBody } from '../lib/issue-model.mjs';
 import { SettingsError } from '../lib/settings.mjs';
+import { rulesetNameLiteral } from './apply-settings.mjs';
 import { normalizeLabel, sameLogin } from '../lib/trust.mjs';
 import { ADOPT_KEPT_PATHS, CODEOWNERS_PATH } from './bootstrap-tree.mjs';
 
@@ -275,6 +276,11 @@ const ROOT_LICENSE = /^(licen[cs]e|copying|unlicense)([.-][^/]*)?$/i;
 // admin-run cuts a plan fact at 200 characters; this budget leaves room for the row name and the count.
 const LIST_BUDGET = 120;
 const NOT_CHECKED_EMPTY = 'not checked: empty repository';
+// applyRulesets deletes or replaces only these; organization rulesets stay.
+const REPOSITORY_RULESET_SOURCE = 'Repository';
+// A ruleset row fits one 200-character fact below this detail length; a longer name moves to part rows.
+const RULESET_DETAIL_BUDGET = 160;
+const RULESET_NAME_PART_LENGTH = 150;
 
 const gapRow = (name, fail, detail) => ({ name, fail, detail });
 
@@ -292,10 +298,70 @@ const capName = (name) => (name.length <= LIST_BUDGET ? name : `${name.slice(0, 
 
 const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
 
-async function readMainProtection({ client, org, repo }) {
+/**
+ * The target's own rulesets, the ones the settings sync deletes or replaces (spec 14.4). GET only.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string }} options
+ * @returns {Promise<Array<{ name: string, enforcement: string, target: string }>>}
+ */
+export async function readRepositoryRulesets({ client, org, repo }) {
+  const live = await client.paginate(repoPath(org, repo, '/rulesets'), { query: { includes_parents: false } });
+  return live.filter((ruleset) => ruleset.source_type === REPOSITORY_RULESET_SOURCE);
+}
+
+/**
+ * Spec 14.4: the sync deletes only the rulesets the owner named, so apply refuses before its first write unless the
+ * live repository rulesets carry exactly the names copied from the plan row.
+ * @param {{ client: import('../lib/github.mjs').GitHubClient, org: string, repo: string, names?: string[] }} options
+ * @returns {Promise<string[]>} the live names, equal to `names` as a set
+ */
+export async function requireReplacedRulesets({ client, org, repo, names }) {
+  const live = (await readRepositoryRulesets({ client, org, repo })).map((ruleset) => ruleset.name);
+  const advice = 'no write was made, copy the names from the plan rows rulesets the sync deletes';
+  const literals = (list) => list.map(rulesetNameLiteral).join(', ');
+  if (names === undefined) {
+    if (live.length === 0) return live;
+    throw new SettingsError(`${org}/${repo} has repository rulesets and replaceRulesets is missing; ${advice}: ${literals(live)}`);
+  }
+  const unnamed = live.filter((name) => !names.includes(name));
+  const absent = names.filter((name) => !live.includes(name));
+  if (unnamed.length === 0 && absent.length === 0) return live;
+  const differences = [absent.length > 0 && `named but absent: ${literals(absent)}`, unnamed.length > 0 && `not named: ${literals(unnamed)}`].filter(Boolean);
+  throw new SettingsError(`${org}/${repo} repository rulesets differ from replaceRulesets; ${advice}; ${differences.join('; ')}`);
+}
+
+/** `protection.enabled` is the classic rule; a protected branch without it is held by an enforced ruleset. */
+function protectionSource(branch, rulesets) {
+  if (branch?.protection?.enabled === true) return 'set by a classic branch protection rule: delete it in settings/branches';
+  const literals = rulesets.filter((ruleset) => ruleset.target === 'branch' && ruleset.enforcement !== 'disabled').map((ruleset) => rulesetNameLiteral(ruleset.name));
+  if (literals.length === 0) return 'set by a ruleset outside this repository: exclude the repository from it';
+  if (literals.join(', ').length <= LIST_BUDGET) return `set by a ruleset: ${literals.join(', ')}; disable it and name it in replaceRulesets`;
+  return `set by ${literals.length} repository ruleset(s), see the rulesets the sync deletes rows; disable and name each in replaceRulesets`;
+}
+
+/**
+ * One row per ruleset, never cut: the owner copies each name literal into `replaceRulesets`. A literal too long for one
+ * fact continues on `ruleset name part i/n` rows, bracketed so no part loses an edge space; joined, they parse as JSON.
+ * @param {Array<{ name: string, enforcement: string, target: string }>} rulesets
+ * @param {string} rowName
+ * @param {Set<string>} [kitNames] rulesets the kit declares, marked as kept: the sync updates them in place
+ * @returns {Array<{ name: string, detail: string }>}
+ */
+export function rulesetRows(rulesets, rowName, kitNames = new Set()) {
+  if (rulesets.length === 0) return [{ name: rowName, detail: 'none' }];
+  return rulesets.flatMap(({ name, enforcement, target }) => {
+    const meta = `${kitNames.has(name) ? 'kit ruleset, kept, ' : ''}enforcement ${enforcement}, target ${target}, name`;
+    const literal = rulesetNameLiteral(name);
+    if (meta.length + literal.length < RULESET_DETAIL_BUDGET) return [{ name: rowName, detail: `${meta} ${literal}` }];
+    const parts = literal.match(new RegExp(`.{1,${RULESET_NAME_PART_LENGTH}}`, 'g'));
+    const partRows = parts.map((part, index) => ({ name: `ruleset name part ${index + 1}/${parts.length}`, detail: `[${part}]` }));
+    return [{ name: rowName, detail: `${meta} in parts below` }, ...partRows];
+  });
+}
+
+async function readMainProtection({ client, org, repo, rulesets }) {
   const { status, data } = await client.request('GET', repoPath(org, repo, `/branches/${DEFAULT_BRANCH}`), { okStatuses: [404] });
   const isProtected = status === 200 && data?.protected === true;
-  return gapRow('protected main', isProtected, isProtected ? 'set; rulesets replace it, delete the branch protection rule in the browser' : 'not set');
+  return gapRow('protected main', isProtected, isProtected ? protectionSource(data, rulesets) : 'not set');
 }
 
 const ancestorsOf = (path) => path.split('/').slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join('/'));
@@ -341,22 +407,24 @@ async function readCollisions({ client, org, repo, branch, kitEntries }) {
 
 /**
  * The failing rows of spec 14.4 against the built kit tree, from GET calls. `headSha` is the commit the tree was read
- * at; `treeSha` and `tree` (the recursive entries) come only when the tree was read whole.
+ * at; `treeSha` and `tree` (the recursive entries) come only when the tree was read whole. `rulesets` is
+ * `readRepositoryRulesets` output.
  */
 export async function readAdoptionGaps({ client, org, repo, kitEntries }) {
   const { data: repository } = await client.request('GET', repoPath(org, repo, ''));
   const branch = repository.default_branch;
   const { status } = await client.request('GET', repoPath(org, repo, '/commits'), { query: { per_page: 1 }, okStatuses: [409] });
   const empty = status === 409;
+  const rulesets = await readRepositoryRulesets({ client, org, repo });
   const rows = [
     gapRow('default branch', branch !== DEFAULT_BRANCH, branch === DEFAULT_BRANCH ? branch : `${capName(branch)}, must be ${DEFAULT_BRANCH}`),
     gapRow('empty repository', empty, empty ? 'yes' : 'no'),
     gapRow('archived', repository.archived === true, repository.archived === true ? 'yes' : 'no'),
   ];
-  if (empty) return { rows: [...rows, gapRow('protected main', false, NOT_CHECKED_EMPTY), gapRow('collisions', false, NOT_CHECKED_EMPTY)], empty };
-  rows.push(await readMainProtection({ client, org, repo }));
+  if (empty) return { rows: [...rows, gapRow('protected main', false, NOT_CHECKED_EMPTY), gapRow('collisions', false, NOT_CHECKED_EMPTY)], empty, rulesets };
+  rows.push(await readMainProtection({ client, org, repo, rulesets }));
   const { row, ...pin } = await readCollisions({ client, org, repo, branch, kitEntries });
-  return { rows: [...rows, row], empty, ...pin };
+  return { rows: [...rows, row], empty, rulesets, ...pin };
 }
 
 /** Owner decision (#258): adopt never adds a LICENSE, so the report names the project's or says none is there. */
@@ -368,9 +436,9 @@ function licenseDetail(tree) {
 
 /**
  * The reported rows of spec 14.4, which never fail; merge settings and secret names are not read. `tree` is the
- * `readAdoptionGaps` tree, absent when it was not read whole.
+ * `readAdoptionGaps` tree, absent when it was not read whole; `rulesets` its rulesets, one uncut row each.
  */
-export async function readAdoptionReport({ client, org, repo, kitLabels, empty, tree }) {
+export async function readAdoptionReport({ client, org, repo, kitLabels, empty, tree, rulesets }) {
   const kept = new Set(kitLabels.map(normalizeLabel));
   const labels = (await client.paginate(repoPath(org, repo, '/labels'))).map((label) => label.name).filter((name) => !kept.has(normalizeLabel(name)));
   const tags = empty ? [] : (await client.paginate(repoPath(org, repo, '/git/matching-refs/tags/v'))).map((ref) => String(ref.ref).slice(TAG_REF_PREFIX.length));
@@ -378,6 +446,7 @@ export async function readAdoptionReport({ client, org, repo, kitLabels, empty, 
   const issues = (await client.paginate(repoPath(org, repo, '/issues'), { query: { state: 'open' } })).filter((issue) => !issue.pull_request);
   const unformatted = issues.filter((issue) => !validateIssueBody({ type: issue.type?.name ?? null, body: issue.body ?? '' }).ok);
   return [
+    ...rulesetRows(rulesets, 'rulesets the sync deletes'),
     { name: 'labels the sync deletes', detail: listNames(labels) },
     { name: 'v* tags', detail: listNames(tags) },
     { name: 'environments', detail: listNames(environments.map((environment) => environment.name)) },
