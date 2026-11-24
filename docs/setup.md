@@ -4,13 +4,13 @@ From a fresh clone of upstream groundwork to `v0.1.0` in your own organization, 
 
 **Start.** Open Claude Code in your clone and say: `set up groundwork`. The `groundwork-setup` skill asks one consent question, (A) every step in the browser or (B) a wizard you run in your own terminal, then walks you through the steps below and resumes where you stopped. Under B you run `node scripts/owner/setup.mjs` in a terminal outside Claude Code; it asks y/N before every write. Without the skill, follow the steps below in order by hand (answer A).
 
-**You need:** a GitHub account with two-factor authentication; Node 24+, Git and the GitHub CLI (`gh auth login` as yourself) on the machine; a clone of upstream groundwork on `main` with no local changes; about an hour.
+**You need:** a GitHub account with two-factor authentication; Node 24+, Git with your own `user.name` and `user.email` set, and the GitHub CLI (`gh auth login` as yourself) on the machine; a clone of upstream groundwork on `main` with no local changes; about an hour.
 
 Placeholders: `<org>` your organization, `<owner>` your login (lower-case), `<app>` the agent App slug, `<admin-app>` and `<release-app>` the admin and release App slugs. `repo-copy` writes all of them to `.github/groundwork/config.json`, so pick the App slugs before you create the Apps. App names are global on GitHub; if one is taken, follow the slug recovery under `app-agent`.
 
 ## Part 1: once per organization
 
-Each step has an ID and a class. **browser**: you, on a GitHub page; the skill or wizard only opens it. **wizard**: the owner wizard under answer B; under answer A you do it by hand as written. **app**: the agent requests an `admin` run and you approve it in the browser. `setup-state.json` records the answer and each step's status; it is a record, not a control. On Windows it lives in `%APPDATA%\groundwork\`; on macOS and Linux set `GROUNDWORK_SETUP_STATE_FILE` to its path, or the skill and wizard stop (the variable also wins on Windows). Billing, org ownership, deletions, key rotation and `admin` approvals stay in the browser under either answer. Consent ends when the last step is done.
+Each step has an ID and a class. **browser**: you, on a GitHub page; the skill or wizard only opens it. **wizard**: the owner wizard under answer B; under answer A you do it by hand as written. **app**: the agent requests an `admin` run and you approve it in the browser. `setup-state.json` records the answer and each step's status; it is a record, not a control. On Windows it lives in `%APPDATA%\groundwork\`; on macOS and Linux set `GROUNDWORK_SETUP_STATE_FILE` to its path, or the skill and wizard stop (the variable also wins on Windows). Billing, org ownership, deletions, key rotation and `admin` approvals stay in the browser under either answer. Consent ends when the last step is done. The wizard builds every `wizard` and `browser` step except `org-team-agents` and `release-merge`: it stops at those with "not in this wizard version", the skill walks them with you and marks them, and you rerun the wizard.
 
 ### Consent note
 
@@ -24,7 +24,7 @@ The skill writes it into your clone right after you answer. By hand, create `doc
 - Classes: <[] for A, [wizard] for B>
 - Always excluded: billing, org ownership, deletions, agent App key rotation, admin environment approvals
 - Ends: when release-merge is done
-- setup-state.json schema version: 1
+- setup-state.json schemaVersion: 1
 ```
 
 ### `org-create` · browser
@@ -104,10 +104,13 @@ Then, in either shell:
 git add .github/groundwork/config.json .github/CODEOWNERS .release-please-manifest.json version.txt CHANGELOG.md docs/runs/<YYYY-MM-DD>-setup-consent.md
 git diff --cached                 # read it; nothing else may be staged
 git commit -m "chore: set up <org> from groundwork $(git describe --tags --abbrev=0 upstream/main)"
-gh repo create <org>/groundwork --public --source . --remote origin --push
+gh repo create <org>/groundwork --public --source . --remote origin
+git remote get-url --push --all origin   # must print one line, the <org>/groundwork URL
+gh repo set-default <org>/groundwork
+git push --set-upstream origin main
 ```
 
-Never `git add -A` or `git commit -a`. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
+No `--push` on `gh repo create`: the wizard pushes with its own hook-free Git after checking the push URL, and by hand you run the same four commands. `gh repo set-default` matters because the clone keeps `upstream`: without it `gh` and every agent script resolve to upstream groundwork, not your copy. Never `git add -A` or `git commit -a`. The push carries `.github/workflows/`, which GitHub accepts only from a credential with the `workflow` scope: if it is refused for that scope and `gh` is your Git credential helper, run `gh auth refresh -s workflow` and push again. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
 
 - Verify: https://github.com/<org>/groundwork shows your commit on `main`, and `main` contains `.github/workflows/admin-run.yml`. Nothing after this works without it.
 
@@ -188,7 +191,7 @@ The agent requests `apply-settings --repo groundwork --ref <main sha>`; you appr
 
 ### `release-dispatch` · app
 
-The agent runs `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml --ref main` once (any merged PR also triggers it). No `admin` run and no approval: the `release` environment has no reviewer. `<release-app>[bot]` opens a release PR for `v0.1.0`.
+The agent runs `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml --repo <org>/groundwork --ref main` once (any merged PR also triggers it). No `admin` run and no approval: the `release` environment has no reviewer. `<release-app>[bot]` opens a release PR for `v0.1.0`.
 
 ### `release-merge` · browser
 
@@ -198,7 +201,7 @@ The agent runs `node scripts/agent/token.mjs exec -- gh workflow run release-ple
 
 ## Part 2: each project
 
-Pass 1, the probe and pass 2 run through `request.mjs`; every `admin` run waits for your approval in the browser. The path is spec 14.2.
+Pass 1, the probe and pass 2 run through `request.mjs`; every `admin` run waits for your approval in the browser. The path is spec 14.2. To turn a repository you already have into a project in place, follow [adopt.md](adopt.md) for pass 1, then continue here at step 2.
 
 1. Agent runs `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs bootstrap --repo <name> --args '{"description":"..."}'`. You open the run URL, read the plan, approve. Pass 1 creates the repo, creates the labels, pushes a single `chore: bootstrap from groundwork vX.Y.Z` commit (reusable workflows pinned to the tag's commit SHA), applies settings, team access, environments and security settings, applies rulesets last, sets `GROUNDWORK_READY`, opens the "Project setup" epic (unaccepted), runs a final labels pass and ends with `check`. GitHub's default labels are gone afterwards.
 2. Agent runs `node scripts/agent/token.mjs exec -- node scripts/admin/request.mjs probe --repo <name>`. No approval. The push to `main` must be rejected (`"protected": true`, status 409 or 422).
@@ -216,6 +219,8 @@ To move a project to a newer release, an agent claims a Chore issue and runs `no
 1. You or a planner open a Chore issue naming the upstream tag `vX.Y.Z`; an agent claims it.
 2. On `issue/N`: `git fetch --no-tags upstream refs/tags/vX.Y.Z`, then `git merge FETCH_HEAD`. Resolve conflicts keeping your side in `.github/groundwork/config.json`, `.github/CODEOWNERS`, `version.txt`, `.release-please-manifest.json` and `CHANGELOG.md`; take upstream elsewhere unless you changed the region on purpose.
 3. Push through the wrapper and mark the PR ready. You apply `size-exception` (an upstream release is far over 400 lines) and approve as code owner.
+
+A clone without the `upstream` remote gets it with `git remote add upstream` and the upstream groundwork URL. Then run `gh repo set-default <org>/groundwork` in that clone, or check that `git config --get remote.origin.gh-resolved` prints `base`: with `upstream` present and no default, `gh` and every agent script resolve to upstream groundwork, not your copy.
 
 The cost of squash-only `main` (`rulesets/main.json`): the squash commit has no upstream parent, so the merge base stays at the clone point. Every later update conflicts again in each region upstream changed twice since the clone, and the version files conflict every time. An upstream release that deletes or skips tests also needs your `integrity-exception`.
 

@@ -20,11 +20,15 @@ const IDENT_TIMESTAMP = /\s+\d+\s+[+-]\d{4}$/;
 const BOT_IDENTITY = /\[bot\]/i;
 const UNTRACKED = '??';
 const MAIN_ONLY = 'branch:main';
+// gh repo set-default marks the remote gh and every agent script resolve the repository by (spec 14.3).
+const GH_DEFAULT_KEY = 'remote.origin.gh-resolved';
+const UPSTREAM_DEFAULT_KEY = 'remote.upstream.gh-resolved';
+const GH_DEFAULT_VALUE = 'base';
 // .git/config is agent-writable and Git runs programs it names (gpg.program, credential helpers, core.sshCommand,
-// filters, includes), so repo-copy accepts only keys that run nothing. Listing every executable key to override cannot be complete.
+// filters, diff.external, includes), so the wizard accepts only keys that run nothing. Listing every executable key to override cannot be complete.
 const SAFE_LOCAL_CONFIG = [
   /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|symlinks|ignorecase|autocrlf|precomposeunicode)$/,
-  /^remote\.[^.]+\.(url|fetch)$/, /^branch\..+\.(remote|merge|rebase)$/, /^user\.(name|email)$/,
+  /^remote\.[^.]+\.(url|fetch|gh-resolved)$/, /^branch\..+\.(remote|merge|rebase)$/, /^user\.(name|email)$/,
 ];
 // Same rule shape as bootstrap's CODEOWNERS fill: pattern, owners, optional trailing comment.
 const CODEOWNERS_RULE = /^(\s*[^\s#]+\s+)([^#]*?)(\s*(?:#[^\n]*)?)$/;
@@ -154,12 +158,13 @@ function refuseWithRecovery(io, { reason, remote, note, untracked = [] }) {
   refuse(reason);
 }
 
-// Accepts a fresh clone plus the consent note, or the state a declined y/N or a failed push left behind.
-function requireSafeLocalConfig(io) {
+/** Reading the config runs nothing it names, so the wizard runs this before any other git command. */
+export function requireSafeLocalConfig(io) {
   const unsafe = lines(git(io, 'config', '--local', '--name-only', '--list')).find((key) => !SAFE_LOCAL_CONFIG.some((safe) => safe.test(key)));
-  if (unsafe !== undefined) refuse(`.git/config sets ${clean(unsafe)}, which repo-copy does not run with: remove it (git config --local --unset-all ${clean(unsafe)}), then rerun`);
+  if (unsafe !== undefined) refuse(`.git/config sets ${clean(unsafe)}, which the wizard does not run with: remove it (git config --local --unset-all "${clean(unsafe)}"), then rerun`);
 }
 
+// Accepts a fresh clone plus the consent note, or the state a declined y/N or a failed push left behind.
 function inspectClone(io, note) {
   if (io.readText(fromRoot(io, note)) === null) refuse(`consent note ${note} is missing: copy it from docs/setup.md, then rerun`);
   requireSafeLocalConfig(io);
@@ -247,7 +252,9 @@ async function commitSetup(io, { org, note }) {
   printBlock(io, git(io, 'diff', '--cached', '--no-color', '--no-ext-diff'));
   io.print(`Consent note ${note}:`);
   printBlock(io, io.readText(fromRoot(io, note)));
-  const author = clean(git(io, 'var', 'GIT_AUTHOR_IDENT').replace(IDENT_TIMESTAMP, ''));
+  const ident = io.capture('git', ['var', 'GIT_AUTHOR_IDENT']);
+  if (ident.status !== 0) refuse(`git var failed with exit ${ident.status}: ${errorText(ident)}: set user.name and user.email (git config user.name "Your Name", git config user.email "you@example.com"), then rerun`);
+  const author = clean(ident.stdout.trimEnd().replace(IDENT_TIMESTAMP, ''));
   if (BOT_IDENTITY.test(author)) refuse(`git would commit as ${author}: set your own user.name and user.email in this clone, then rerun`);
   io.print(`author: ${author}`);
   const message = `chore: set up ${org} from groundwork ${upstreamVersion(io)}`;
@@ -260,12 +267,16 @@ const isOrgRepositoryUrl = (url, org) => new RegExp(`^(https://github\\.com/|git
 async function pushCopy(io, org) {
   const remotes = lines(git(io, 'remote'));
   if (!remotes.includes('upstream')) refuse('remote upstream is missing: repo-copy renames origin to upstream before it pushes');
+  if (io.capture('git', ['config', '--get', UPSTREAM_DEFAULT_KEY]).status === 0) refuse(`remote upstream is gh's default: run git config --unset ${UPSTREAM_DEFAULT_KEY}, then rerun`);
   const create = { command: 'gh', args: ['repo', 'create', `${org}/${CONTROL_REPO}`, '--public', '--source', '.', '--remote', 'origin'] };
   if (!remotes.includes('origin') && !(await confirmRun(io, create))) return false;
   const urls = lines(git(io, 'remote', 'get-url', '--push', '--all', 'origin')).map(clean);
   if (urls.length !== 1) refuse(`origin pushes to ${urls.length} URLs (${urls.join(', ')}): keep only github.com/${org}/${CONTROL_REPO}, then rerun`);
   const [url] = urls;
   if (!isOrgRepositoryUrl(url, org)) refuse(`origin pushes to ${url}, not github.com/${org}/${CONTROL_REPO}: fix it with git remote set-url origin, then rerun`);
+  const ghDefault = io.capture('git', ['config', '--get', GH_DEFAULT_KEY]).stdout.trim();
+  const setDefault = { command: 'gh', args: ['repo', 'set-default', `${org}/${CONTROL_REPO}`] };
+  if (ghDefault !== GH_DEFAULT_VALUE && !(await confirmRun(io, setDefault))) return false;
   io.print(`push to ${url}`);
   return confirmRun(io, { command: 'git', args: ['push', '--set-upstream', 'origin', 'main'] });
 }

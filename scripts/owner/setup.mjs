@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { STEP_HANDLERS, baselineRemote, clean } from './steps.mjs';
+import { STEP_HANDLERS, baselineRemote, clean, requireSafeLocalConfig } from './steps.mjs';
 
 export { clean };
 
@@ -153,6 +153,7 @@ export function checkReviewedCode(io) {
     const result = io.capture('git', args);
     return result.status === 0 ? result.stdout.trim() : refuse(`git ${args[0]} failed with exit ${result.status}`);
   };
+  requireSafeLocalConfig(io);
   const remote = baselineRemote(io);
   // The full ref, so a local branch or tag named origin/main cannot stand in for the remote-tracking ref.
   const baseline = `refs/remotes/${remote}/main`;

@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
   askHidden, askLine, clean, ghEnvironment, gitArguments, hardenExecutableLookup, main, openCommand, parseScopes, stepsToRun, validateState, wasInterrupted,
@@ -15,7 +19,7 @@ const BASE_PERMISSION = 'gh api -X PATCH /orgs/acme -f default_repository_permis
 const done = (note = '') => ({ status: note ? 'skipped' : 'done', updatedAt: NOW, note });
 const consent = { answer: 'B', classes: ['wizard'], answeredAt: NOW, endedAt: null };
 const stateWith = (extra = {}) => ({ schemaVersion: 1, org: 'acme', consent, steps: { 'org-create': done(), 'org-2fa': done() }, ...extra });
-const GIT_REPLIES = { remote: 'origin\n', 'rev-parse': 'abc123\n', status: '', diff: '' };
+const GIT_REPLIES = { config: 'core.bare\nremote.origin.url\n', remote: 'origin\n', 'rev-parse': 'abc123\n', status: '', diff: '' };
 
 // attachResults maps a call prefix to a status, or to an Error the fake throws (an interrupted child).
 function fakeIo({ state = stateWith(), answers = [], git = {}, gitFails = [], scopes = [], stickyScope = false, authStatus = 0, attachResults = {} } = {}) {
@@ -86,6 +90,41 @@ test('AC1b prints HEAD and the full baseline ref, refuses local changes, a diff 
   await refused(fakeIo({ gitFails: ['status'] }), [], /git status failed with exit 128/);
   await refused(fakeIo({ gitFails: ['rev-parse'] }), [], /git rev-parse failed/);
   assert.deepEqual(gitArguments('/empty', ['status']), ['-c', 'core.hooksPath=/empty', '-c', 'core.fsmonitor=false', 'status']);
+});
+
+// A repository whose .git/config runs a program on git status (filter.x.clean) and on git diff (diff.external),
+// with scripts/lib/x.mjs changed at the same size so git status re-hashes it through the filter.
+function unsafeConfigFixture(t) {
+  const base = mkdtempSync(path.join(tmpdir(), 'groundwork-unsafe-config-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const repo = path.join(base, 'repo');
+  const marker = path.join(base, 'ran').replaceAll('\\', '/');
+  const git = (...args) => assert.equal(spawnSync('git', args, { cwd: repo }).status, 0, args.join(' '));
+  mkdirSync(path.join(repo, 'scripts', 'lib'), { recursive: true });
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(repo, '.gitattributes'), '* filter=x\n');
+  writeFileSync(path.join(repo, 'scripts', 'lib', 'x.mjs'), 'a\n');
+  git('add', '.');
+  git('-c', 'user.name=Owner', '-c', 'user.email=owner@example.com', 'commit', '-q', '-m', 'init');
+  git('remote', 'add', 'origin', 'https://github.com/acme/groundwork.git');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('config', '--local', 'filter.x.clean', `echo filter >> "${marker}"; cat`);
+  git('config', '--local', 'diff.external', `echo diff >> "${marker}"; true`);
+  writeFileSync(path.join(repo, 'scripts', 'lib', 'x.mjs'), 'b\n');
+  return { repo, marker };
+}
+
+test('AC6 a .git/config that sets filter.x.clean and diff.external refuses before any other git command', async (t) => {
+  const { repo, marker } = unsafeConfigFixture(t);
+  const io = fakeIo();
+  io.capture = (command, args) => {
+    io.calls.push([command, ...args].join(' '));
+    const result = spawnSync(command, args, { cwd: repo, encoding: 'utf8' });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  };
+  await refused(io, [], /\.git\/config sets filter\.x\.clean, which the wizard does not run with: remove it \(git config --local --unset-all "filter\.x\.clean"\)/);
+  assert.deepEqual(io.calls, ['git config --local --name-only --list']);
+  assert.ok(!existsSync(marker), 'a configured program ran');
 });
 
 test('AC1c validates setup-state.json, strips control characters, refuses org steps while org is null', async () => {

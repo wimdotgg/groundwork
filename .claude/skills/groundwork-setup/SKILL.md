@@ -33,7 +33,7 @@ Resume: if `setup-state.json` (section 3) already holds `consent.answer`, the qu
 
 Check these right after the answer, before `org-create`. The owner checks what needs their login; you never run `gh auth status`.
 
-- Node 24+ and git on PATH, here and in the owner's own terminal.
+- Node 24+ and git on PATH, here and in the owner's own terminal, with the owner's Git `user.name` and `user.email` set (the `repo-copy` commit is theirs).
 - Under B: `gh` logged in as the owner in their own terminal (they run `gh auth status` there).
 - This clone on `main`, `origin` pointing at upstream groundwork, `git status --porcelain` empty before the consent note; after it, the note is the only change.
 - macOS and Linux: `GROUNDWORK_SETUP_STATE_FILE` (and later `GROUNDWORK_AGENT_KEY_FILE`, `GROUNDWORK_AGENT_CLIENT_ID`) reach this session only from the environment Claude Code started in. The owner adds each line to their shell profile, restarts Claude Code, and uses the same values in the wizard's terminal. After a restart this skill resumes from the state file.
@@ -69,7 +69,7 @@ The control repo does not exist yet, so its record is a run note. Right after th
 
 - Date: 2026-11-23T09:00:00Z
 - Answer: B
-- Classes: wizard
+- Classes: [wizard]
 - Always excluded: billing, org ownership, deletions, agent App key rotation, admin environment approvals
 - Ends: when release-merge is done
 - setup-state.json schemaVersion: 1
@@ -106,14 +106,14 @@ Also print the URL, in case no browser opens.
 
 The owner runs `node scripts/owner/setup.mjs` in their own terminal at this clone's root, outside Claude Code (not the `!` shell: the wizard refuses when `CLAUDECODE` is set). `--step <id>` runs one step. Before they start, tell them:
 
-- Preconditions: their own `gh` login; `GH_TOKEN` unset; `scripts/owner` and `scripts/lib` unchanged against `origin/main` as last fetched; the same `GROUNDWORK_SETUP_STATE_FILE` as this session, if set.
+- Preconditions: their own `gh` login; `GH_TOKEN` unset; `.git/config` setting only the keys spec 14.3 allows (the wizard refuses any other by name before it runs a git command, and names the `git config --local --unset-all` line); `scripts/owner` and `scripts/lib` unchanged against `origin/main` as last fetched; the same `GROUNDWORK_SETUP_STATE_FILE` as this session, if set.
 - Walk: from the resume point it asks "Already done before setup? y/N" per step (`y` asks for a note and skips the step; `N` runs it). A `browser` step opens the page, names field and value, then asks "Verified? y/N"; after `org-create` it asks "Organization login:". It stops at the next `app` step and names the request I make.
 - Before the first of `org-base-permission` and `org-actions`, `gh auth refresh -s admin:org` opens a browser prompt for the extra scope. Each `gh` command is shown, then "Run it? y/N". `org-actions` first prints that it sends `enabled_repositories=all`, which turns Actions on for every repository. At the end it removes the scope and prints "admin:org is gone"; if not, it prints the removal command.
 - Anything but `y` ends the walk with the step `pending`; the next run resumes there.
 
 After the walk ends, re-read `setup-state.json` and continue from the resume point.
 
-Wizard coverage: the wizard in #286 builds `org-create`, `org-2fa`, `org-pat-policy`, `org-base-permission` and `org-actions`. Every other `wizard` and `browser` step answers "not in this wizard version" until #272 lands. Until then, walk those steps as under A (section 5) and mark them yourself; the `wizard` ones among them (`repo-copy`, `agent-key-store`, `admin-environment`, `admin-secrets`) the owner does in the browser or with the commands at that step.
+Wizard coverage: the wizard builds every `wizard` and `browser` step except `org-team-agents` and `release-merge`, and stops at those with "not in this wizard version". Walk them as under A (section 5), mark them yourself, then hand back to the wizard.
 
 ## 7. Secrets
 
@@ -185,12 +185,12 @@ Before it, plan the App slugs and the config values:
 2. Check each slug. No App key exists yet, so call unauthenticated, and keep the slug off the command line: write a curl config file in your scratch directory, outside the clone, holding `url = "https://api.github.com/apps/<slug>"`, run `curl -s -o /dev/null -w "%{http_code}\n" -K <that file>`, then do the same for `url = "https://api.github.com/users/<slug>%5Bbot%5D"`. A private App answers 404 on the first; its bot user answers 200 on the second. Either 200: taken, ask for another. Both 404: probably free; the App form decides, and the slug check after each App is the fallback. Any other status (403 at the 60 per hour unauthenticated limit, 000, 5xx) is no answer: retry later, never read it as free.
 3. Propose the `.github/groundwork/config.json` change: `org`, `accounts.owner` (the owner's login), `accounts.agent` (`<agent>[bot]`), `apps.agent`, `apps.admin`, `apps.release`; plus the owner in `.github/CODEOWNERS`. Show the values and get a yes.
 
-Then the owner, in their own terminal at this clone's root:
+Under B the wizard does the rest, each write behind its own y/N; it asks the owner for the login and slugs, so give them the confirmed values. Under A, the owner, in their own terminal at this clone's root:
 
 1. `git remote rename origin upstream`.
 2. You write the confirmed `config.json` and `CODEOWNERS` changes and reset the release files: `.release-please-manifest.json` `{}`, `version.txt` `0.0.0`, empty `CHANGELOG.md`. Show `git diff`.
 3. `git add` those five paths and the consent note by name (never `-A`), then `git commit -m "chore: set up <org> from groundwork <tag>"` under their own Git identity, `<tag>` from `git describe --tags --abbrev=0 upstream/main` or the upstream short SHA.
-4. `gh repo create <org>/groundwork --public --source . --remote origin --push`.
+4. `gh repo create <org>/groundwork --public --source . --remote origin` (no `--push`), then `git remote get-url --push --all origin`, which must print exactly one URL, that of `<org>/groundwork` (HTTPS or SSH), then `gh repo set-default <org>/groundwork` (without it `gh` and every agent script resolve to `upstream`), then `git push --set-upstream origin main`. A push refused for the `workflow` scope (it carries `.github/workflows/`) needs `gh auth refresh -s workflow` when `gh` is the Git credential helper.
 
 - Verify: https://github.com/<org>/groundwork shows the commit, with the consent note under `docs/runs/`.
 
@@ -212,8 +212,8 @@ URL: https://github.com/organizations/<org>/settings/apps/new. One action at a t
 
 ### `agent-key-store` (wizard)
 
-- B, A: the owner stores the key in their own terminal as `docs/setup.md` describes for `agent-key-store`. Windows: `%APPDATA%\groundwork\<agent>.pem.dpapi` and `<agent>.json` (`appId`, `slug`, `clientId`). Elsewhere: the PEM outside any repository, `GROUNDWORK_AGENT_KEY_FILE` and `GROUNDWORK_AGENT_CLIENT_ID` in the shell profile, then restart Claude Code (section 2).
-- Verify: `node scripts/agent/token.mjs exec -- gh repo view --json nameWithOwner` prints `<org>/groundwork`. From here you can read GitHub as the agent App.
+- B: the wizard asks for the client ID, on Windows the App ID, and the path of the downloaded `.pem`, then stores the key. A: the owner stores the key in their own terminal as `docs/setup.md` describes for `agent-key-store`. Windows: `%APPDATA%\groundwork\<agent>.pem.dpapi` and `<agent>.json` (`appId`, `slug`, `clientId`). Elsewhere: the PEM outside any repository, `GROUNDWORK_AGENT_KEY_FILE` and `GROUNDWORK_AGENT_CLIENT_ID` in the shell profile, then restart Claude Code (section 2).
+- Verify: `node scripts/agent/token.mjs exec -- gh repo view <org>/groundwork --json nameWithOwner` prints `<org>/groundwork`. From here you can read GitHub as the agent App.
 
 ### `app-admin` (browser)
 
@@ -254,11 +254,11 @@ Ask for the App's URL: `https://github.com/apps/<slug>` or the settings page `ht
 
 ### `release-dispatch` (app)
 
-- Run `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml` from this clone (the repo comes from `origin`).
+- Run `node scripts/agent/token.mjs exec -- gh workflow run release-please.yml --repo <org>/groundwork --ref main`.
 - Verify: a release PR by `<release>[bot]` opens on https://github.com/<org>/groundwork/pulls.
 
 ### `release-merge` (browser)
 
 - URL: the release PR from `release-dispatch`.
 - Field, value: approve it as CODEOWNER and merge. Agents never merge release PRs.
-- Verify: `node scripts/agent/token.mjs exec -- gh release view v0.1.0 --json tagName` prints `v0.1.0`. Mark the step `done`, set `consent.endedAt`, and tell the owner setup is finished and per-project work follows spec 14.2.
+- Verify: `node scripts/agent/token.mjs exec -- gh release view v0.1.0 --repo <org>/groundwork --json tagName` prints `v0.1.0`. Mark the step `done`, set `consent.endedAt`, and tell the owner setup is finished and per-project work follows spec 14.2.
