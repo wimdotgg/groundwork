@@ -351,11 +351,51 @@ test('F2 a landed rerun still finishes after the kit moved and was fetched', asy
   assert.doesNotMatch(everything(rerun), REMOVE_ADVICE);
 });
 
-test('F3 an origin that already pushes to the org repository with no upstream refuses and says to add the kit back', async (t) => {
-  const { clone } = await landedFixture(t);
+test('F3 an origin that already pushes to the org repository with no upstream refuses, and adding the kit back with a fetch lets the rerun finish', async (t) => {
+  const { clone, upstream } = await landedFixture(t);
   git(clone, 'remote', 'remove', 'upstream');
-  const rerun = await assertRefusedUntouched({ clone, answers: ['y'], message: /^origin already pushes to github\.com\/acme\/groundwork and the upstream remote is missing: add the groundwork kit back with git remote add upstream <the upstream groundwork URL> \(see "upstream updates" in docs\/setup\.md\), then rerun$/ });
+  const rerun = await assertRefusedUntouched({ clone, answers: ['y'], message: /^origin already pushes to github\.com\/acme\/groundwork and the upstream remote is missing: add the groundwork kit back with git remote add -f upstream <the upstream groundwork URL> \(see "upstream updates" in docs\/setup\.md\), then rerun$/ });
   assert.ok(!rerun.calls.includes('git remote rename origin upstream'));
+  git(clone, 'remote', 'add', '-f', 'upstream', upstream);
+  const headBefore = git(clone, 'rev-parse', 'HEAD');
+  const followed = cloneIo(clone, { answers: [] });
+  assert.equal(await repoCopy(followed), true);
+  assert.deepEqual(writeCalls(followed), []);
+  assert.equal(git(clone, 'rev-parse', 'HEAD'), headBefore);
+});
+
+test('G1 an upstream remote added without a fetch refuses with the fetch advice, and the rerun after the fetch finishes', async (t) => {
+  const { clone, upstream } = await landedFixture(t);
+  git(clone, 'remote', 'remove', 'upstream');
+  git(clone, 'remote', 'add', 'upstream', upstream);
+  await assertRefusedUntouched({ clone, answers: [...COPY_ANSWERS], message: /^remote upstream has no main yet: run git fetch upstream, then rerun$/ });
+  git(clone, 'fetch', '-q', 'upstream');
+  const followed = cloneIo(clone, { answers: [] });
+  assert.equal(await repoCopy(followed), true);
+  assert.deepEqual(writeCalls(followed), []);
+});
+
+test('G2 a kit clone with upstream beside a foreign origin refuses with set-url advice, and the rerun after it continues to the org push', async (t) => {
+  const { clone, org, upstream } = cloneFixture(t);
+  git(clone, 'remote', 'add', '-f', 'upstream', upstream);
+  await assertRefusedUntouched({ clone, answers: [...COPY_ANSWERS], message: /^remotes origin and upstream both exist and origin does not push to github\.com\/acme\/groundwork: run git remote set-url origin https:\/\/github\.com\/acme\/groundwork\.git and keep upstream, then rerun$/ });
+  git(clone, 'remote', 'set-url', 'origin', ORG_URL);
+  const followed = cloneIo(clone, { answers: COPY_ANSWERS.slice(1), org });
+  assert.equal(await repoCopy(followed), true);
+  assert.ok(!followed.calls.includes('git remote rename origin upstream'));
+  assert.ok(followed.calls.includes(COMMIT) && followed.calls.includes(PUSH));
+  assert.equal(git(clone, 'rev-parse', 'refs/remotes/origin/main'), git(clone, 'rev-parse', 'HEAD'));
+  assert.equal(git(clone, 'rev-parse', 'refs/remotes/upstream/main'), git(clone, 'rev-parse', 'HEAD~1'));
+});
+
+test('G2 an origin/main the kit lacks beside an org origin still refuses before any write', async (t) => {
+  const { clone, upstream } = cloneFixture(t);
+  git(clone, 'remote', 'add', '-f', 'upstream', upstream);
+  git(clone, 'remote', 'set-url', 'origin', ORG_URL);
+  git(clone, 'commit', '--allow-empty', '-q', '-m', 'chore: landed on the org');
+  git(clone, 'commit', '--allow-empty', '-q', '-m', 'chore: landed too');
+  git(clone, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  await assertRefusedUntouched({ clone, answers: [...COPY_ANSWERS], message: /^origin\/main exists but HEAD is not the one setup commit/ });
 });
 
 test('AC3 the landed-push finish refuses an origin with more than one push URL or a push URL outside the org repository', async (t) => {

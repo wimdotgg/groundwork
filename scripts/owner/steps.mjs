@@ -196,17 +196,23 @@ const originPushesToOrg = (io, org) => {
   return urls.length === 1 && isOrgRepositoryUrl(urls[0], org);
 };
 
-// With upstream beside origin, only a copy that never pushed and already points origin at the org repository continues.
+const refExists = (io, ref) => io.capture('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).status === 0;
+
+// An origin/main the kit already holds is a stale kit ref: nothing of the org's landed beyond it.
+const originMainIsKitRef = (io) => io.capture('git', ['merge-base', '--is-ancestor', 'refs/remotes/origin/main', 'refs/remotes/upstream/main']).status === 0;
+
+// With upstream beside origin, only a copy that already points origin at the org repository continues, and only while origin/main holds nothing the kit lacks.
 // An unrecognised origin/main refuses: writing again could overwrite what landed. Origin is checked first so a foreign origin always gets the set-url advice.
 async function renameOrigin(io, { org, remote }) {
   const remotes = lines(git(io, 'remote'));
   if (!remotes.includes('origin')) return true;
   if (!remotes.includes('upstream')) {
-    if (isOrgRepositoryUrl(clean(git(io, 'remote', 'get-url', '--push', 'origin')), org)) refuse(`origin already pushes to github.com/${org}/${CONTROL_REPO} and the upstream remote is missing: add the groundwork kit back with git remote add upstream <the upstream groundwork URL> (see "upstream updates" in docs/setup.md), then rerun`);
+    if (isOrgRepositoryUrl(clean(git(io, 'remote', 'get-url', '--push', 'origin')), org)) refuse(`origin already pushes to github.com/${org}/${CONTROL_REPO} and the upstream remote is missing: add the groundwork kit back with git remote add -f upstream <the upstream groundwork URL> (see "upstream updates" in docs/setup.md), then rerun`);
     return confirmRun(io, { command: 'git', args: ['remote', 'rename', 'origin', 'upstream'] });
   }
   if (!originPushesToOrg(io, org)) refuse(`remotes origin and upstream both exist and origin does not push to github.com/${org}/${CONTROL_REPO}: run git remote set-url origin https://github.com/${org}/${CONTROL_REPO}.git and keep upstream, then rerun`);
-  if (remote === 'origin') refuse('origin/main exists but HEAD is not the one setup commit on it over upstream/main, so repo-copy cannot tell what landed: keep upstream, make HEAD match that commit or origin/main, then rerun');
+  if (!refExists(io, 'refs/remotes/upstream/main')) refuse('remote upstream has no main yet: run git fetch upstream, then rerun');
+  if (remote === 'origin' && !originMainIsKitRef(io)) refuse('origin/main exists but HEAD is not the one setup commit on it over upstream/main, so repo-copy cannot tell what landed: keep upstream, make HEAD match that commit or origin/main, then rerun');
   return true;
 }
 
