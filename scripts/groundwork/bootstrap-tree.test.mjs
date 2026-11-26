@@ -378,6 +378,18 @@ test('#274 AC2: a readme in another case or extension keeps the kit README.md ou
   }
 });
 
+test('#306 AC4: a README.md that is a tree keeps the kit README.md out of the merge', () => {
+  const { treeEntries, contents } = adoptFixture();
+  const tree = [{ path: 'README.md', mode: '040000', type: 'tree', sha: 'project-readme-dir' }, { path: 'README.md/intro.md', mode: '100644', type: 'blob', sha: 'p1' }];
+  assert.equal(find(adoptTreeEntries({ treeEntries, contents, target: { tree } }), 'README.md'), undefined);
+});
+
+test('#306 AC3: a target CODEOWNERS that is a symlink is a SettingsError, never appended into', () => {
+  const { treeEntries, contents } = adoptFixture();
+  const tree = [{ path: '.github/CODEOWNERS', mode: '120000', type: 'blob', sha: 'link' }];
+  assert.throws(() => adoptTreeEntries({ treeEntries, contents, target: { tree, codeowners: PROJECT_CODEOWNERS } }), (error) => error instanceof SettingsError && /\.github\/CODEOWNERS/.test(error.message));
+});
+
 test('#274 AC2: a target CODEOWNERS without its text is a SettingsError, not a silent replace', () => {
   const { treeEntries, contents } = adoptFixture();
   assert.throws(() => adoptTreeEntries({ treeEntries, contents, target: { tree: EXISTING_TREE } }), (error) => error instanceof SettingsError && /\.github\/CODEOWNERS/.test(error.message));
