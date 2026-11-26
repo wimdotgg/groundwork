@@ -7,6 +7,7 @@
       "workflowName": "release-please",
       "conclusion": "failure",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -28,6 +29,7 @@
       "workflowName": "release-please",
       "conclusion": "failure",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": {
         "number": 7
       }
@@ -51,6 +53,7 @@
       "workflowName": "release-please",
       "conclusion": "timed_out",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -72,6 +75,7 @@
       "workflowName": "release-please",
       "conclusion": "timed_out",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": {
         "number": 7
       }
@@ -95,6 +99,7 @@
       "workflowName": "release-please",
       "conclusion": "startup_failure",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -116,6 +121,7 @@
       "workflowName": "release-please",
       "conclusion": "startup_failure",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": {
         "number": 7
       }
@@ -139,6 +145,7 @@
       "workflowName": "release-please",
       "conclusion": "success",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": {
         "number": 7
       }
@@ -162,6 +169,7 @@
       "workflowName": "release-please",
       "conclusion": "success",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -177,6 +185,7 @@
       "workflowName": "release-please",
       "conclusion": "cancelled",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": {
         "number": 7
       }
@@ -194,6 +203,7 @@
       "workflowName": "release-please",
       "conclusion": "cancelled",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -209,6 +219,7 @@
       "workflowName": "release-please",
       "conclusion": "skipped",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": {
         "number": 7
       }
@@ -226,6 +237,7 @@
       "workflowName": "release-please",
       "conclusion": "skipped",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -241,6 +253,7 @@
       "workflowName": "release-please",
       "conclusion": "neutral",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": {
         "number": 7
       }
@@ -258,6 +271,7 @@
       "workflowName": "release-please",
       "conclusion": "neutral",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -273,6 +287,7 @@
       "workflowName": "release-please",
       "conclusion": "action_required",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": {
         "number": 7
       }
@@ -290,6 +305,7 @@
       "workflowName": "release-please",
       "conclusion": "action_required",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -305,6 +321,7 @@
       "workflowName": "a`b\n@owner",
       "conclusion": "failure",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -326,6 +343,7 @@
       "workflowName": "",
       "conclusion": "",
       "runUrl": "",
+      "runEvent": null,
       "openAlert": null
     },
     "expected": {
@@ -342,7 +360,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -371,7 +390,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -408,7 +428,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "success",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -445,7 +466,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -482,7 +504,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -520,7 +543,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "cancelled",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -551,7 +575,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "success",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -611,7 +636,8 @@
       "workflow_run": {
         "name": "release-please",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {},
@@ -627,7 +653,8 @@
       "workflow_run": {
         "path": ".github/workflows/release-please.yml",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {},
@@ -643,7 +670,8 @@
       "workflow_run": {
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {},
@@ -659,7 +687,8 @@
       "workflow_run": {
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
-        "conclusion": "failure"
+        "conclusion": "failure",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {},
@@ -676,7 +705,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -720,7 +750,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {
@@ -761,7 +792,8 @@
         "path": ".github/workflows/release-please.yml",
         "name": "release-please",
         "conclusion": "failure",
-        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "workflow_dispatch"
       }
     },
     "routes": {},
@@ -778,6 +810,7 @@
       "workflowName": "``  \n",
       "conclusion": "failure",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -799,6 +832,7 @@
       "workflowName": "  release-please \n",
       "conclusion": "failure",
       "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
       "openAlert": null
     },
     "expected": {
@@ -808,6 +842,183 @@
           "kind": "create-issue",
           "title": "Workflow failure: release-please",
           "body": "Workflow `release-please` ended with `failure`: https://github.com/wimdotgg/groundwork/actions/runs/101\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n"
+        }
+      ]
+    }
+  },
+  {
+    "description": "release-please success from a pull_request (notifier-only) run, open alert -> no actions",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "success",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "pull_request",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "release-please success from a workflow_dispatch run, open alert -> close-issue",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "success",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "close-issue",
+          "number": 7,
+          "comment": "Workflow `release-please` succeeded: https://github.com/wimdotgg/groundwork/actions/runs/101. Closing."
+        }
+      ]
+    }
+  },
+  {
+    "description": "release-please skipped, open alert -> no actions",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/release-please.yml",
+      "workflowName": "release-please",
+      "conclusion": "skipped",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "pull_request",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "deploy success, open alert -> close-issue",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/deploy.yml",
+      "workflowName": "deploy",
+      "conclusion": "success",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "workflow_dispatch",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "close-issue",
+          "number": 7,
+          "comment": "Workflow `deploy` succeeded: https://github.com/wimdotgg/groundwork/actions/runs/101. Closing."
+        }
+      ]
+    }
+  },
+  {
+    "description": "deploy success from a pull_request run, open alert -> close-issue",
+    "facts": {
+      "eventName": "workflow_run",
+      "workflowPath": ".github/workflows/deploy.yml",
+      "workflowName": "deploy",
+      "conclusion": "success",
+      "runUrl": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+      "runEvent": "pull_request",
+      "openAlert": {
+        "number": 7
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "close-issue",
+          "number": 7,
+          "comment": "Workflow `deploy` succeeded: https://github.com/wimdotgg/groundwork/actions/runs/101. Closing."
+        }
+      ]
+    }
+  },
+  {
+    "description": "end to end: release-please success from a pull_request run with open alert -> no actions",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "success",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101",
+        "event": "pull_request"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 7,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n",
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": []
+    }
+  },
+  {
+    "description": "end to end: payload without event parses and a success closes the alert",
+    "eventName": "workflow_run",
+    "payload": {
+      "action": "completed",
+      "workflow_run": {
+        "path": ".github/workflows/release-please.yml",
+        "name": "release-please",
+        "conclusion": "success",
+        "html_url": "https://github.com/wimdotgg/groundwork/actions/runs/101"
+      }
+    },
+    "routes": {
+      "GET /repos/wimdotgg/groundwork/issues?creator=github-actions%5Bbot%5D&per_page=100&state=open": {
+        "status": 200,
+        "data": [
+          {
+            "number": 7,
+            "body": "Workflow failed.\n\n<!-- groundwork:alert:.github/workflows/release-please.yml -->\n",
+            "user": {
+              "login": "github-actions[bot]"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "conclusion": "pass",
+      "actions": [
+        {
+          "kind": "close-issue",
+          "number": 7,
+          "comment": "Workflow `release-please` succeeded: https://github.com/wimdotgg/groundwork/actions/runs/101. Closing."
         }
       ]
     }
