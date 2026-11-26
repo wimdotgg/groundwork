@@ -183,7 +183,9 @@ test('AC1 repo-copy refuses a missing consent note, another branch or a dirty tr
 test('repo-copy refuses the bot identity and an existing upstream remote beside origin', async (t) => {
   const { clone } = cloneFixture(t);
   git(clone, 'remote', 'add', 'upstream', ORG_URL);
-  await assert.rejects(repoCopy(cloneIo(clone, { answers: ['y'] })), /remotes origin and upstream both exist/);
+  const both = cloneIo(clone, { answers: ['y'] });
+  await assert.rejects(repoCopy(both), /upstream/);
+  assert.deepEqual(both.calls.filter((call) => /^git (remote (rename|remove)|add|commit|push)/.test(call)), []);
   git(clone, 'remote', 'remove', 'upstream');
   git(clone, 'config', 'user.name', 'acme-agent[bot]');
   const bot = cloneIo(clone, { answers: [...COPY_ANSWERS] });
@@ -240,6 +242,80 @@ test('AC6 after a failed push a rerun accepts the gh default it wrote, prints th
   assert.ok(!rerun.calls.includes(REPO_CREATE));
   assert.equal(rerun.calls.at(-1), PUSH);
   assert.equal(git(org, 'rev-parse', 'main'), git(clone, 'rev-parse', 'HEAD'));
+});
+
+// A clone after the whole step ran and the setup push landed: origin is the org repository, upstream the kit.
+async function landedFixture(t) {
+  const { clone, org } = cloneFixture(t);
+  assert.equal(await repoCopy(cloneIo(clone, { answers: [...COPY_ANSWERS], org })), true);
+  assert.equal(git(clone, 'rev-parse', 'refs/remotes/origin/main'), git(clone, 'rev-parse', 'HEAD'));
+  return { clone, org };
+}
+
+const WRITE_CALL = /^git (remote (rename|remove|add|set-url)|add|commit|push)\b|^gh repo create/;
+const remoteSnapshot = (clone) => git(clone, 'remote', '-v');
+const REMOVE_ADVICE = /git remote remove upstream|remove the groundwork remote/i;
+
+test('AC1 a rerun after the setup push landed finishes with no remote change, commit or push', async (t) => {
+  const { clone } = await landedFixture(t);
+  const remotesBefore = remoteSnapshot(clone);
+  const headBefore = git(clone, 'rev-parse', 'HEAD');
+  const rerun = cloneIo(clone, { answers: [] });
+  assert.equal(await repoCopy(rerun), true);
+  assert.deepEqual(rerun.calls.filter((call) => WRITE_CALL.test(call)), []);
+  assert.equal(remoteSnapshot(clone), remotesBefore);
+  assert.equal(git(clone, 'rev-parse', 'HEAD'), headBefore);
+  assert.doesNotMatch(everything(rerun), REMOVE_ADVICE);
+});
+
+test('AC2 origin elsewhere beside upstream refuses before any write and never advises removing the groundwork remote', async (t) => {
+  const other = 'https://github.com/other/groundwork.git';
+  // Landed state, then origin repointed.
+  const { clone } = await landedFixture(t);
+  git(clone, 'remote', 'set-url', 'origin', other);
+  const repointed = cloneIo(clone, { answers: [...COPY_ANSWERS] });
+  const remotesBefore = remoteSnapshot(clone);
+  await assert.rejects(repoCopy(repointed), (error) => !REMOVE_ADVICE.test(error.message));
+  assert.deepEqual(repointed.calls.filter((call) => WRITE_CALL.test(call)), []);
+  assert.equal(remoteSnapshot(clone), remotesBefore);
+  assert.doesNotMatch(everything(repointed), REMOVE_ADVICE);
+  // Fresh clone of the kit with a second remote named origin elsewhere and the kit as upstream.
+  const { clone: fresh } = cloneFixture(t);
+  git(fresh, 'remote', 'add', 'upstream', ORG_URL);
+  const foreign = cloneIo(fresh, { answers: [...COPY_ANSWERS] });
+  await assert.rejects(repoCopy(foreign), (error) => !REMOVE_ADVICE.test(error.message));
+  assert.deepEqual(foreign.calls.filter((call) => WRITE_CALL.test(call)), []);
+  assert.doesNotMatch(everything(foreign), REMOVE_ADVICE);
+});
+
+test('AC3 the landed-push finish refuses an origin with more than one push URL or a push URL outside the org repository', async (t) => {
+  const { clone } = await landedFixture(t);
+  const withPushUrls = (urls) => {
+    const io = cloneIo(clone, { answers: [] });
+    const capture = io.capture;
+    io.capture = (command, args) => (args.join(' ') === 'remote get-url --push --all origin'
+      ? { ...OK, stdout: `${urls.join('\n')}\n` }
+      : capture(command, args));
+    return io;
+  };
+  const two = withPushUrls([ORG_URL, 'https://github.com/other/groundwork.git']);
+  await assert.rejects(repoCopy(two), /origin pushes to 2 URLs/);
+  const elsewhere = withPushUrls(['https://github.com/other/groundwork.git']);
+  await assert.rejects(repoCopy(elsewhere), /origin pushes to https:\/\/github\.com\/other\/groundwork\.git, not github\.com\/acme\/groundwork/);
+  for (const io of [two, elsewhere]) assert.deepEqual(io.calls.filter((call) => WRITE_CALL.test(call)), []);
+});
+
+test('AC3 the landed-push finish asks before gh repo set-default when the gh default is not the org repository', async (t) => {
+  const { clone } = await landedFixture(t);
+  git(clone, 'config', '--unset', 'remote.origin.gh-resolved');
+  const declined = cloneIo(clone, { answers: ['n'] });
+  assert.equal(await repoCopy(declined), false);
+  assert.ok(declined.output.some((line) => line.includes(SET_DEFAULT)));
+  assert.ok(!declined.calls.includes(SET_DEFAULT));
+  const accepted = cloneIo(clone, { answers: ['y'] });
+  assert.equal(await repoCopy(accepted), true);
+  assert.ok(accepted.calls.includes(SET_DEFAULT));
+  assert.deepEqual(accepted.calls.filter((call) => WRITE_CALL.test(call)), []);
 });
 
 const RECOVERY = /git restore \.\n {2}git reset --hard origin\/main/;
