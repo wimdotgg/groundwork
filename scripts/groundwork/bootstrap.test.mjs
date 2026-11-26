@@ -579,7 +579,9 @@ for (const [name, entries] of NO_COLLISION_TREES) {
     const world = adoptApplyWorld({ ...treeRoutes, [`POST ${TARGET_PATH}/git/blobs`]: blobReplies });
     const result = await run(world.ctx, world.seams);
     assert.equal(result.ok, true, result.summary);
-    const posted = bodyOf(world, `POST ${TARGET_PATH}/git/trees`).tree.map((entry) => entry.path);
+    const treeBody = bodyOf(world, `POST ${TARGET_PATH}/git/trees`);
+    assert.equal(treeBody.base_tree, 'tree-main', 'the merge keeps the project tree, the README.md directory included');
+    const posted = treeBody.tree.map((entry) => entry.path);
     assert.equal(posted.includes('README.md'), !entries.some((entry) => /^readme/i.test(entry.path)), 'the kit README.md is written only when the root holds no readme');
   });
 }

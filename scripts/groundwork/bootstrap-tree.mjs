@@ -202,7 +202,7 @@ function appendedCodeowners(entry, contents, projectText) {
  * decision, #258) and adds README.md only when the root holds no readme; the target's CODEOWNERS keeps its own lines
  * and gets the kit lines appended, so the kit rules match last and win.
  * @param {{ treeEntries: TreeEntry[], contents: Record<string, string>,
- *   target: { tree: Array<{ path: string }>, codeowners?: string } }} options `target.codeowners` is the text of the
+ *   target: { tree: Array<{ path: string, type: string, mode?: string }>, codeowners?: string } }} options `target.codeowners` is the text of the
  *   target's CODEOWNERS, required when its tree holds one
  * @returns {TreeEntry[]} a subset of `treeEntries`, CODEOWNERS replaced by the appended text
  */
