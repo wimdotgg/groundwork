@@ -453,7 +453,7 @@ const ADOPT_ARGS = { description: DESCRIPTION, adopt: true };
 // #285 fills the kit CODEOWNERS from the release config's accounts.owner.
 const ADOPT_FILES = {
   ...RELEASE_FILES, '.github/groundwork/config.json': JSON.stringify({ org: ORG, accounts: { owner: 'wianvdm' } }), '.github/CODEOWNERS': '* @wianvdm\n', LICENSE: 'MIT\n',
-  '.github/pull_request_template.md': 'pr template\n', 'docs/README.md': 'docs readme\n', '.github/ISSUE_TEMPLATE/bug.md': 'bug form\n',
+  '.github/pull_request_template.md': 'pr template\n', 'scripts/groundwork/stubs/docs/README.md': 'docs readme\n', '.github/ISSUE_TEMPLATE/bug.md': 'bug form\n',
 };
 const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
 const releaseSha = (filePath) => releaseEntries(ADOPT_FILES).find((entry) => entry.path === filePath).sha;
@@ -508,7 +508,7 @@ const GAPS = [
   ['collision', { tree: COLLIDING_TREE }, 'collisions', /collisions: \.github\/dependabot\.yml, version\.txt/],
   ['directory at a kit file', { tree: projectTree({ path: 'scripts/verify', type: 'tree', sha: 't1' }, blob('scripts/verify/run.sh', 'p1')) }, 'collisions', /collisions: scripts\/verify is a tree/],
   ['file at a kit directory', { tree: projectTree(blob('docs', 'p1')) }, 'collisions', /collisions: docs is a blob/],
-  ['submodule at a kit path', { tree: projectTree({ path: 'README.md', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: README\.md is a commit/],
+  ['submodule at a kit path', { tree: projectTree({ path: 'scripts/verify', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: scripts\/verify is a commit/],
   ['truncated target tree', { tree: { truncated: true, tree: [] } }, 'collisions', /collisions: target tree is truncated/],
   ['tree response without a tree list', { tree: { truncated: false } }, 'collisions', /collisions: target tree response has no tree list/],
   ['head commit without a tree SHA', { commit: { sha: 'head-main', tree: {} } }, 'collisions', /collisions: head commit head-main has no tree SHA/],
@@ -564,6 +564,8 @@ const NO_COLLISION_TREES = [
   ['a symlink at README.md', [{ ...blob('README.md', 'p1'), mode: '120000' }]],
   ['a symlink at LICENSE', [{ ...blob('LICENSE', 'p1'), mode: '120000' }]],
   ['a README.md that is a tree', [{ path: 'README.md', type: 'tree', sha: 't1' }, blob('README.md/intro.md', 'p2')]],
+  ['a LICENSE that is a tree', [{ path: 'LICENSE', type: 'tree', sha: 't2' }, blob('LICENSE/mit.txt', 'p3')]],
+  ['a submodule at README.md', [{ path: 'README.md', mode: '160000', type: 'commit', sha: 'c9' }]],
 ];
 
 for (const [name, entries] of NO_COLLISION_TREES) {

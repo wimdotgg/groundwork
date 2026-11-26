@@ -5,7 +5,7 @@ import { validateIssueBody } from '../lib/issue-model.mjs';
 import { SettingsError } from '../lib/settings.mjs';
 import { rulesetNameLiteral } from './apply-settings.mjs';
 import { normalizeLabel, sameLogin } from '../lib/trust.mjs';
-import { ADOPT_KEPT_PATHS, CODEOWNERS_PATH } from './bootstrap-tree.mjs';
+import { ADOPT_KEPT_PATHS, ADOPT_UNWRITTEN_PATHS, CODEOWNERS_PATH, SYMLINK_MODE } from './bootstrap-tree.mjs';
 
 // Same value as bootstrap-tree.mjs (#144); the integration task (#149) may share one export.
 const KIT_VERSION_PATH = '.github/groundwork/kit-version.txt';
@@ -366,17 +366,47 @@ async function readMainProtection({ client, org, repo, rulesets }) {
 
 const ancestorsOf = (path) => path.split('/').slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join('/'));
 
-/** A kit path collides when the target holds it as a non-blob, holds an ancestor as a non-tree, or holds other content. */
+const withAncestors = (path) => [...ancestorsOf(path), path];
+
+/** Lower-cased path to every spelling the target holds, folders included. */
+function spellingsByLowerCase(targetPaths) {
+  const spellings = new Map();
+  for (const path of new Set(targetPaths.flatMap(withAncestors))) {
+    const key = path.toLowerCase();
+    spellings.set(key, [...(spellings.get(key) ?? []), path]);
+  }
+  return spellings;
+}
+
+/** The target's spelling of the kit path, or of one of its folders, that differs only in case. */
+const caseTwinOf = (kitPath, spellings) => withAncestors(kitPath)
+  .flatMap((path) => (spellings.get(path.toLowerCase()) ?? []).filter((spelling) => spelling !== path))[0];
+
+/**
+ * A kit path collides when the target holds it, or a folder of it, spelled in another case (a case-insensitive
+ * checkout would merge them), holds it as a symlink or other non-blob, holds an ancestor as a non-tree, or holds other
+ * content. The first case twin along a path is the one reported, so a twin folder gives one row.
+ */
 function collisionsOf(kitEntries, targetByPath) {
   const collisions = new Set();
+  const spellings = spellingsByLowerCase([...targetByPath.keys()]);
   for (const entry of kitEntries) {
+    // The merge writes nothing at these paths, and every case twin of README.md is a root readme it keeps.
+    if (ADOPT_UNWRITTEN_PATHS.has(entry.path)) continue;
+    const twin = caseTwinOf(entry.path, spellings);
+    if (twin !== undefined) {
+      collisions.add(`${twin} differs only in case from a kit path`);
+      // The twin row already fails the preflight, so the exact spelling's type rows wait for the rerun.
+      continue;
+    }
     for (const ancestor of ancestorsOf(entry.path)) {
       const type = targetByPath.get(ancestor)?.type;
       if (type !== undefined && type !== 'tree') collisions.add(`${ancestor} is a ${type}`);
     }
     const target = targetByPath.get(entry.path);
     if (target === undefined) continue;
-    if (target.type !== 'blob') collisions.add(`${entry.path} is a ${target.type}`);
+    if (target.mode === SYMLINK_MODE) collisions.add(`${entry.path} is a symlink`);
+    else if (target.type !== 'blob') collisions.add(`${entry.path} is a ${target.type}`);
     else if (!ADOPT_KEPT_PATHS.has(entry.path) && target.sha !== (entry.content === undefined ? entry.sha : gitBlobSha(entry.content))) collisions.add(entry.path);
   }
   // Refused rather than appended in place: check and kit-update read .github/CODEOWNERS, and moving the file keeps its rules.

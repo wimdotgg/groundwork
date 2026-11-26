@@ -390,6 +390,12 @@ test('#306 AC3: a target CODEOWNERS that is a symlink is a SettingsError, never 
   assert.throws(() => adoptTreeEntries({ treeEntries, contents, target: { tree, codeowners: PROJECT_CODEOWNERS } }), (error) => error instanceof SettingsError && /\.github\/CODEOWNERS/.test(error.message));
 });
 
+test('#306 AC3: a target CODEOWNERS that is a tree is a SettingsError', () => {
+  const { treeEntries, contents } = adoptFixture();
+  const tree = [{ path: '.github/CODEOWNERS', mode: '040000', type: 'tree', sha: 'dir' }];
+  assert.throws(() => adoptTreeEntries({ treeEntries, contents, target: { tree, codeowners: PROJECT_CODEOWNERS } }), (error) => error instanceof SettingsError && /\.github\/CODEOWNERS/.test(error.message));
+});
+
 test('#274 AC2: a target CODEOWNERS without its text is a SettingsError, not a silent replace', () => {
   const { treeEntries, contents } = adoptFixture();
   assert.throws(() => adoptTreeEntries({ treeEntries, contents, target: { tree: EXISTING_TREE } }), (error) => error instanceof SettingsError && /\.github\/CODEOWNERS/.test(error.message));
