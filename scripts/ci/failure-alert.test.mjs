@@ -39,7 +39,9 @@ function jobConditions(workflowText) {
   const jobs = new Map();
   let current = null;
   for (const line of jobsText.split(/\r?\n/)) {
-    const jobHeader = /^ {2}([\w-]+):\s*$/.exec(line);
+    const jobHeader = /^ {2}([\w-]+):\s*(#.*)?$/.exec(line);
+    // Fails closed: a job key this parser cannot read (quoted, flow mapping) would otherwise merge into the job above it.
+    if (!jobHeader && /^ {2}[^\s#]/.test(line)) throw new Error(`unreadable job line in release-please.yml: ${line}`);
     if (jobHeader) {
       current = { condition: '', inCondition: false };
       jobs.set(jobHeader[1], current);
