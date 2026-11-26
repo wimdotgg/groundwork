@@ -33,15 +33,28 @@ const RELEASE_WORKFLOW_URL = new URL('../../.github/workflows/release-please.yml
 const NOTIFIER_JOB = 'dispatch-on-main';
 const RELEASE_JOB = 'release-please';
 const DISPATCH_ONLY_TERM = "github.event_name == 'workflow_dispatch'";
+const JOB_HEADER = /^ {2}([\w-]+):\s*(#.*)?$/;
+const JOB_HEADER_INDENT = 2;
+const JOB_KEY_INDENT = 4;
+const CONDITION_CONTINUATION_INDENT = 6;
+
+// Fails closed: the parser reads job headers at 2 spaces, job keys at 4 and `if` continuations at 6 or more. A quoted
+// or flow-mapping header, or a line at 1, 3 or 5 spaces, is valid YAML it would misread, so the test refuses it.
+function assertReadableJobLine(line) {
+  const content = line.trimStart();
+  if (content === '' || content.startsWith('#')) return;
+  const indent = line.length - content.length;
+  const misreadIndent = indent < CONDITION_CONTINUATION_INDENT && indent % 2 === 1;
+  if (misreadIndent || (indent === JOB_HEADER_INDENT && !JOB_HEADER.test(line))) throw new Error(`unreadable job line in release-please.yml: ${line}`);
+}
 
 function jobConditions(workflowText) {
   const jobsText = workflowText.split(/^jobs:\s*$/m)[1] ?? '';
   const jobs = new Map();
   let current = null;
   for (const line of jobsText.split(/\r?\n/)) {
-    const jobHeader = /^ {2}([\w-]+):\s*(#.*)?$/.exec(line);
-    // Fails closed: a job key this parser cannot read (quoted, flow mapping) would otherwise merge into the job above it.
-    if (!jobHeader && /^ {2}[^\s#]/.test(line)) throw new Error(`unreadable job line in release-please.yml: ${line}`);
+    assertReadableJobLine(line);
+    const jobHeader = JOB_HEADER.exec(line);
     if (jobHeader) {
       current = { condition: '', inCondition: false };
       jobs.set(jobHeader[1], current);
@@ -53,18 +66,21 @@ function jobConditions(workflowText) {
 }
 
 function readConditionLine(state, line) {
-  const condition = /^ {4}if:\s*(.*)$/.exec(line);
-  if (condition) {
+  const content = line.trim();
+  const indent = line.length - line.trimStart().length;
+  const condition = /^if:\s*(.*)$/.exec(content);
+  if (condition && indent === JOB_KEY_INDENT) {
     state.inCondition = true;
     state.condition = condition[1].replace(/^>-?\s*$/, '');
     return;
   }
-  if (state.inCondition && /^ {6,}\S/.test(line)) state.condition += ` ${line.trim()}`;
-  else if (line.trim() !== '') state.inCondition = false;
+  if (state.inCondition && content !== '' && indent >= CONDITION_CONTINUATION_INDENT) state.condition += ` ${content}`;
+  else if (content !== '') state.inCondition = false;
 }
 
+// Grouping or negation could wrap the dispatch term, as in `!(a && <term> && b)`, so the condition must be a flat AND.
 function runsOnlyOnDispatch(condition) {
-  if (condition.includes('||')) return false;
+  if (condition.includes('||') || /[()]|!(?!=)/.test(condition)) return false;
   return condition.split('&&').map((term) => term.trim()).includes(DISPATCH_ONLY_TERM);
 }
 
