@@ -298,3 +298,18 @@ test('AC4 hidden entry never writes the value to any output; Ctrl+D rejects', as
   await assert.rejects(rejected, /input closed/);
   assert.ok(!written.includes('abc'));
 });
+
+test('#307 AC1 refuses a state org that starts with a hyphen and builds no gh repo argv', async () => {
+  assert.throws(() => validateState(stateWith({ org: '-d' })), /org is not a valid login/);
+  const io = fakeIo({ state: stateWith({ org: '-d' }), answers: ['y', 'y', 'y', 'y'] });
+  await refused(io, ['--step', 'repo-copy'], /org is not a valid login/);
+  assert.deepEqual(io.calls.filter((call) => call.includes('-d/groundwork') || call.startsWith('gh repo')), []);
+});
+
+test('#307 AC2 refuses a typed organization login that starts with a hyphen, asks once and records nothing', async () => {
+  const io = fakeIo({ state: stateWith({ org: null, steps: {} }), answers: ['y', 'created it', '-d', 'acme'] });
+  await refused(io, ['--step', 'org-create'], /organization login/);
+  assert.equal(io.output.filter((line) => line === 'Organization login: ').length, 1);
+  assert.equal(io.state().org, null);
+  assert.equal(io.state().steps['org-create'], undefined);
+});

@@ -110,10 +110,11 @@ const addOrigin = (clone, url = ORG_URL) => (args) => {
 };
 
 // Runs git for real in the clone; gh is the given fake, and a push to origin lands in the bare org repository.
-function cloneIo(clone, { answers, gh = addOrigin(clone), org, pushStatus = 0 }) {
+function cloneIo(clone, { answers, gh = addOrigin(clone), login = 'Owner-Login', org, pushStatus = 0 }) {
   const io = fakeIo({ answers });
   const run = (command, args) => {
     io.calls.push([command, ...args].join(' '));
+    if (command === 'gh' && args[0] === 'api' && args[1] === 'user') return { ...OK, stdout: `${login} 4242\n` };
     if (command === 'gh') return gh(args);
     if (args[0] === 'push') return pushToOrg(clone, { org, pushStatus });
     const result = spawnSync('git', args, { cwd: clone, encoding: 'utf8' });
@@ -654,4 +655,32 @@ test('gh drops colour variables in any case; the start refusal names the manual 
   const io = fakeIo({ files: { [STATE_PATH]: JSON.stringify(stateWith()) }, replies: { 'gh auth status': { ...OK, status: 1 } } });
   assert.equal(await main(io, []), 1);
   assert.match(io.output.at(-1), /cannot read the scopes .*run: gh auth refresh --remove-scopes admin:org$/);
+});
+
+const COPY_FILES = [CONFIG_PATH, '.github/CODEOWNERS'];
+const snapshotCopyFiles = (clone) => COPY_FILES.map((file) => readFileSync(path.join(clone, file), 'utf8'));
+
+test('#307 AC2 repo-copy refuses a typed owner login that starts with a hyphen, asks once and writes nothing', async (t) => {
+  const { clone } = cloneFixture(t);
+  const before = snapshotCopyFiles(clone);
+  const io = cloneIo(clone, { answers: ['y', '-d', ...COPY_ANSWERS.slice(2)] });
+  await assert.rejects(repoCopy(io), /Owner login/);
+  assert.equal(io.output.filter((line) => line.startsWith('Owner login')).length, 1);
+  assert.deepEqual(snapshotCopyFiles(clone), before);
+  assert.deepEqual(io.calls.filter((call) => call.startsWith('gh repo')), []);
+});
+
+test('#307 AC3 repo-copy refuses a typed owner that differs from the signed-in gh user before writing files', async (t) => {
+  const { clone } = cloneFixture(t);
+  const before = snapshotCopyFiles(clone);
+  const io = cloneIo(clone, { answers: [...COPY_ANSWERS], login: 'someone-else' });
+  await assert.rejects(repoCopy(io), (error) => /someone-else/.test(error.message) && /owner-login/i.test(error.message));
+  assert.deepEqual(snapshotCopyFiles(clone), before);
+  assert.ok(!io.calls.includes(COMMIT) && !io.calls.includes(REPO_CREATE));
+});
+
+test('#307 AC3 repo-copy accepts a typed owner that differs from the signed-in gh user only by case', async (t) => {
+  const { clone, org } = cloneFixture(t);
+  const io = cloneIo(clone, { answers: [...COPY_ANSWERS], login: 'owner-login', org });
+  assert.equal(await repoCopy(io), true);
 });
