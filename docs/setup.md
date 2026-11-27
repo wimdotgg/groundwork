@@ -110,7 +110,7 @@ gh repo set-default <org>/groundwork
 git push --set-upstream origin main
 ```
 
-No `--push` on `gh repo create`: the wizard pushes with its own hook-free Git after checking the push URL, and by hand you run the same four commands. `gh repo set-default` matters because the clone keeps `upstream`: without it `gh` and every agent script resolve to upstream groundwork, not your copy. Never `git add -A` or `git commit -a`. The push carries `.github/workflows/`, which GitHub accepts only from a credential with the `workflow` scope: if it is refused for that scope and `gh` is your Git credential helper, run `gh auth refresh -s workflow` and push again. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it.
+No `--push` on `gh repo create`: the wizard pushes with its own hook-free Git after checking the push URL, and by hand you run the same four commands. `gh repo set-default` matters because the clone keeps `upstream`: without it `gh` and every agent script resolve to upstream groundwork, not your copy. Never `git add -A` or `git commit -a`. The push carries `.github/workflows/`, which GitHub accepts only from a credential with the `workflow` scope: if it is refused for that scope and `gh` is your Git credential helper, run `gh auth refresh -s workflow` and push again. Upstream tags are not pushed. Keep the `upstream` remote: [upstream updates](#upstream-updates) use it. After a manual push, rerunning the wizard (`node scripts/owner/setup.mjs`, or `--step repo-copy`) finishes `repo-copy` with both remotes unchanged.
 
 - Verify: https://github.com/<org>/groundwork shows your commit on `main`, and `main` contains `.github/workflows/admin-run.yml`. Nothing after this works without it.
 

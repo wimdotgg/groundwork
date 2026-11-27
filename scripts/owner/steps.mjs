@@ -164,6 +164,8 @@ export function requireSafeLocalConfig(io) {
   if (unsafe !== undefined) refuse(`.git/config sets ${clean(unsafe)}, which the wizard does not run with: remove it (git config --local --unset-all "${clean(unsafe)}"), then rerun`);
 }
 
+const localChanges = (io) => lines(git(io, 'status', '--porcelain', '--untracked-files=all')).map((line) => ({ code: line.slice(0, 2), file: line.slice(3) }));
+
 // Accepts a fresh clone plus the consent note, or the state a declined y/N or a failed push left behind.
 function inspectClone(io, note) {
   if (io.readText(fromRoot(io, note)) === null) refuse(`consent note ${note} is missing: copy it from docs/setup.md, then rerun`);
@@ -178,7 +180,7 @@ function inspectClone(io, note) {
   if (ahead > 1) refuseWithRecovery(io, { reason: `HEAD is ${ahead} commits ahead of ${baseline}; repo-copy adds one`, remote, note });
   const committed = ahead ? outside(lines(git(io, 'diff', '--name-only', baseline, 'HEAD'))) : undefined;
   if (committed !== undefined) refuseWithRecovery(io, { reason: `the commit ahead of ${baseline} changes ${clean(committed)}`, remote, note });
-  const changes = lines(git(io, 'status', '--porcelain', '--untracked-files=all')).map((line) => ({ code: line.slice(0, 2), file: line.slice(3) }));
+  const changes = localChanges(io);
   const foreign = changes.filter(({ file }) => !allowed.has(file));
   if (foreign.length) {
     const untracked = foreign.filter(({ code }) => code === UNTRACKED).map(({ file }) => file);
@@ -187,11 +189,31 @@ function inspectClone(io, note) {
   return { ahead: ahead === 1, remote, baseline };
 }
 
-async function renameOrigin(io) {
+const originPushUrls = (io) => lines(git(io, 'remote', 'get-url', '--push', '--all', 'origin')).map(clean);
+
+const originPushesToOrg = (io, org) => {
+  const urls = originPushUrls(io);
+  return urls.length === 1 && isOrgRepositoryUrl(urls[0], org);
+};
+
+const refExists = (io, ref) => io.capture('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).status === 0;
+
+// An origin/main the kit already holds is a stale kit ref: nothing of the org's landed beyond it.
+const originMainIsKitRef = (io) => io.capture('git', ['merge-base', '--is-ancestor', 'refs/remotes/origin/main', 'refs/remotes/upstream/main']).status === 0;
+
+// With upstream beside origin, only a copy that already points origin at the org repository continues, and only while origin/main holds nothing the kit lacks.
+// An unrecognised origin/main refuses: writing again could overwrite what landed. Origin is checked first so a foreign origin always gets the set-url advice.
+async function renameOrigin(io, { org, remote }) {
   const remotes = lines(git(io, 'remote'));
   if (!remotes.includes('origin')) return true;
-  if (remotes.includes('upstream')) refuse('remotes origin and upstream both exist: run git remote remove upstream, then rerun');
-  return confirmRun(io, { command: 'git', args: ['remote', 'rename', 'origin', 'upstream'] });
+  if (!remotes.includes('upstream')) {
+    if (isOrgRepositoryUrl(clean(git(io, 'remote', 'get-url', '--push', 'origin')), org)) refuse(`origin already pushes to github.com/${org}/${CONTROL_REPO} and the upstream remote is missing: add the groundwork kit back with git remote add -f upstream <the upstream groundwork URL> (see "upstream updates" in docs/setup.md), then rerun`);
+    return confirmRun(io, { command: 'git', args: ['remote', 'rename', 'origin', 'upstream'] });
+  }
+  if (!originPushesToOrg(io, org)) refuse(`remotes origin and upstream both exist and origin does not push to github.com/${org}/${CONTROL_REPO}: create that repository if it does not exist (gh repo create ${org}/${CONTROL_REPO} --public), run git remote set-url origin https://github.com/${org}/${CONTROL_REPO}.git and keep upstream, then rerun`);
+  if (!refExists(io, 'refs/remotes/upstream/main')) refuse('remote upstream has no main yet: run git fetch upstream, then rerun');
+  if (remote === 'origin' && !originMainIsKitRef(io)) refuse('origin/main exists but HEAD is not the one setup commit on it over upstream/main, so repo-copy cannot tell what landed: keep upstream, make HEAD match that commit or origin/main, then rerun');
+  return true;
 }
 
 function fillCodeowners(text, owner) {
@@ -263,22 +285,54 @@ async function commitSetup(io, { org, note }) {
 
 const isOrgRepositoryUrl = (url, org) => new RegExp(`^(https://github\\.com/|git@github\\.com:|ssh://git@github\\.com/)${org}/${CONTROL_REPO}(\\.git)?$`, 'i').test(url);
 
-// gh only creates the repository and adds origin; the push runs through the wizard's own git, with hooks off.
-async function pushCopy(io, org) {
-  const remotes = lines(git(io, 'remote'));
+function requireUpstream(io, remotes) {
   if (!remotes.includes('upstream')) refuse('remote upstream is missing: repo-copy renames origin to upstream before it pushes');
   if (io.capture('git', ['config', '--get', UPSTREAM_DEFAULT_KEY]).status === 0) refuse(`remote upstream is gh's default: run git config --unset ${UPSTREAM_DEFAULT_KEY}, then rerun`);
-  const create = { command: 'gh', args: ['repo', 'create', `${org}/${CONTROL_REPO}`, '--public', '--source', '.', '--remote', 'origin'] };
-  if (!remotes.includes('origin') && !(await confirmRun(io, create))) return false;
-  const urls = lines(git(io, 'remote', 'get-url', '--push', '--all', 'origin')).map(clean);
+}
+
+/** Origin's push URL once it is the org's repository and gh defaults to it; null when the gh default prompt is declined. */
+async function confirmOriginTarget(io, org) {
+  const urls = originPushUrls(io);
   if (urls.length !== 1) refuse(`origin pushes to ${urls.length} URLs (${urls.join(', ')}): keep only github.com/${org}/${CONTROL_REPO}, then rerun`);
   const [url] = urls;
   if (!isOrgRepositoryUrl(url, org)) refuse(`origin pushes to ${url}, not github.com/${org}/${CONTROL_REPO}: fix it with git remote set-url origin, then rerun`);
   const ghDefault = io.capture('git', ['config', '--get', GH_DEFAULT_KEY]).stdout.trim();
   const setDefault = { command: 'gh', args: ['repo', 'set-default', `${org}/${CONTROL_REPO}`] };
-  if (ghDefault !== GH_DEFAULT_VALUE && !(await confirmRun(io, setDefault))) return false;
+  return ghDefault === GH_DEFAULT_VALUE || await confirmRun(io, setDefault) ? url : null;
+}
+
+// gh only creates the repository and adds origin; the push runs through the wizard's own git, with hooks off.
+async function pushCopy(io, org) {
+  const remotes = lines(git(io, 'remote'));
+  requireUpstream(io, remotes);
+  const create = { command: 'gh', args: ['repo', 'create', `${org}/${CONTROL_REPO}`, '--public', '--source', '.', '--remote', 'origin'] };
+  if (!remotes.includes('origin') && !(await confirmRun(io, create))) return false;
+  const url = await confirmOriginTarget(io, org);
+  if (url === null) return false;
   io.print(`push to ${url}`);
   return confirmRun(io, { command: 'git', args: ['push', '--set-upstream', 'origin', 'main'] });
+}
+
+// True when HEAD is the one setup commit and origin/main already has it; the tree is checked separately.
+function holdsSetupCommit(io, note) {
+  if (git(io, 'rev-parse', 'HEAD') !== git(io, 'rev-parse', 'refs/remotes/origin/main')) return false;
+  const sinceUpstream = io.capture('git', ['rev-list', 'refs/remotes/upstream/main..HEAD']);
+  if (sinceUpstream.status !== 0 || lines(sinceUpstream.stdout).length !== 1) return false;
+  const allowed = new Set([...COPY_PATHS, note]);
+  // Three dots: from the merge base, so kit commits fetched since the setup do not count as changes.
+  const changed = lines(git(io, 'diff', '--name-only', 'refs/remotes/upstream/main...HEAD'));
+  return changed.every((file) => allowed.has(file));
+}
+
+async function finishLandedCopy(io, { org, note }) {
+  const changes = localChanges(io);
+  if (changes.length) {
+    const untracked = changes.filter(({ code }) => code === UNTRACKED).map(({ file }) => file);
+    refuseWithRecovery(io, { reason: `${clean(changes[0].file)} has local changes but the setup commit is already on origin/main`, remote: 'origin', note, untracked });
+  }
+  requireUpstream(io, lines(git(io, 'remote')));
+  io.print('The setup commit is already on origin/main: no rename, commit or push left.');
+  return (await confirmOriginTarget(io, org)) !== null;
 }
 
 async function repoCopy(io, context) {
@@ -290,7 +344,8 @@ async function repoCopy(io, context) {
     printBlock(io, git(io, 'show', '--no-color', '--no-ext-diff', 'HEAD'));
     return pushCopy(io, org);
   }
-  if (!(await renameOrigin(io))) return false;
+  if (clone.remote === 'origin' && holdsSetupCommit(io, note)) return finishLandedCopy(io, { org, note });
+  if (!(await renameOrigin(io, { org, remote: clone.remote }))) return false;
   if (!(await writeSetupFiles(io, org))) return false;
   if (!(await resetReleaseFiles(io))) return false;
   if (!(await commitSetup(io, { org, note }))) return false;
