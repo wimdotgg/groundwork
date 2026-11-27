@@ -7,7 +7,8 @@ import { sameLogin } from '../lib/trust.mjs';
 /** @typedef {import('../lib/ci.mjs').ValidatorContext} ValidatorContext */
 /** @typedef {import('../lib/ci.mjs').ValidatorResult} ValidatorResult */
 /** @typedef {{ eventName: string, workflowPath: string, workflowName: string, conclusion: string, runUrl: string,
- *   openAlert: { number: number }|null }} FailureAlertFacts   the run fields are empty strings only for skipped events */
+ *   runEvent: string|null, openAlert: { number: number }|null }} FailureAlertFacts
+ *   the run fields are empty strings only for skipped events; runEvent: workflow_run.event, null when the payload lacks it */
 
 export const name = 'failure-alert';
 
@@ -18,6 +19,8 @@ const ISSUES_PATH = '/repos/{owner}/{repo}/issues';
 const FAILING_CONCLUSIONS = ['failure', 'timed_out', 'startup_failure'];
 const SUCCESS_CONCLUSION = 'success';
 const REQUIRED_RUN_FIELDS = ['path', 'name', 'conclusion', 'html_url'];
+const RELEASE_WORKFLOW_PATH = '.github/workflows/release-please.yml';
+const NOTIFIER_RUN_EVENT = 'pull_request';
 
 function markerName(workflowPath) {
   return `alert:${workflowPath}`;
@@ -39,7 +42,7 @@ async function findOpenAlert(ctx, workflowPath) {
 }
 
 function skipFacts(eventName) {
-  return { eventName, workflowPath: '', workflowName: '', conclusion: '', runUrl: '', openAlert: null };
+  return { eventName, workflowPath: '', workflowName: '', conclusion: '', runUrl: '', runEvent: null, openAlert: null };
 }
 
 /**
@@ -53,7 +56,8 @@ export async function collect(ctx) {
   if (ctx.payload?.action !== COMPLETED_ACTION) return skipFacts(`${ctx.eventName} (${ctx.payload?.action})`);
   const run = ctx.payload?.workflow_run;
   for (const field of REQUIRED_RUN_FIELDS) requireRunField(run, field);
-  const facts = { eventName: ctx.eventName, workflowPath: run.path, workflowName: run.name, conclusion: run.conclusion, runUrl: run.html_url, openAlert: null };
+  const facts = { eventName: ctx.eventName, workflowPath: run.path, workflowName: run.name, conclusion: run.conclusion, runUrl: run.html_url,
+    runEvent: typeof run.event === 'string' ? run.event : null, openAlert: null };
   facts.openAlert = await findOpenAlert(ctx, run.path);
   return facts;
 }
@@ -85,6 +89,15 @@ function repeatAlert(facts) {
   ]);
 }
 
+// The closed pull_request run holds only the notifier job dispatch-on-main, so its success says nothing about the release job.
+function isNotifierRun(facts) {
+  return facts.workflowPath === RELEASE_WORKFLOW_PATH && facts.runEvent === NOTIFIER_RUN_EVENT;
+}
+
+function keepAlert(facts) {
+  return result('pass', `Workflow ${facts.workflowPath} notifier run succeeded; alert ${facts.openAlert.number} stays open.`);
+}
+
 function closeAlert(facts) {
   const comment = `Workflow ${codeSpan(facts)} succeeded: ${facts.runUrl}. Closing.`;
   return result('pass', `Workflow ${facts.workflowPath} succeeded; closing alert ${facts.openAlert.number}.`, [
@@ -99,7 +112,7 @@ function closeAlert(facts) {
 export function evaluate(facts) {
   if (facts.eventName !== WORKFLOW_RUN_EVENT) return result('skip', `Nothing to check for ${facts.eventName}.`);
   if (FAILING_CONCLUSIONS.includes(facts.conclusion)) return facts.openAlert === null ? createAlert(facts) : repeatAlert(facts);
-  if (facts.conclusion === SUCCESS_CONCLUSION && facts.openAlert !== null) return closeAlert(facts);
+  if (facts.conclusion === SUCCESS_CONCLUSION && facts.openAlert !== null) return isNotifierRun(facts) ? keepAlert(facts) : closeAlert(facts);
   return result('pass', `Workflow ${facts.workflowPath} ended with ${facts.conclusion}; no alert change.`);
 }
 
