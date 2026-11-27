@@ -78,10 +78,13 @@ function readConditionLine(state, line) {
   else if (content !== '') state.inCondition = false;
 }
 
-// Grouping or negation could wrap the dispatch term, as in `!(a && <term> && b)`, so the condition must be a flat AND.
+// Every AND term must be a plain comparison, so `||`, grouping, negation, `${{ }}` and a trailing or own-line YAML
+// comment cannot carry a dispatch term the real condition lacks.
+const PLAIN_TERM = /^[\w.]+( (==|!=) ('[\w-]*'|[\w.]+))?$/;
+
 function runsOnlyOnDispatch(condition) {
-  if (condition.includes('||') || /[()]|!(?!=)/.test(condition)) return false;
-  return condition.split('&&').map((term) => term.trim()).includes(DISPATCH_ONLY_TERM);
+  const terms = condition.split('&&').map((term) => term.trim());
+  return terms.every((term) => PLAIN_TERM.test(term)) && terms.includes(DISPATCH_ONLY_TERM);
 }
 
 test('release-please.yml: the release job runs only on workflow_dispatch and only the notifier can run on pull_request', async () => {
