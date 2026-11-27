@@ -453,6 +453,7 @@ const ADOPT_ARGS = { description: DESCRIPTION, adopt: true };
 // #285 fills the kit CODEOWNERS from the release config's accounts.owner.
 const ADOPT_FILES = {
   ...RELEASE_FILES, '.github/groundwork/config.json': JSON.stringify({ org: ORG, accounts: { owner: 'wianvdm' } }), '.github/CODEOWNERS': '* @wianvdm\n', LICENSE: 'MIT\n',
+  '.github/pull_request_template.md': 'pr template\n', 'scripts/groundwork/stubs/docs/README.md': 'docs readme\n', '.github/ISSUE_TEMPLATE/bug.md': 'bug form\n',
 };
 const gitBlobSha = (text) => createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0${text}`).digest('hex');
 const releaseSha = (filePath) => releaseEntries(ADOPT_FILES).find((entry) => entry.path === filePath).sha;
@@ -507,12 +508,17 @@ const GAPS = [
   ['collision', { tree: COLLIDING_TREE }, 'collisions', /collisions: \.github\/dependabot\.yml, version\.txt/],
   ['directory at a kit file', { tree: projectTree({ path: 'scripts/verify', type: 'tree', sha: 't1' }, blob('scripts/verify/run.sh', 'p1')) }, 'collisions', /collisions: scripts\/verify is a tree/],
   ['file at a kit directory', { tree: projectTree(blob('docs', 'p1')) }, 'collisions', /collisions: docs is a blob/],
-  ['submodule at a kit path', { tree: projectTree({ path: 'README.md', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: README\.md is a commit/],
+  ['submodule at a kit path', { tree: projectTree({ path: 'scripts/verify', type: 'commit', sha: 'c9' }) }, 'collisions', /collisions: scripts\/verify is a commit/],
   ['truncated target tree', { tree: { truncated: true, tree: [] } }, 'collisions', /collisions: target tree is truncated/],
   ['tree response without a tree list', { tree: { truncated: false } }, 'collisions', /collisions: target tree response has no tree list/],
   ['head commit without a tree SHA', { commit: { sha: 'head-main', tree: {} } }, 'collisions', /collisions: head commit head-main has no tree SHA/],
   ['root CODEOWNERS the kit file would shadow', { tree: projectTree(blob('CODEOWNERS', 'p1')) }, 'collisions', /collisions: CODEOWNERS would be shadowed by \.github\/CODEOWNERS, move it there/],
   ['docs CODEOWNERS the kit file would shadow', { tree: projectTree(blob('docs/CODEOWNERS', 'p1')) }, 'collisions', /collisions: docs\/CODEOWNERS would be shadowed by \.github\/CODEOWNERS, move it there/],
+  ['PULL_REQUEST_TEMPLATE.md in another case than the kit file (#306 AC1)', { tree: projectTree(blob('.github/PULL_REQUEST_TEMPLATE.md', 'p1')) }, 'collisions', /collisions: \.github\/PULL_REQUEST_TEMPLATE\.md/],
+  ['docs/readme.md in another case than the kit file (#306 AC1)', { tree: projectTree(blob('docs/readme.md', 'p1')) }, 'collisions', /collisions: docs\/readme\.md/],
+  ['issue_template directory in another case than the kit directory (#306 AC1)', { tree: projectTree(blob('.github/issue_template/bug.md', 'p1')) }, 'collisions', /collisions: \.github\/issue_template/],
+  ['symlink at a kit file (#306 AC3)', { tree: projectTree({ ...blob('scripts/verify', 'p1'), mode: '120000' }) }, 'collisions', /collisions: scripts\/verify is a symlink/],
+  ['symlink at the kit CODEOWNERS (#306 AC3)', { tree: projectTree({ ...blob('.github/CODEOWNERS', 'p4'), mode: '120000' }) }, 'collisions', /collisions: \.github\/CODEOWNERS is a symlink/],
 ];
 
 test('AC2 plan without the opt-in makes no call and adds nothing', async () => {
@@ -549,6 +555,34 @@ for (const [name, gaps, rowName, row] of GAPS) {
     assert.ok(world.logs.some((line) => line.startsWith('FAIL ') && row.test(line)), world.logs.join('\n'));
     assert.deepEqual(writesOf(world), []);
     assert.deepEqual(world.grants.map((grant) => grant.permissions), [CONTROL_READ_PERMISSIONS]);
+  });
+}
+
+const NO_COLLISION_TREES = [
+  ['a root readme in another case or extension', [blob('readme.rst', 'p1')]],
+  ['License in another case', [blob('License', 'p1')]],
+  ['a symlink at README.md', [{ ...blob('README.md', 'p1'), mode: '120000' }]],
+  ['a symlink at LICENSE', [{ ...blob('LICENSE', 'p1'), mode: '120000' }]],
+  ['a README.md that is a tree', [{ path: 'README.md', type: 'tree', sha: 't1' }, blob('README.md/intro.md', 'p2')]],
+  ['a LICENSE that is a tree', [{ path: 'LICENSE', type: 'tree', sha: 't2' }, blob('LICENSE/mit.txt', 'p3')]],
+  ['a submodule at README.md', [{ path: 'README.md', mode: '160000', type: 'commit', sha: 'c9' }]],
+];
+
+for (const [name, entries] of NO_COLLISION_TREES) {
+  test(`#306 AC2 AC3 AC4 ${name} is no collision, in plan and in apply`, async () => {
+    const tree = projectTree(...entries);
+    const { facts } = await planCall({ gaps: { tree } }).result;
+    assert.ok(facts.includes('ok collisions: none'), facts.join('\n'));
+    const merged = adoptTreeEntries({ ...expectedTree(ADOPT_FILES), target: { tree: tree.tree } });
+    const blobReplies = merged.filter((entry) => entry.sha).map((entry) => reply(201, { sha: entry.sha }));
+    const { [`GET ${TARGET_PATH}/labels?per_page=100`]: _labels, ...treeRoutes } = foreignRoutes({ tree });
+    const world = adoptApplyWorld({ ...treeRoutes, [`POST ${TARGET_PATH}/git/blobs`]: blobReplies });
+    const result = await run(world.ctx, world.seams);
+    assert.equal(result.ok, true, result.summary);
+    const treeBody = bodyOf(world, `POST ${TARGET_PATH}/git/trees`);
+    assert.equal(treeBody.base_tree, 'tree-main', 'the merge keeps the project tree, the README.md directory included');
+    const posted = treeBody.tree.map((entry) => entry.path);
+    assert.equal(posted.includes('README.md'), !entries.some((entry) => /^readme/i.test(entry.path)), 'the kit README.md is written only when the root holds no readme');
   });
 }
 

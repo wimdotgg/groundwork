@@ -182,8 +182,11 @@ export function buildBootstrapTree({ entries, contents, org, controlRepo, repo, 
 
 const README_PATH = 'README.md';
 const LICENSE_PATH = 'LICENSE';
+export const SYMLINK_MODE = '120000';
+/** Spec 14.4: kit paths the merge never writes over a project entry (README.md only when the root holds a readme), so nothing there collides. */
+export const ADOPT_UNWRITTEN_PATHS = new Set([README_PATH, LICENSE_PATH]);
 /** Spec 14.4: kit paths an adopted repository keeps in its own form, so other content there is no collision. */
-export const ADOPT_KEPT_PATHS = new Set([README_PATH, LICENSE_PATH, CODEOWNERS_PATH]);
+export const ADOPT_KEPT_PATHS = new Set([...ADOPT_UNWRITTEN_PATHS, CODEOWNERS_PATH]);
 // A root readme in any case or extension: a second README.md beside Readme.md breaks case-insensitive checkouts.
 const ROOT_README = /^readme(\.[^/]*)?$/i;
 
@@ -199,11 +202,16 @@ function appendedCodeowners(entry, contents, projectText) {
  * decision, #258) and adds README.md only when the root holds no readme; the target's CODEOWNERS keeps its own lines
  * and gets the kit lines appended, so the kit rules match last and win.
  * @param {{ treeEntries: TreeEntry[], contents: Record<string, string>,
- *   target: { tree: Array<{ path: string }>, codeowners?: string } }} options `target.codeowners` is the text of the
+ *   target: { tree: Array<{ path: string, type: string, mode?: string }>, codeowners?: string } }} options `target.codeowners` is the text of the
  *   target's CODEOWNERS, required when its tree holds one
  * @returns {TreeEntry[]} a subset of `treeEntries`, CODEOWNERS replaced by the appended text
  */
 export function adoptTreeEntries({ treeEntries, contents, target }) {
+  const targetCodeowners = target.tree.find((entry) => entry.path === CODEOWNERS_PATH);
+  // Appending into a symlink or a directory would rewrite it into a regular file.
+  if (targetCodeowners !== undefined && (targetCodeowners.type !== 'blob' || targetCodeowners.mode === SYMLINK_MODE)) {
+    throw new SettingsError(`the target's ${CODEOWNERS_PATH} is a symlink or not a file, so the kit lines cannot be appended`, CODEOWNERS_PATH);
+  }
   const targetPaths = new Set(target.tree.map((entry) => entry.path));
   const hasReadme = target.tree.some((entry) => ROOT_README.test(entry.path));
   return treeEntries
