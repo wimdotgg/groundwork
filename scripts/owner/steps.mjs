@@ -210,7 +210,7 @@ async function renameOrigin(io, { org, remote }) {
     if (isOrgRepositoryUrl(clean(git(io, 'remote', 'get-url', '--push', 'origin')), org)) refuse(`origin already pushes to github.com/${org}/${CONTROL_REPO} and the upstream remote is missing: add the groundwork kit back with git remote add -f upstream <the upstream groundwork URL> (see "upstream updates" in docs/setup.md), then rerun`);
     return confirmRun(io, { command: 'git', args: ['remote', 'rename', 'origin', 'upstream'] });
   }
-  if (!originPushesToOrg(io, org)) refuse(`remotes origin and upstream both exist and origin does not push to github.com/${org}/${CONTROL_REPO}: run git remote set-url origin https://github.com/${org}/${CONTROL_REPO}.git and keep upstream, then rerun`);
+  if (!originPushesToOrg(io, org)) refuse(`remotes origin and upstream both exist and origin does not push to github.com/${org}/${CONTROL_REPO}: create that repository if it does not exist (gh repo create ${org}/${CONTROL_REPO} --public), run git remote set-url origin https://github.com/${org}/${CONTROL_REPO}.git and keep upstream, then rerun`);
   if (!refExists(io, 'refs/remotes/upstream/main')) refuse('remote upstream has no main yet: run git fetch upstream, then rerun');
   if (remote === 'origin' && !originMainIsKitRef(io)) refuse('origin/main exists but HEAD is not the one setup commit on it over upstream/main, so repo-copy cannot tell what landed: keep upstream, make HEAD match that commit or origin/main, then rerun');
   return true;
