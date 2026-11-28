@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.11.0](https://github.com/wimdotgg/groundwork/compare/v0.10.1...v0.11.0) (2026-11-28)
+
+
+### Features
+
+* Bootstrap templates the CODEOWNERS owner; check flags a mismatch ([#285](https://github.com/wimdotgg/groundwork/issues/285)) ([8a0563e](https://github.com/wimdotgg/groundwork/commit/8a0563ef3b5b658e1dd85b5ed4a4717ca2db5d2e))
+* **bootstrap:** adopt opt-in with a preflight for existing repositories ([#288](https://github.com/wimdotgg/groundwork/issues/288)) ([0a05b7c](https://github.com/wimdotgg/groundwork/commit/0a05b7c6f8fe007cc302317e50b3798758d7e254))
+* **bootstrap:** merge the kit into an existing tree on adopt ([#297](https://github.com/wimdotgg/groundwork/issues/297)) ([a5f0799](https://github.com/wimdotgg/groundwork/commit/a5f0799d4830a04d6597c9a7a59933a16c64ee01))
+* groundwork-triage skill recommends and acts on owner answer ([#281](https://github.com/wimdotgg/groundwork/issues/281)) ([03acc02](https://github.com/wimdotgg/groundwork/commit/03acc0228a43fdc6e945bd05b03816c33e8b93bf))
+* inbox lists untrusted-author issues with no linked task ([#280](https://github.com/wimdotgg/groundwork/issues/280)) ([892523c](https://github.com/wimdotgg/groundwork/commit/892523c7f4ee494dc52c1352a78dafe7b849d80b))
+* **owner:** owner wizard guards, y/N prompts, resume state and org steps ([#286](https://github.com/wimdotgg/groundwork/issues/286)) ([fe7cd47](https://github.com/wimdotgg/groundwork/commit/fe7cd47b54323c7c3621cedc54ca488cdec9c72a))
+* **owner:** wizard repo-copy, App pages, agent key and admin environment ([#296](https://github.com/wimdotgg/groundwork/issues/296)) ([15b0a81](https://github.com/wimdotgg/groundwork/commit/15b0a810ab1c8cefa0292cd21973b6452294023a))
+* **skills:** groundwork-setup skill as the setup entry point ([#287](https://github.com/wimdotgg/groundwork/issues/287)) ([9e006fa](https://github.com/wimdotgg/groundwork/commit/9e006fa299365643f5b088a0fedf32651630b253))
+
+
+### Bug Fixes
+
+* Adopt preflight: case-only, symlink and README-directory kit path collisions ([#313](https://github.com/wimdotgg/groundwork/issues/313)) ([e23cbf1](https://github.com/wimdotgg/groundwork/commit/e23cbf1bdf8379ca14ceae0d0b6b67f24c18c5b8))
+* **bootstrap:** show a cut first name and name only active rulesets ([#318](https://github.com/wimdotgg/groundwork/issues/318)) ([f679dc9](https://github.com/wimdotgg/groundwork/commit/f679dc9f4c2c870a85358ded2dfc0c7d59b113ac))
+* **failure-alert:** keep release alerts open on notifier-only success ([#316](https://github.com/wimdotgg/groundwork/issues/316)) ([9762e6a](https://github.com/wimdotgg/groundwork/commit/9762e6a820417029856eaa562f76307a1ae19bc7))
+* Owner wizard: a repo-copy rerun after a landed push advises removing upstream ([#312](https://github.com/wimdotgg/groundwork/issues/312)) ([271379f](https://github.com/wimdotgg/groundwork/commit/271379f7d38d6088bbc6a246dbfcd5a74e984e26))
+* **owner:** refuse hyphen-led logins and an unchecked owner login ([#317](https://github.com/wimdotgg/groundwork/issues/317)) ([fc015bd](https://github.com/wimdotgg/groundwork/commit/fc015bd2cf6954b1e666ffacccc3a572dc4c5d75))
+
 ## [0.10.1](https://github.com/wimdotgg/groundwork/compare/v0.10.0...v0.10.1) (2026-11-23)
 
 
