@@ -14,7 +14,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const AGENT_GH_CONFIG = '.claude/gh-agent';
 const STATE_ENV = 'GROUNDWORK_SETUP_STATE_FILE';
 const SCHEMA_VERSION = 1;
-const ORG_LOGIN = /^[A-Za-z0-9-]+$/;
+const ORG_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const STATUSES = ['pending', 'done', 'skipped'];
 const REVIEWED_PATHS = ['scripts/owner', 'scripts/lib'];
@@ -219,7 +219,7 @@ function stop(io, message) {
 
 async function askOrg(io) {
   const org = await io.ask('Organization login: ');
-  return ORG_LOGIN.test(org) ? org : refuse('organization login must match ^[A-Za-z0-9-]+$');
+  return ORG_LOGIN.test(org) ? org : refuse(`organization login must match ${ORG_LOGIN.source}`);
 }
 
 async function browserStep(io, context, step) {

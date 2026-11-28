@@ -1,5 +1,6 @@
 // Owner wizard steps from repo-copy on (spec 14.3): the clone copy, the App pages, the agent key and the admin environment.
-// Same rules as setup.mjs: Node built-ins only, every write shown and behind its own y/N, no value taken from setup-state.json.
+// Same rules as setup.mjs: Node built-ins only, every write shown and behind its own y/N.
+// From setup-state.json the steps read only org and consent.answeredAt, which setup.mjs validates before any step runs.
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -9,7 +10,7 @@ const CODEOWNERS_PATH = '.github/CODEOWNERS';
 const CONTROL_REPO = 'groundwork';
 const RELEASE_FILES = { '.release-please-manifest.json': '{}\n', 'version.txt': '0.0.0\n', 'CHANGELOG.md': '' };
 const COPY_PATHS = [CONFIG_PATH, CODEOWNERS_PATH, ...Object.keys(RELEASE_FILES)];
-const LOGIN = /^[A-Za-z0-9-]+$/;
+const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const CLIENT_ID = /^[A-Za-z0-9.]+$/;
 const APP_ID = /^\d+$/;
@@ -237,6 +238,8 @@ function updateConfigText(text, { org, accounts, apps }) {
 
 async function writeSetupFiles(io, org) {
   const owner = (await askMatching(io, { question: 'Owner login (your GitHub user): ', pattern: LOGIN })).toLowerCase();
+  const signedIn = signedInUser(io).login;
+  if (signedIn.toLowerCase() !== owner) refuse(`gh is signed in as ${signedIn}, but you typed owner ${owner}: sign gh in as the owner or type the signed-in login`);
   const apps = {};
   for (const role of ['admin', 'agent', 'release']) {
     const fallback = `${org.toLowerCase()}-${role}`;
@@ -425,11 +428,16 @@ function ghRead(io, { args, what }) {
   return refuse(`cannot read ${what} (exit ${result.status})${cause ? `: ${cause}` : ''}`);
 }
 
-// The reviewer is the signed-in owner, checked against config.json, never taken from the file alone.
-function signedInOwner(io, config) {
+function signedInUser(io) {
   const [login, idText] = ghRead(io, { args: ['api', 'user', '--jq', '.login + " " + (.id | tostring)'], what: 'your GitHub user' }).trim().split(' ');
   const id = Number(idText);
   if (!LOGIN.test(login ?? '') || !Number.isSafeInteger(id) || id <= 0) refuse('gh api user returned no login and id');
+  return { login, id };
+}
+
+// The reviewer is the signed-in owner, checked against config.json, never taken from the file alone.
+function signedInOwner(io, config) {
+  const { login, id } = signedInUser(io);
   const configured = ownerLogin(config);
   if (login.toLowerCase() !== configured.toLowerCase()) refuse(`gh is signed in as ${login}, but ${CONFIG_PATH} accounts.owner is ${configured}: sign in as the owner or fix the file`);
   return { login, id };
