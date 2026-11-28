@@ -684,3 +684,39 @@ test('#307 AC3 repo-copy accepts a typed owner that differs from the signed-in g
   const io = cloneIo(clone, { answers: [...COPY_ANSWERS], login: 'owner-login', org });
   assert.equal(await repoCopy(io), true);
 });
+
+test('#308 AC1 a rerun accepts the setup commit after upstream main moved and was fetched', async (t) => {
+  const { clone, org, upstream } = cloneFixture(t);
+  const failing = cloneIo(clone, { answers: [...COPY_ANSWERS], pushStatus: 1 });
+  await assert.rejects(repoCopy(failing), /git push --set-upstream origin failed with exit 1/);
+  write(upstream, 'README.md', 'kit moved\n');
+  git(upstream, '-c', 'user.name=Upstream', '-c', 'user.email=upstream@example.com', 'commit', '-q', '-am', 'kit change');
+  git(clone, 'fetch', '-q', 'upstream');
+  const rerun = cloneIo(clone, { answers: ['y'], org });
+  assert.equal(await repoCopy(rerun), true);
+  assert.equal(rerun.calls.at(-1), PUSH);
+  assert.equal(git(org, 'rev-parse', 'main'), git(clone, 'rev-parse', 'HEAD'));
+});
+
+test('#308 AC2 a leading ~ in GROUNDWORK_AGENT_KEY_FILE expands to the home directory', async () => {
+  const home = '/home/owner';
+  const io = fakeIo({ answers: ['Iv23liAgent', '/keys/agent.pem', 'y'], files: { '/keys/agent.pem': KEY('M') }, env: { HOME: home, GROUNDWORK_AGENT_KEY_FILE: '~/x/agent.pem' } });
+  assert.equal(await STEP_HANDLERS['agent-key-store'](io, context()), true);
+  assert.deepEqual([...io.privateFiles.keys()], [path.posix.join(home, 'x', 'agent.pem')]);
+});
+
+test('#308 AC2 a relative GROUNDWORK_AGENT_KEY_FILE refuses with nothing written', async () => {
+  const io = fakeIo({ answers: ['Iv23liAgent', '/keys/agent.pem', 'y'], files: { '/keys/agent.pem': KEY('M') }, env: { HOME: '/home/owner', GROUNDWORK_AGENT_KEY_FILE: 'keys/agent.pem' } });
+  await assert.rejects(STEP_HANDLERS['agent-key-store'](io, context()), /GROUNDWORK_AGENT_KEY_FILE/);
+  assert.equal(io.privateFiles.size, 0);
+});
+
+test('#308 AC3 a default slug over 34 characters refuses before config.json or CODEOWNERS is written', async (t) => {
+  const { clone } = cloneFixture(t);
+  const longOrg = 'a'.repeat(30);
+  const before = snapshotCopyFiles(clone);
+  const io = cloneIo(clone, { answers: [...COPY_ANSWERS] });
+  await assert.rejects(STEP_HANDLERS['repo-copy'](io, { state: { ...stateWith(), org: longOrg }, statePath: STATE_PATH }), /34/);
+  assert.deepEqual(snapshotCopyFiles(clone), before);
+  assert.ok(!io.calls.includes(COMMIT) && !io.calls.some((call) => call.startsWith('gh repo')));
+});
