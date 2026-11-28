@@ -12,6 +12,8 @@ const RELEASE_FILES = { '.release-please-manifest.json': '{}\n', 'version.txt': 
 const COPY_PATHS = [CONFIG_PATH, CODEOWNERS_PATH, ...Object.keys(RELEASE_FILES)];
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
+// GitHub refuses an App name over 34 characters, so a longer slug names an App that cannot exist.
+const SLUG_MAX_LENGTH = 34;
 const CLIENT_ID = /^[A-Za-z0-9.]+$/;
 const APP_ID = /^\d+$/;
 const PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+-----END [A-Z ]*PRIVATE KEY-----/;
@@ -179,7 +181,7 @@ function inspectClone(io, note) {
   const outside = (paths) => paths.find((file) => !allowed.has(file));
   const ahead = lines(git(io, 'rev-list', `${baseline}..HEAD`)).length;
   if (ahead > 1) refuseWithRecovery(io, { reason: `HEAD is ${ahead} commits ahead of ${baseline}; repo-copy adds one`, remote, note });
-  const committed = ahead ? outside(lines(git(io, 'diff', '--name-only', baseline, 'HEAD'))) : undefined;
+  const committed = ahead ? outside(lines(git(io, 'diff', '--name-only', `${baseline}...HEAD`))) : undefined;
   if (committed !== undefined) refuseWithRecovery(io, { reason: `the commit ahead of ${baseline} changes ${clean(committed)}`, remote, note });
   const changes = localChanges(io);
   const foreign = changes.filter(({ file }) => !allowed.has(file));
@@ -244,6 +246,7 @@ async function writeSetupFiles(io, org) {
   for (const role of ['admin', 'agent', 'release']) {
     const fallback = `${org.toLowerCase()}-${role}`;
     apps[role] = await askMatching(io, { question: `${role} App slug [${fallback}]: `, pattern: SLUG, fallback });
+    if (apps[role].length > SLUG_MAX_LENGTH) refuse(`${role} App slug ${apps[role]} is ${apps[role].length} characters; GitHub allows ${SLUG_MAX_LENGTH}: rerun and type a shorter one`);
   }
   const configText = io.readText(fromRoot(io, CONFIG_PATH)) ?? refuse(`${CONFIG_PATH} not found`);
   const accounts = { ...JSON.parse(configText).accounts, owner, agent: `${apps.agent}[bot]` };
@@ -398,11 +401,21 @@ async function storeWithDpapi(io, { slug, clientId, key }) {
   return true;
 }
 
+// Only macOS and Linux store a PEM file, so the path follows POSIX rules, not the host's.
+function keyFileFromEnvironment(io, file) {
+  const home = io.env.HOME;
+  const underHome = HOME_PREFIX.test(file);
+  if (underHome && !home) refuse(`${AGENT_KEY_FILE} starts with ~ and HOME is not set: set HOME, or give an absolute path`);
+  const expanded = underHome ? path.posix.join(home, file.slice(1)) : file;
+  return path.posix.isAbsolute(expanded) ? expanded : refuse(`${AGENT_KEY_FILE} is ${clean(file)}: set it to an absolute path or one under ~`);
+}
+
 const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 
 async function storePemFile(io, { slug, clientId, key }) {
   const home = io.env.HOME;
-  const target = io.env[AGENT_KEY_FILE] || (home ? path.join(home, '.config', 'groundwork', `${slug}.pem`) : refuse(`set ${AGENT_KEY_FILE} to the path the key goes to`));
+  const configured = io.env[AGENT_KEY_FILE];
+  const target = configured ? keyFileFromEnvironment(io, configured) : (home ? path.join(home, '.config', 'groundwork', `${slug}.pem`) : refuse(`set ${AGENT_KEY_FILE} to the path the key goes to`));
   io.print(`write ${clean(target)} (mode 0600) from ${clean(key.file)}`);
   if (!(await confirm(io, 'Store the key? y/N '))) return false;
   io.writePrivateFile(target, key.pem);
