@@ -278,6 +278,8 @@ const LIST_BUDGET = 120;
 const NOT_CHECKED_EMPTY = 'not checked: empty repository';
 // applyRulesets deletes or replaces only these; organization rulesets stay.
 const REPOSITORY_RULESET_SOURCE = 'Repository';
+// An `evaluate` ruleset only reports, so it cannot be what protects main.
+const ACTIVE_ENFORCEMENT = 'active';
 // A ruleset row fits one 200-character fact below this detail length; a longer name moves to part rows.
 const RULESET_DETAIL_BUDGET = 160;
 const RULESET_NAME_PART_LENGTH = 150;
@@ -288,9 +290,10 @@ function listNames(names) {
   if (names.length === 0) return 'none';
   let shown = 0;
   while (shown < names.length && names.slice(0, shown + 1).join(', ').length <= LIST_BUDGET) shown += 1;
-  const listed = names.slice(0, shown).join(', ');
-  if (shown === names.length) return listed;
-  return `${listed}${shown > 0 ? ' ' : ''}and ${names.length - shown} more`;
+  // A first name over the budget still shows, cut, so the row never reads only `and N more`.
+  const listed = shown === 0 ? capName(names[0]) : names.slice(0, shown).join(', ');
+  const hidden = names.length - Math.max(shown, 1);
+  return hidden === 0 ? listed : `${listed} and ${hidden} more`;
 }
 
 /** One target-chosen name, cut to the list budget like a list. */
@@ -332,7 +335,7 @@ export async function requireReplacedRulesets({ client, org, repo, names }) {
 /** `protection.enabled` is the classic rule; a protected branch without it is held by an enforced ruleset. */
 function protectionSource(branch, rulesets) {
   if (branch?.protection?.enabled === true) return 'set by a classic branch protection rule: delete it in settings/branches';
-  const literals = rulesets.filter((ruleset) => ruleset.target === 'branch' && ruleset.enforcement !== 'disabled').map((ruleset) => rulesetNameLiteral(ruleset.name));
+  const literals = rulesets.filter((ruleset) => ruleset.target === 'branch' && ruleset.enforcement === ACTIVE_ENFORCEMENT).map((ruleset) => rulesetNameLiteral(ruleset.name));
   if (literals.length === 0) return 'set by a ruleset outside this repository: exclude the repository from it';
   if (literals.join(', ').length <= LIST_BUDGET) return `set by a ruleset: ${literals.join(', ')}; disable it and name it in replaceRulesets`;
   return `set by ${literals.length} repository ruleset(s), see the rulesets the sync deletes rows; disable and name each in replaceRulesets`;

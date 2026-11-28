@@ -8,6 +8,8 @@ import {
   createRepo,
   inspectRepo,
   latestReleaseTag,
+  readAdoptionGaps,
+  readAdoptionReport,
   readBlobTexts,
   readKitVersion,
   readReleaseTree,
@@ -324,4 +326,55 @@ test('commitBootstrapTree throws SettingsError for a sha entry without base64 an
   const args = { ...commitArgs(client), blobs: new Map([['a.txt', 'QQ==']]) };
   await assert.rejects(commitBootstrapTree(args), SettingsError);
   assert.equal(calls.some(({ path }) => path.endsWith('/git/trees')), false);
+});
+
+// --- #309 adopt report names ---------------------------------------------------------------------------------------
+
+const LONG_LABEL = 'l'.repeat(121);
+
+function reportRoutes(labels) {
+  return {
+    [`GET ${REPO_PATH}/labels?per_page=100`]: reply(200, labels.map((name) => ({ name }))),
+    [`GET ${REPO_PATH}/git/matching-refs/tags/v?per_page=100`]: reply(200, []),
+    [`GET ${REPO_PATH}/environments?per_page=100`]: reply(200, { environments: [] }),
+    [`GET ${REPO_PATH}/issues?per_page=100&state=open`]: reply(200, []),
+  };
+}
+
+async function labelRow(labels) {
+  const client = createFixtureClient(reportRoutes(labels));
+  const rows = await readAdoptionReport({ client, org: ORG, repo: REPO, kitLabels: [], empty: false, tree: [], rulesets: [] });
+  return rows.find((row) => row.name === 'labels the sync deletes').detail;
+}
+
+test('#309 AC1 a first name over the list budget shows cut, then the count of the rest', async () => {
+  assert.equal(await labelRow([LONG_LABEL, 'bug']), `${'l'.repeat(120)}... and 1 more`);
+  assert.equal(await labelRow([LONG_LABEL]), `${'l'.repeat(120)}...`);
+  assert.equal(await labelRow(['bug', LONG_LABEL]), 'bug and 1 more');
+});
+
+function gapRoutes(rulesets) {
+  return {
+    [`GET ${REPO_PATH}`]: reply(200, { default_branch: 'main', archived: false }),
+    [`GET ${REPO_PATH}/commits?per_page=1`]: reply(200, [{ sha: 'head' }]),
+    [`GET ${REPO_PATH}/rulesets?includes_parents=false&per_page=100`]: reply(200, rulesets),
+    [`GET ${REPO_PATH}/branches/main`]: reply(200, { protected: true, protection: { enabled: false } }),
+    [`GET ${REPO_PATH}/git/ref/heads/main`]: reply(200, { object: { sha: 'head' } }),
+    [`GET ${REPO_PATH}/git/commits/head`]: reply(200, { tree: { sha: 'tree' } }),
+    [`GET ${REPO_PATH}/git/trees/tree?recursive=1`]: reply(200, { tree: [] }),
+  };
+}
+
+async function protectionRow(rulesets) {
+  const client = createFixtureClient(gapRoutes(rulesets.map((ruleset, index) => ({ id: index + 1, target: 'branch', source_type: 'Repository', ...ruleset }))));
+  const { rows } = await readAdoptionGaps({ client, org: ORG, repo: REPO, kitEntries: [] });
+  return rows.find((row) => row.name === 'protected main').detail;
+}
+
+test('#309 AC2 the protected main row names only active rulesets', async () => {
+  const evaluateOnly = await protectionRow([{ name: 'trial', enforcement: 'evaluate' }]);
+  assert.equal(evaluateOnly, 'set by a ruleset outside this repository: exclude the repository from it');
+  assert.doesNotMatch(evaluateOnly, /trial/);
+  const mixed = await protectionRow([{ name: 'trial', enforcement: 'evaluate' }, { name: 'guard', enforcement: 'active' }]);
+  assert.equal(mixed, 'set by a ruleset: "guard"; disable it and name it in replaceRulesets');
 });
