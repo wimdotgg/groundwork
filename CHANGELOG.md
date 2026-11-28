@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/wimdotgg/groundwork/compare/v0.11.0...v0.11.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **owner:** accept a moved upstream, expand ~ in the key path, cap App slugs ([#319](https://github.com/wimdotgg/groundwork/issues/319)) ([7204c7d](https://github.com/wimdotgg/groundwork/commit/7204c7d1665d089bc53da9047507394dc17fd710))
+
 ## [0.11.0](https://github.com/wimdotgg/groundwork/compare/v0.10.1...v0.11.0) (2026-11-28)
 
 
