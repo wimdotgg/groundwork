@@ -404,7 +404,9 @@ async function storeWithDpapi(io, { slug, clientId, key }) {
 // Only macOS and Linux store a PEM file, so the path follows POSIX rules, not the host's.
 function keyFileFromEnvironment(io, file) {
   const home = io.env.HOME;
-  const expanded = HOME_PREFIX.test(file) && home ? path.posix.join(home, file.slice(1)) : file;
+  const underHome = HOME_PREFIX.test(file);
+  if (underHome && !home) refuse(`${AGENT_KEY_FILE} starts with ~ and HOME is not set: set HOME, or give an absolute path`);
+  const expanded = underHome ? path.posix.join(home, file.slice(1)) : file;
   return path.posix.isAbsolute(expanded) ? expanded : refuse(`${AGENT_KEY_FILE} is ${clean(file)}: set it to an absolute path or one under ~`);
 }
 

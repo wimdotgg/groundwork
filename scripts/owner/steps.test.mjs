@@ -711,6 +711,12 @@ test('#308 AC2 a relative GROUNDWORK_AGENT_KEY_FILE refuses with nothing written
   assert.equal(io.privateFiles.size, 0);
 });
 
+test('#308 AC2 a ~ GROUNDWORK_AGENT_KEY_FILE without HOME refuses naming HOME, with nothing written', async () => {
+  const io = fakeIo({ answers: ['Iv23liAgent', '/keys/agent.pem', 'y'], files: { '/keys/agent.pem': KEY('M') }, env: { GROUNDWORK_AGENT_KEY_FILE: '~/x/agent.pem' } });
+  await assert.rejects(STEP_HANDLERS['agent-key-store'](io, context()), /HOME is not set/);
+  assert.equal(io.privateFiles.size, 0);
+});
+
 test('#308 AC3 a default slug over 34 characters refuses before config.json or CODEOWNERS is written', async (t) => {
   const { clone } = cloneFixture(t);
   const longOrg = 'a'.repeat(30);
@@ -718,5 +724,5 @@ test('#308 AC3 a default slug over 34 characters refuses before config.json or C
   const io = cloneIo(clone, { answers: [...COPY_ANSWERS] });
   await assert.rejects(STEP_HANDLERS['repo-copy'](io, { state: { ...stateWith(), org: longOrg }, statePath: STATE_PATH }), /34/);
   assert.deepEqual(snapshotCopyFiles(clone), before);
-  assert.ok(!io.calls.includes(COMMIT) && !io.calls.some((call) => call.startsWith('gh repo')));
+  assert.ok(!io.calls.some((call) => call.startsWith('git commit') || call.startsWith('gh repo')));
 });
